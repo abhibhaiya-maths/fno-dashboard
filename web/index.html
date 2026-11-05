@@ -1,15 +1,17 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" translate="no" class="notranslate">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="robots" content="noindex, nofollow">
+<meta name="google" content="notranslate">
+<meta http-equiv="Content-Language" content="en">
 <meta name="theme-color" content="#04070D">
 <title>F&O Terminal</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="style.css?v=20261106">
 </head>
 <body>
 
@@ -38,7 +40,7 @@
   <div class="answer" id="answer"></div>
 </div>
 
-<nav class="tickers" id="tickers" aria-label="Indices"></nav>
+<nav class="tickers" id="tickers" aria-label="Watchlist"></nav>
 
 <div class="nticker" id="nticker" aria-label="Latest news">
   <div class="nt-label">NEWS</div>
@@ -66,9 +68,9 @@
       <div class="acc" id="pAcc"></div>
       <h3 class="sub-h">Open positions</h3>
       <div id="pPos"></div>
-      <details class="drawer"><summary>Place an order manually</summary>
+      <details class="drawer" id="orderDrawer"><summary>Place an order manually</summary>
         <div class="ofrm">
-          <div><small>Index</small><b id="oIdx"></b></div>
+          <div><small>Instrument</small><b id="oIdx"></b></div>
           <label><small>Strike</small><select id="oStrike" onchange="Paper.updateEstimate()"></select></label>
           <label><small>Type</small><select id="oType" onchange="Paper.updateEstimate()"><option value="CE">Call (CE)</option><option value="PE">Put (PE)</option></select></label>
           <label><small>Lots</small><input id="oLots" type="number" min="1" value="1" oninput="Paper.updateEstimate()"></label>
@@ -114,6 +116,11 @@
       <div id="setup"></div>
     </section>
 
+    <section class="panel p-global">
+      <div class="ph"><h2>Global cues and events</h2><span class="ph-note">GIFT Nifty, world markets, calendar</span></div>
+      <div id="globalBody"></div>
+    </section>
+
     <section class="panel p-news">
       <div class="ph"><h2>News and results</h2><div class="seg" id="newsTabs"></div></div>
       <div id="newsBody"></div>
@@ -144,23 +151,38 @@ For analysis and practice only, not investment advice. No signal is a guarantee.
   <span class="orb-txt"><b id="orbDir">WAIT</b><small id="orbSub"></small></span>
 </button>
 
+<div class="srch" id="srch" role="dialog" aria-modal="true" aria-label="Add to watchlist" onclick="if(event.target===this)closeSearch()">
+  <div class="srch-box">
+    <div class="srch-head"><input id="srchIn" placeholder="Search stocks, indices, MCX: Reliance, Wipro, crude oil" autocomplete="off" oninput="onSearch(this.value)"><button class="x" onclick="closeSearch()" aria-label="Close">✕</button></div>
+    <div class="srch-res" id="srchRes"></div>
+    <div class="srch-foot">Every instrument you add runs through the same engine: chart, signals, score, levels, news. Options paper trading works where Upstox has an option chain.</div>
+  </div>
+</div>
 <div class="gate" id="gate"></div>
 <div class="toast" id="toast" role="status"></div>
+
+<div class="speakbar" id="speakBar" role="status" aria-live="polite">
+  <span class="sb-wave" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+  <span class="sb-txt">Speaking</span>
+  <button class="sb-stop" onclick="Voice.stop()">■ Stop</button>
+  <button class="sb-mute" onclick="Voice.mute()">Mute</button>
+</div>
+<button class="micfab" id="micFab" onclick="Voice.toggleMic()" aria-label="Ask by voice"><svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true"><path fill="currentColor" d="M12 15a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v6a3 3 0 0 0 3 3Zm5-3a1 1 0 1 1 2 0 7 7 0 0 1-6 6.93V21h3a1 1 0 1 1 0 2H8a1 1 0 1 1 0-2h3v-2.07A7 7 0 0 1 5 12a1 1 0 1 1 2 0 5 5 0 0 0 10 0Z"/></svg></button>
 
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
-<script src="js/config.js"></script>
-<script src="js/indicators.js"></script>
-<script src="js/analysis.js"></script>
-<script src="js/store.js"></script>
-<script src="js/data-demo.js"></script>
-<script src="js/data-live.js"></script>
-<script src="js/paper.js"></script>
-<script src="js/voice.js"></script>
-<script src="js/ui.js"></script>
-<script src="js/engine.js"></script>
-<script src="js/main.js"></script>
+<script src="js/config.js?v=20261106"></script>
+<script src="js/indicators.js?v=20261106"></script>
+<script src="js/analysis.js?v=20261106"></script>
+<script src="js/store.js?v=20261106"></script>
+<script src="js/data-demo.js?v=20261106"></script>
+<script src="js/data-live.js?v=20261106"></script>
+<script src="js/paper.js?v=20261106"></script>
+<script src="js/voice.js?v=20261106"></script>
+<script src="js/ui.js?v=20261106"></script>
+<script src="js/engine.js?v=20261106"></script>
+<script src="js/main.js?v=20261106"></script>
 <script>$('pLots').value = Paper.opts().lots;</script>
 </body>
 </html>

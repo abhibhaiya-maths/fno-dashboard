@@ -2,36 +2,72 @@
 const Voice = (() => {
   let recog = null, listening = false;
   const hint = (t) => ($('hint').textContent = t);
-  function say(t) {
-    if (!t || !('speechSynthesis' in window) || !$('tts') || !$('tts').checked) return;
-    try {
-      speechSynthesis.cancel();
-      const u = new SpeechSynthesisUtterance(t); u.lang = 'hi-IN';
-      const v = speechSynthesis.getVoices().find((x) => x.lang && x.lang.toLowerCase().startsWith('hi'));
-      if (v) u.voice = v;
-      speechSynthesis.speak(u);
-    } catch (e) { /* speech unavailable */ }
+  const tell = (t) => { openAsk(); hint(t); toast(t); };
+
+  // ===== Speaking (Hindi) with stop / mute =====
+  // Long answers are split into sentences, so Stop works instantly and long speech doesn't get cut by the browser.
+  let queue = [], gen = 0;
+  const ttsOn = () => $('tts') && $('tts').checked && 'speechSynthesis' in window;
+  function setSpeaking(on) { const b = $('speakBar'); if (b) b.classList.toggle('show', on); }
+  function hiVoice() { try { return speechSynthesis.getVoices().find((x) => x.lang && x.lang.toLowerCase().startsWith('hi')); } catch { return null; } }
+  function next(my) {
+    if (my !== gen) return;
+    if (!queue.length) { setSpeaking(false); return; }
+    const u = new SpeechSynthesisUtterance(queue.shift()); u.lang = 'hi-IN';
+    const v = hiVoice(); if (v) u.voice = v;
+    u.onend = () => next(my);
+    u.onerror = () => { if (my === gen) { queue = []; setSpeaking(false); } };
+    try { speechSynthesis.speak(u); setSpeaking(true); } catch { setSpeaking(false); }
   }
+  function say(t) {
+    if (!t || !ttsOn()) return;
+    stop();
+    queue = (String(t).match(/[^।.!?]+[।.!?]*/g) || [String(t)]).map((x) => x.trim()).filter(Boolean);
+    next(gen);
+  }
+  function stop() { gen++; queue = []; try { speechSynthesis.cancel(); } catch { /* not supported */ } setSpeaking(false); }
+  function mute() { if ($('tts')) $('tts').checked = false; stop(); toast('Voice muted. Turn it back on with “Spoken answers” in the ask panel.'); }
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') stop(); });
+
+  // ===== Listening =====
+  function micState(on) { ['mic', 'micFab'].forEach((id) => { const el = $(id); if (el) el.classList.toggle('rec', on); }); }
+  const MIC_ERR = {
+    'not-allowed': 'Microphone is blocked for this site. Tap the lock icon in the address bar → Permissions → allow Microphone, then try again.',
+    'service-not-allowed': 'Speech recognition is turned off on this device. On iPhone, turn on Dictation (Settings → General → Keyboard). Or tap the question box and use your keyboard’s mic.',
+    'no-speech': 'Didn’t hear anything. Tap the mic and start speaking right away.',
+    'audio-capture': 'No microphone found. Check that the mic isn’t in use by another app.',
+    'network': 'Voice recognition needs internet. Check your connection and try again.',
+  };
   function toggleMic() {
+    stop(); // stop talking before listening, so the mic doesn't hear the speaker
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SR) return hint('Voice input isn’t supported in this browser. Open in Chrome, or type your question.');
-    if (listening) return recog.stop();
-    recog = new SR(); recog.lang = 'hi-IN'; recog.interimResults = true; recog.maxAlternatives = 1;
-    recog.onstart = () => { listening = true; $('mic').classList.add('rec'); hint('Listening… speak in Hindi or English'); };
-    recog.onresult = (e) => { let t = ''; for (const r of e.results) t += r[0].transcript; $('q').value = t; if (e.results[e.results.length - 1].isFinal) ask(); };
-    recog.onerror = (e) => hint(e.error === 'not-allowed' ? 'Microphone permission was blocked. Allow it in the browser (the site must be on https).' : 'Didn’t catch that. Tap the mic and try again.');
-    recog.onend = () => { listening = false; $('mic').classList.remove('rec'); };
-    try { recog.start(); } catch { hint('Couldn’t start the mic. Tap it again.'); }
+    if (!SR) {
+      tell('Voice input isn’t available in this browser. Open the site in Chrome or Safari (not inside WhatsApp/Instagram), or tap the box and use your keyboard’s mic.');
+      $('q').focus(); return;
+    }
+    if (listening) { try { recog.stop(); } catch { /* already stopped */ } return; }
+    openAsk();
+    recog = new SR(); recog.lang = 'hi-IN'; recog.interimResults = true; recog.maxAlternatives = 1; recog.continuous = false;
+    let heard = false;
+    recog.onstart = () => { listening = true; micState(true); hint('Listening… speak in Hindi or English'); };
+    recog.onresult = (e) => { heard = true; let t = ''; for (const r of e.results) t += r[0].transcript; $('q').value = t; if (e.results[e.results.length - 1].isFinal) { try { recog.stop(); } catch { /* fine */ } ask(); } };
+    recog.onerror = (e) => { if (e.error !== 'aborted') tell(MIC_ERR[e.error] || 'Couldn’t catch that. Tap the mic and try again.'); };
+    recog.onend = () => { listening = false; micState(false); if (!heard) hint('Tap the mic and speak, or type your question.'); };
+    try { recog.start(); } catch { listening = false; micState(false); tell('Couldn’t start the mic. Tap it again.'); }
   }
   function parseQ(raw) {
     const t = raw.replace(/[०-९]/g, (d) => '०१२३४५६७८९'.indexOf(d)).replace(/(\d)[,\s](?=\d{3}\b)/g, '$1').toLowerCase();
     let key = null;
     if (/bank\s*nifty|banknifty|बैंक\s*निफ़?्टी|बैंकनिफ्टी/.test(t)) key = 'BANKNIFTY';
     else if (/sensex|सेंसेक्स|सेनसेक्स/.test(t)) key = 'SENSEX';
-    else if (/nifty|निफ़?्टी/.test(t)) key = 'NIFTY';
+    else {
+      // watchlist names: "reliance", "hdfc bank", "crude" …
+      const w = KEYS.filter((k) => !CFG[k].core).find((k) => { const c = CFG[k]; return [k, c.label, c.name, c.sym].filter(Boolean).some((n) => { const x = String(n).toLowerCase().replace(/\s*fut$/, ''); return x.length > 2 && (t.includes(x) || t.replace(/\s+/g, '').includes(x.replace(/\s+/g, ''))); }); });
+      if (w) key = w; else if (/nifty|निफ़?्टी/.test(t)) key = 'NIFTY';
+    }
     let type = null;
     if (/\bput\b|पुट|\bpe\b/.test(t)) type = 'PE'; else if (/\bcall\b|कॉल|काल|\bce\b/.test(t)) type = 'CE';
-    const m = t.match(/\d{4,6}/);
+    const m = t.match(/\d{3,6}(\.\d+)?/);
     const hold = /होल्ड|hold|exit|एग्जिट|एग्ज़िट|बेच|निकल|sell my|my position/.test(t);
     return { key, type, K: m ? +m[0] : null, hold };
   }
@@ -52,7 +88,7 @@ const Voice = (() => {
     const k5 = a.I5.k.filter((c) => c.d === 2).slice(-12).map((c) => [hm(c.m), r0(c.o), r0(c.h), r0(c.l), r0(c.c)]);
     const pj = Engine.projection(a);
     return {
-      now: Source.clock().label, mode: Source.mode, selected: idxSummary(a), allIndices: KEYS.filter((k) => A[k]).map((k) => idxSummary(A[k])),
+      now: Source.clock().label, mode: Source.mode, selected: { ...idxSummary(a), type: a.cf.kind, exchange: a.cf.exch, hasOptions: !!a.cf.opt }, watchlistAndIndices: KEYS.filter((k) => A[k]).map((k) => idxSummary(A[k])),
       signalPanel: { title: s.title, detail: s.sub, reasonsFor: (s.reasons || []).map((x) => x.n), against: (s.against || []).map((x) => x.n), caveats: s.caveats || [] },
       projection30m: { upsidePct: pj.up, downsidePct: pj.dn, expectedLow: r0(pj.lo), expectedHigh: r0(pj.hi), entryZone: pj.dir ? [r0(pj.entryLo), r0(pj.entryHi)] : null },
       all20Signals: a.sigs.map((x) => ({ group: x.g, name: x.n, value: x.v, direction: x.s > 0 ? 'bullish' : x.s < 0 ? 'bearish' : 'neutral', weight: x.w })),
@@ -63,7 +99,12 @@ const Voice = (() => {
         volumeProfile: { POC: r0(a.VP.POC), VAH: r0(a.VP.VAH), VAL: r0(a.VP.VAL) }, nearestResistance: a.res, nearestSupport: a.sup },
       optionChain: { expiry: a.ch.expiry, daysToExpiry: r0(a.ch.dte), lotSize: a.lot, atm: a.ch.atm, pcr: r0(a.ch.pcr), maxPain: a.ch.mp, atmIV: r0(a.ch.atmIV * 100), straddle: r0(a.ch.straddle),
         callOIWall: a.ch.maxCE, putOIWall: a.ch.maxPE, strikesNearATM: near },
-      marketMood: { vix: a.vix, fiiCr: a.fii, diiCr: a.dii, heavyweights: a.hv.map((h) => ({ name: h.n, weight: h.w, chgPct: r0(h.c) })) },
+      marketMood: { vix: a.vix, fiiCr: a.fii, diiCr: a.dii, fiiSource: a.D.fiiSrc, heavyweights: a.hv.map((h) => ({ name: h.n, weight: h.w, chgPct: r0(h.c) })) },
+      futuresOI: a.fut ? { last30m: a.fut.m30 && a.fut.m30[0], sinceYesterday: a.fut.day && a.fut.day[0], oiChgPct: r0(a.fut.doi), futuresPrice: r0(a.fut.px) } : null,
+      volatility: a.vol ? { ivPercentile: a.vol.ivp, ivRank: a.vol.ivr, realisedVol20d: r0(a.vol.hv20 * 100), atmIvToRealised: r0(a.vol.ivhv), high52w: r0(a.vol.hi52), low52w: r0(a.vol.lo52) } : null,
+      globalCues: (Source.global ? Source.global() : []).map((g) => ({ name: g.name, price: r0(g.price), chgPct: r0(g.chg) })),
+      eventCalendar: (Source.calendar ? Source.calendar().items || [] : []).slice(0, 8).map((e) => ({ date: e.date, timeIST: e.time, event: e.t, impact: e.imp })),
+      officialAnnouncements: (Source.official ? Source.official().items : []).slice(0, 8).map((n) => ({ source: n.src, company: n.co, text: n.t, ago: n.ago })),
       tradeSetup: st ? { direction: st.dir, strike: st.K, indexEntry: r0(st.e), indexSL: r0(st.sl), indexT1: r0(st.t1), indexT2: r0(st.t2), premium: r0(st.P), premiumSL: st.pSL, premiumT1: st.pT1 } : 'no clear setup',
       alerts: alertsFor(a, st ? st.dir : null).map((x) => x[1]),
       news: a.news.slice(0, 8).map((n) => ({ headline: n.t, sentiment: r0(n.s), ago: n.ago })),
@@ -135,21 +176,22 @@ const Voice = (() => {
   function show(h, s) { openAsk(); $('answer').innerHTML = h; $('answer').classList.add('show'); hint('Tap the mic to ask another question.'); say(s); }
 
   async function ask() {
+    stop();
     const raw = $('q').value.trim(); if (!raw) return hint('Type or speak a question first.');
     const q = parseQ(raw);
     if (q.key && q.key !== cur) { cur = q.key; renderAll(); }
     const a = A[cur]; if (!a) return hint('Data is still loading…');
     const cf = a.cf;
     // About an open position: "hold or exit?"
-    const op = Paper.openTrades().filter((t) => t.key === cur && (!q.K || t.K === Math.round(q.K / cf.step) * cf.step));
+    const op = Paper.openTrades().filter((t) => t.key === cur && (!q.K || t.K === Math.round(q.K / a.ch.step) * a.ch.step));
     if (q.hold && op.length) {
       const t = op[0], adv = t.advice || { state: 'HOLD', title: '🟢 Hold', hi: 'होल्ड करें', why: [] };
       return show(`<h3>${t.label} ${t.K} ${t.type} (your position)</h3><div class="adv ${{ HOLD: 'b', WARN: 'w', BOOK: 'o', EXIT: 's' }[adv.state] || 'b'}"><b>${adv.title}</b><div>${adv.why.map(esc).join('. ')}</div></div>
         <div class="row"><span>Bought → now</span><b>${f2(t.entry)} → ${f2(t.ltp)}</b></div><div class="row"><span>SL</span><b class="down">${f2(t.sl)}</b></div>`,
         `${cf.voice} ${t.K} ${t.type === 'CE' ? 'कॉल' : 'पुट'}: ${adv.hi || 'होल्ड करें'}। ख़रीद ${Math.round(t.entry)}, अभी ${Math.round(t.ltp)}, स्टॉप-लॉस ${Math.round(t.sl)}।`);
     }
-    if (!q.type) return general(raw, a);
-    let K = q.K ? Math.round(q.K / cf.step) * cf.step : a.ch.atm, note = '';
+    if (!q.type || !cf.opt) return general(raw, a);
+    let K = q.K ? Math.round(q.K / a.ch.step) * a.ch.step : a.ch.atm, note = '';
     if (q.K && K !== q.K) note = `(${q.K} isn't a strike; using nearest ${K})`;
     if (Math.abs(K - a.price) / a.price > 0.08) return show(`<h3>${cf.label} ${K} ${q.type}</h3>This strike is too far from the current price ${f0(a.price)}.`, 'ये स्ट्राइक मौजूदा भाव से बहुत दूर है।');
     const o = optQuote(a, K, q.type), b = bs(a.price, K, a.ch.T, o.iv, q.type), dir = q.type === 'CE' ? 1 : -1, ds = q.type === 'CE' ? a.score : 100 - a.score;
@@ -175,5 +217,5 @@ const Voice = (() => {
     show(html, useAI ? '' : sayTxt);
     if (useAI) { const done = await askAI(raw, a, 'aiAns'); if (!done) say(sayTxt); }
   }
-  return { say, toggleMic, ask };
+  return { say, stop, mute, toggleMic, ask };
 })();

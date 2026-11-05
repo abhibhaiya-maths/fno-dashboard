@@ -1,16 +1,47 @@
 /* ===== विश्लेषण: डेटा → संकेत, स्कोर, लेवल, सेटअप ===== */
+// Session windows, minutes from 09:15 IST: NSE/BSE 09:15–15:30, MCX 09:00–23:30
+const SESS = { NSE: { o: 0, c: 375 }, MCX: { o: -15, c: 870 } };
 const CFG = {
-  NIFTY: { label: 'NIFTY 50', voice: 'निफ्टी', step: 50, exch: 'NSE', cons: 50 },
-  SENSEX: { label: 'SENSEX', voice: 'सेंसेक्स', step: 100, exch: 'BSE', cons: 30 },
-  BANKNIFTY: { label: 'BANK NIFTY', voice: 'बैंक निफ्टी', step: 100, exch: 'NSE', cons: 12 },
+  NIFTY: { label: 'NIFTY 50', voice: 'निफ्टी', step: 50, exch: 'NSE', cons: 50, kind: 'INDEX', core: true, opt: true, key: 'NSE_INDEX|Nifty 50', sess: SESS.NSE },
+  SENSEX: { label: 'SENSEX', voice: 'सेंसेक्स', step: 100, exch: 'BSE', cons: 30, kind: 'INDEX', core: true, opt: true, key: 'BSE_INDEX|SENSEX', sess: SESS.NSE },
+  BANKNIFTY: { label: 'BANK NIFTY', voice: 'बैंक निफ्टी', step: 100, exch: 'NSE', cons: 12, kind: 'INDEX', core: true, opt: true, key: 'NSE_INDEX|Nifty Bank', sess: SESS.NSE },
 };
-const KEYS = Object.keys(CFG);
+let KEYS = Object.keys(CFG);
+// Watchlist instruments (stocks, other indices, MCX futures) join the same engine
+function addInst(it) {
+  if (!it || !it.id || (CFG[it.id] && CFG[it.id].core)) return null;
+  CFG[it.id] = { label: it.label || it.id, voice: it.name || it.label || it.id, name: it.name || it.label || it.id, step: it.step || null, exch: it.exch || 'NSE', cons: 0, kind: it.kind || 'EQ',
+    core: false, opt: !!it.fo, key: it.key, ukey: it.ukey || null, sym: it.sym || it.id, lot: it.lot || null, expiry: it.expiry || null, sess: it.exch === 'MCX' ? SESS.MCX : SESS.NSE, demo: it.demo || null };
+  KEYS = Object.keys(CFG);
+  return CFG[it.id];
+}
+function removeInst(id) { if (CFG[id] && !CFG[id].core) { delete CFG[id]; KEYS = Object.keys(CFG); } }
+const watchItems = () => KEYS.filter((k) => !CFG[k].core).map((k) => { const c = CFG[k]; return { id: k, label: c.label, name: c.name, key: c.key, ukey: c.ukey, exch: c.exch, kind: c.kind, fo: c.opt, lot: c.lot, sym: c.sym, expiry: c.expiry }; });
+// Strike step: from the chain if available, else NSE-style steps by price
+function autoStep(rows, price) {
+  if (rows && rows.length > 3) {
+    const d = {}; let best = null;
+    for (let i = 1; i < rows.length; i++) { const g = +(rows[i].K - rows[i - 1].K).toFixed(2); if (g > 0) d[g] = (d[g] || 0) + 1; }
+    for (const g in d) if (!best || d[g] > d[best]) best = g;
+    if (best) return +best;
+  }
+  return price < 250 ? 2.5 : price < 500 ? 5 : price < 1000 ? 10 : price < 2500 ? 20 : price < 5000 ? 50 : 100;
+}
+const stdev = (a) => { const m = a.reduce((x, y) => x + y, 0) / a.length; return Math.sqrt(a.reduce((x, y) => x + (y - m) ** 2, 0) / Math.max(1, a.length - 1)); };
+// Futures OI buildup: price vs open interest (the classic four states)
+function buildup(dp, doi) {
+  if (!ok(dp) || !ok(doi) || doi === 0 || dp === 0) return null;
+  if (dp > 0 && doi > 0) return ['Long buildup', 1];
+  if (dp < 0 && doi > 0) return ['Short buildup', -1];
+  if (dp > 0 && doi < 0) return ['Short covering', 0.5];
+  return ['Long unwinding', -0.5];
+}
 
 function nearestRow(rows, K) { let b = null; for (const r of rows) if (!b || Math.abs(r.K - K) < Math.abs(b.K - K)) b = r; return b; }
 function sideIV(o) { return o && o.iv > 0 ? o.iv : null; }
 
 function analyze(D) {
-  const cf = CFG[D.key], s1 = D.candles;
+  const cf = CFG[D.key], s1 = D.candles, SS = cf.sess || SESS.NSE;
   const prev = s1.filter((x) => x.d === 1), today = s1.filter((x) => x.d === 2);
   if (!prev.length || !today.length) return null;
   const hasVol = today.some((x) => x.v > 0);
@@ -23,7 +54,7 @@ function analyze(D) {
   const p = (PH + PL + prev[prev.length - 1].c) / 3, bc0 = (PH + PL) / 2, tc0 = 2 * p - bc0, tc = Math.max(tc0, bc0), bc = Math.min(tc0, bc0);
   const piv = { R3: PH + 2 * (p - PL), R2: p + (PH - PL), R1: 2 * p - PL, P: p, S1: 2 * p - PH, S2: p - (PH - PL), S3: PL - 2 * (PH - p) };
   // ओपनिंग रेंज (पहले 15 मिनट)
-  const or = today.filter((x) => x.m < 15), ORH = Math.max(...or.map((x) => x.h)), ORL = Math.min(...or.map((x) => x.l));
+  const or0 = today.filter((x) => x.m < SS.o + 15), or = or0.length ? or0 : today.slice(0, 1), ORH = Math.max(...or.map((x) => x.h)), ORL = Math.min(...or.map((x) => x.l));
   // दिन का हाई-लो और Fibonacci
   let DH = -Infinity, DL = Infinity, iH = 0, iL = 0;
   today.forEach((x, i) => { if (x.h > DH) { DH = x.h; iH = i; } if (x.l < DL) { DL = x.l; iL = i; } });
@@ -40,7 +71,8 @@ function analyze(D) {
   const C = D.chain || { rows: [] }, rows = (C.rows || []).filter((r) => r.ce && r.pe);
   const dte = ok(C.dte) ? C.dte : 1, T = Math.max(dte, 0.02) / 365;
   const atmRow = rows.length ? nearestRow(rows, price) : null;
-  const atm = atmRow ? atmRow.K : Math.round(price / cf.step) * cf.step;
+  const step = cf.step || autoStep(rows, price);
+  const atm = atmRow ? atmRow.K : Math.round(price / step) * step;
   const atmIV = atmRow ? ((sideIV(atmRow.ce) || 0) + (sideIV(atmRow.pe) || 0)) / ((sideIV(atmRow.ce) ? 1 : 0) + (sideIV(atmRow.pe) ? 1 : 0) || 1) || 0.13 : 0.13;
   const fill = (o, K, type) => {
     // ग्रीक्स न मिलें तो Black-Scholes से निकालो
@@ -53,16 +85,60 @@ function analyze(D) {
   rows.forEach((a) => { let pain = 0; rows.forEach((b) => { pain += b.ce.oi * Math.max(0, a.K - b.K) + b.pe.oi * Math.max(0, b.K - a.K); }); if (pain < mpv) { mpv = pain; mp = a.K; } });
   const sum = (f) => rows.reduce((s, r) => s + f(r), 0);
   const ceTot = sum((r) => r.ce.oi), peTot = sum((r) => r.pe.oi);
-  const near = rows.filter((r) => Math.abs(r.K - price) <= cf.step * 15);
+  const near = rows.filter((r) => Math.abs(r.K - price) <= step * 15);
   const maxCE = near.length ? near.reduce((a, b) => (b.ce.oi > a.ce.oi ? b : a)).K : null, maxPE = near.length ? near.reduce((a, b) => (b.pe.oi > a.pe.oi ? b : a)).K : null;
   const ceCh = sum((r) => r.ce.oi - (r.ce.poi || r.ce.oi)), peCh = sum((r) => r.pe.oi - (r.pe.poi || r.pe.oi));
-  const ch = { rows, view, atm, atmRow, atmIV, T, dte, expiry: C.expiry, lot: C.lot, mp, pcr: ceTot ? peTot / ceTot : null, ceTot, peTot, ceChTot: ceCh, peChTot: peCh, maxCE, maxPE, straddle: atmRow ? atmRow.ce.ltp + atmRow.pe.ltp : null };
+  const ch = { step, rows, view, atm, atmRow, atmIV, T, dte, expiry: C.expiry, lot: C.lot, mp, pcr: ceTot ? peTot / ceTot : null, ceTot, peTot, ceChTot: ceCh, peChTot: peCh, maxCE, maxPE, straddle: atmRow ? atmRow.ce.ltp + atmRow.pe.ltp : null };
 
   // बाज़ार का मूड
   const hv = (D.hv || []).filter((h) => ok(h.c)).map((h) => ({ ...h, pts: ((price * h.w) / 100) * (h.c / 100) }));
   const hvW = hv.length ? hv.reduce((s, h) => s + h.w * h.c, 0) / hv.reduce((s, h) => s + h.w, 0) : null;
   const news = D.news || [], newsAvg = news.length ? news.reduce((s, n) => s + n.s, 0) / news.length : null;
   const vix = D.vix || null;
+  const isIdx = cf.kind === 'INDEX', isMCX = cf.exch === 'MCX';
+
+  // Futures OI buildup: day (vs previous close / OI) and last 30 minutes
+  let fut = null;
+  {
+    const F = D.fut, own = isMCX ? today.filter((x) => x.oi > 0) : null;
+    const series = own && own.length ? own.map((x) => [x.m, x.c, x.oi]) : F && F.c && F.c.length ? F.c : null;
+    if (series && series.length) {
+      const L0 = series[series.length - 1], p30 = series.find((x) => x[0] >= L0[0] - 30) || series[0];
+      const pc = own ? PC : F.prevClose, poi = own ? (D.prevOi || null) : F.prevOi;
+      const day = buildup(ok(pc) ? L0[1] - pc : null, ok(poi) && poi > 0 ? L0[2] - poi : null);
+      const d30oi = L0[2] - p30[2], m30 = series.length > 5 && Math.abs(d30oi) / (L0[2] || 1) > 0.002 ? buildup(L0[1] - p30[1], d30oi) : null;
+      fut = { day, m30, oi: L0[2], doi: ok(poi) && poi > 0 ? ((L0[2] - poi) / poi) * 100 : null, d30: L0[2] ? (d30oi / L0[2]) * 100 : null, px: L0[1], basis: L0[1] - price, expiry: F && F.expiry };
+    }
+  }
+  // Volatility regime: IV percentile (India VIX, 1 year) for indices; IV vs 20-day realised volatility for stocks
+  let vlt = null;
+  {
+    const dr = D.daily && D.daily.rows || [], closes = dr.map((x) => x[4]);
+    const rets = []; for (let i = Math.max(1, closes.length - 20); i < closes.length; i++) rets.push(Math.log(closes[i] / closes[i - 1]));
+    const hv20 = rets.length >= 10 ? stdev(rets) * Math.sqrt(252) : null;
+    const yr = dr.slice(-252);
+    vlt = { hv20, hi52: yr.length ? Math.max(...yr.map((x) => x[2]), DH) : null, lo52: yr.length ? Math.min(...yr.map((x) => x[3]), DL) : null };
+    const wk = dr.slice(-5); if (wk.length) { vlt.pwH = Math.max(...wk.map((x) => x[2])); vlt.pwL = Math.min(...wk.map((x) => x[3])); }
+    if (isIdx && D.vixDaily && D.vixDaily.length > 100 && vix) {
+      const vs = D.vixDaily.slice(-252).map((x) => x[4]), mn = Math.min(...vs), mx = Math.max(...vs);
+      vlt.ivp = Math.round((vs.filter((v) => v < vix.v).length / vs.length) * 100); vlt.ivr = Math.round(((vix.v - mn) / (mx - mn || 1)) * 100); vlt.src = 'India VIX, 1 year';
+    }
+    if (ok(hv20) && rows.length && atmIV) vlt.ivhv = atmIV / hv20;
+  }
+  // Global cues: Asia live, US last close, Europe after 13:30 IST; crude for MCX crude
+  let glob = null;
+  {
+    const G = (D.glob || []).filter((g) => ok(g.chg));
+    const pickG = (re) => G.filter((g) => re.test(g.name + ' ' + (g.sym || '')));
+    let set;
+    if (isMCX) set = /CRUDE/i.test(cf.sym || cf.label) ? pickG(/brent|wti|bzusd|clusd|crude|oil/i) : [];
+    else set = pickG(/dow|s&p|us tech|us 30|nikkei|hang seng|dax|ftse|cac/i);
+    if (set.length) glob = { items: set, avg: set.reduce((x, g) => x + g.chg, 0) / set.length };
+    const gift = pickG(/gift|sgx/i)[0];
+    if (gift && cf.key === 'NSE_INDEX|Nifty 50' && ok(D.prevClose)) glob = { ...(glob || { items: [], avg: null }), gift, gap: gift.price - D.prevClose };
+  }
+  // Event risk (calendar): high-impact events today or before tomorrow's open
+  const events = (D.events || []).filter((e) => e.imp === 'high' && (e.date === istYmd() || (e.date === new Date(Date.now() + 5.5 * 3600e3 + 86400e3).toISOString().slice(0, 10) && e.time < '09:15')));
 
   // संकेत
   const L = I5.k.length - 1, g = (a) => a[L];
@@ -85,27 +161,42 @@ function analyze(D) {
   add('Momentum', 'Bollinger (20,2) %B', ok(bu) ? f1(((price - bl) / (bu - bl || 1)) * 100) + '%' : '–', price > bm ? 1 : -1, ok(bm) ? 0.5 : 0);
   add('Momentum', 'Candle pattern (5m)', pat[0], pat[1], 1);
   add('Levels', 'CPR', price > tc ? 'Above TC' : price < bc ? 'Below BC' : 'Inside CPR', price > tc ? 1 : price < bc ? -1 : 0, 1.5);
-  add('Levels', 'Opening range (15m)', curMin < 15 ? 'Forming' : price > ORH ? 'High breakout' : price < ORL ? 'Low breakdown' : 'Inside range', curMin < 15 ? 0 : price > ORH ? 1 : price < ORL ? -1 : 0, 1.5);
+  const orForming = curMin < SS.o + 15;
+  add('Levels', 'Opening range (15m)', orForming ? 'Forming' : price > ORH ? 'High breakout' : price < ORL ? 'Low breakdown' : 'Inside range', orForming ? 0 : price > ORH ? 1 : price < ORL ? -1 : 0, 1.5);
   add('Levels', hasVol ? 'Volume profile POC' : 'TPO profile POC', f1(VP.POC), price > VP.POC ? 1 : -1, 1);
   add('Levels', 'Fibonacci (day range)', `${Math.round(fibPos * 100)}% of range`, fibPos > 0.5 ? 1 : -1, 0.5);
   add('Options', 'PCR', f2(ch.pcr), ch.pcr > 1.2 ? 1 : ch.pcr < 0.8 ? -1 : 0, ok(ch.pcr) ? 1.5 : 0);
   add('Options', 'OI change (PE vs CE)', `PE ${sgn(peCh)}${f1(peCh / 1e5)}L, CE ${sgn(ceCh)}${f1(ceCh / 1e5)}L`, peCh > ceCh + Math.abs(ceCh) * 0.1 ? 1 : ceCh > peCh + Math.abs(peCh) * 0.1 ? -1 : 0, rows.length ? 1.5 : 0);
-  add('Options', 'Max pain', f0(mp), mp == null ? 0 : price < mp - cf.step / 2 ? 1 : price > mp + cf.step / 2 ? -1 : 0, mp == null ? 0 : dte <= 2 ? 1 : 0.5);
-  add('Market mood', 'India VIX', vix ? `${f2(vix.v)} (${vix.v < vix.prev ? 'falling' : 'rising'})` : 'No data', vix ? (vix.v < vix.prev ? 1 : -1) : 0, vix ? 0.5 : 0);
-  add('Market mood', 'FII cash (₹ cr)', ok(D.fii) ? sgn(D.fii) + f0(D.fii) : 'No data (enter in Market mood tab)', ok(D.fii) ? (D.fii > 0 ? 1 : -1) : 0, ok(D.fii) ? 1 : 0);
-  add('Market mood', 'Heavyweight stocks', ok(hvW) ? sgn(hvW) + f2(hvW) + '%' : 'No data', ok(hvW) ? (hvW > 0.2 ? 1 : hvW < -0.2 ? -1 : 0) : 0, ok(hvW) ? 1 : 0);
+  add('Options', 'Max pain', f0(mp), mp == null ? 0 : price < mp - step / 2 ? 1 : price > mp + step / 2 ? -1 : 0, mp == null ? 0 : dte <= 2 ? 1 : 0.5);
+  {
+    const b = fut && (fut.m30 || fut.day);
+    const v = fut ? [fut.m30 ? `30m: ${fut.m30[0]}` : '', fut.day ? `Day: ${fut.day[0]}` : '', ok(fut.doi) ? `OI ${sgn(fut.doi)}${f1(fut.doi)}%` : ''].filter(Boolean).join(', ') || 'Flat' : 'No futures data';
+    const sc = fut ? (fut.m30 && fut.day ? (fut.m30[1] + fut.day[1]) / 2 : b ? b[1] : 0) : 0;
+    add('Derivatives', 'Futures OI buildup', v, sc, fut ? 1.5 : 0);
+  }
+  if (!isMCX) {
+    add('Market mood', 'India VIX', vix ? `${f2(vix.v)} (${vix.v < vix.prev ? 'falling' : 'rising'})` : 'No data', vix ? (vix.v < vix.prev ? 1 : -1) : 0, vix ? 0.5 : 0);
+    add('Market mood', 'FII cash (₹ cr)', ok(D.fii) ? sgn(D.fii) + f0(D.fii) + (D.fiiSrc ? ` (${D.fiiSrc})` : '') : 'No data', ok(D.fii) ? (D.fii > 0 ? 1 : -1) : 0, ok(D.fii) ? (isIdx ? 1 : 0.5) : 0);
+  }
+  if (isIdx && cf.core) add('Market mood', 'Heavyweight stocks', ok(hvW) ? sgn(hvW) + f2(hvW) + '%' : 'No data', ok(hvW) ? (hvW > 0.2 ? 1 : hvW < -0.2 ? -1 : 0) : 0, ok(hvW) ? 1 : 0);
+  else if (!isMCX && D.mkt && ok(D.mkt.chg)) {
+    const rel = chg - D.mkt.chg;
+    add('Market mood', 'Relative strength vs Nifty', `${sgn(rel)}${f2(rel)}% (Nifty ${sgn(D.mkt.chg)}${f2(D.mkt.chg)}%)`, rel > 0.3 ? 1 : rel < -0.3 ? -1 : 0, 1);
+    add('Market mood', 'Broad market (Nifty score)', String(D.mkt.score), D.mkt.score >= 58 ? 1 : D.mkt.score <= 42 ? -1 : 0, 1);
+  }
+  add('Market mood', isMCX ? 'Global crude (Brent / WTI)' : 'Global cues (US close, Asia, Europe)', glob && ok(glob.avg) ? `${sgn(glob.avg)}${f2(glob.avg)}% avg of ${glob.items.length}` : 'No data', glob && ok(glob.avg) ? (glob.avg > 0.25 ? 1 : glob.avg < -0.25 ? -1 : 0) : 0, glob && ok(glob.avg) ? (isMCX ? 1.5 : 0.5) : 0);
   add('News', 'News sentiment', ok(newsAvg) ? f2(newsAvg) : 'No news', ok(newsAvg) ? (newsAvg > 0.15 ? 1 : newsAvg < -0.15 ? -1 : 0) : 0, ok(newsAvg) ? 1 : 0);
   const sw = sigs.reduce((s, x) => s + x.w, 0);
   const score = sw ? Math.round(50 + (50 * sigs.reduce((s, x) => s + x.w * x.s, 0)) / sw) : 50;
   const active = sigs.filter((x) => x.w > 0).length;
 
-  const lv = [...Object.entries(piv), ['CPR TC', tc], ['CPR BC', bc], ['Opening high', ORH], ['Opening low', ORL], ['Day high', DH], ['Day low', DL], ['VAH', VP.VAH], ['VAL', VP.VAL], ['POC', VP.POC], ['VWAP', vw]];
+  const lv = [...Object.entries(piv), ...(vlt && ok(vlt.pwH) ? [['Prev week high', vlt.pwH], ['Prev week low', vlt.pwL]] : []), ['CPR TC', tc], ['CPR BC', bc], ['Opening high', ORH], ['Opening low', ORL], ['Day high', DH], ['Day low', DL], ['VAH', VP.VAH], ['VAL', VP.VAL], ['POC', VP.POC], ['VWAP', vw]];
   if (ok(maxCE)) lv.push(['Call OI wall', maxCE]);
   if (ok(maxPE)) lv.push(['Put OI wall', maxPE]);
   const res = lv.filter((x) => x[1] > price + at * 0.05).sort((a, b) => a[1] - b[1])[0], sup = lv.filter((x) => x[1] < price - at * 0.05).sort((a, b) => b[1] - a[1])[0];
 
   return { key: D.key, cf, D, price, chg, PC, curMin, sessionLive: D.sessionLive, dayLabels: D.dayLabels, hasVol, I5, piv, tc, bc, p, ORH, ORL, DH, DL, fib, upSwing, VP, ch, hv, hvW, news, newsAvg, vix, fii: D.fii, dii: D.dii,
-    sigs, score, active, atr: at, rsi: rsv, adx: ax, res, sup, stV, stD, vw, lot: C.lot || APP_CONFIG.LOT_FALLBACK[D.key] };
+    sigs, score, active, atr: at, rsi: rsv, adx: ax, res, sup, stV, stD, vw, lot: C.lot || cf.lot || APP_CONFIG.LOT_FALLBACK[D.key] || null, fut, vol: vlt, glob, events, isIdx, isMCX, SS };
 }
 
 // किसी भी स्ट्राइक का अभी का भाव (चेन से, न मिले तो Black-Scholes)
@@ -135,7 +226,16 @@ function alertsFor(a, dir) {
   if (dir === 'CE' && a.res && a.res[1] - a.price < 0.6 * a.atr) out.push(['w', `Resistance just above: ${a.res[0]} ${f0(a.res[1])}.`]);
   if (dir === 'PE' && a.sup && a.price - a.sup[1] < 0.6 * a.atr) out.push(['w', `Support just below: ${a.sup[0]} ${f0(a.sup[1])}.`]);
   if (Math.abs(a.tc - a.bc) / a.price < 0.001) out.push(['i', 'Very narrow CPR: today is likely to be a trending day.']);
-  if (a.curMin >= 315) out.push(['w', 'Last hour: expect sharper moves and wider spreads.']);
+  if (a.SS.c - a.curMin <= 60) out.push(['w', 'Last hour of the session: expect sharper moves and wider spreads.']);
+  a.events.forEach((e) => out.push(['d', `Event risk: ${e.t} (${e.date === istYmd() ? 'today' : 'tomorrow'} ${e.time} IST). Expect a volatility spike; IV usually drops after the event.`]));
+  if (a.vol && ok(a.vol.ivp)) {
+    if (a.vol.ivp >= 80) out.push(['w', `IV percentile ${a.vol.ivp} (${a.vol.src}): options are expensive versus the past year. Buying premium needs a quick, strong move.`]);
+    else if (a.vol.ivp <= 20) out.push(['i', `IV percentile ${a.vol.ivp}: options are cheap versus the past year, good for buying premium.`]);
+  } else if (a.vol && ok(a.vol.ivhv)) {
+    if (a.vol.ivhv > 1.4) out.push(['w', `ATM IV is ${f1(a.vol.ivhv)}× the 20-day realised volatility: premiums are rich (results or news priced in?).`]);
+    else if (a.vol.ivhv < 0.8) out.push(['i', `ATM IV is below realised volatility (${f2(a.vol.ivhv)}×): premiums look cheap.`]);
+  }
+  if (a.isMCX && !a.cf.opt) out.push(['i', 'MCX: Upstox gives no commodity option chain, so levels are for the futures contract.']);
   if (!a.hasVol) out.push(['i', 'Indices carry no volume, so TWAP replaces VWAP and a TPO profile replaces the volume profile.']);
   out.push(['i', 'Risk no more than 1–2% of capital on one trade. Set the stop-loss before you enter.']);
   return out;
@@ -145,9 +245,10 @@ function alertsFor(a, dir) {
 function signalFor(a) {
   const pro = (d) => a.sigs.filter((x) => x.w > 0 && x.s * d > 0).sort((x, y) => y.w - x.w);
   const con = (d) => a.sigs.filter((x) => x.w > 0 && x.s * d < 0).sort((x, y) => y.w - x.w);
-  if (!a.sessionLive) return { state: 'WAIT', title: 'Market closed', sub: 'Signals resume after 9:30 next session', reasons: [], against: [] };
-  if (a.curMin < 15) return { state: 'WAIT', title: 'Wait: opening range forming', sub: 'No new signals in the first 15 minutes (till 9:30)', reasons: [], against: [] };
-  if (a.curMin >= 345) return { state: 'WAIT', title: 'Wait: too late for new trades', sub: 'New positions after 3:00 are risky. Open positions square off at 3:20.', reasons: [], against: [] };
+  const SS = a.SS || SESS.NSE;
+  if (!a.sessionLive) return { state: 'WAIT', title: 'Market closed', sub: `Signals resume 15 minutes after the next open (${hm(SS.o + 15)})`, reasons: [], against: [] };
+  if (a.curMin < SS.o + 15) return { state: 'WAIT', title: 'Wait: opening range forming', sub: `No new signals in the first 15 minutes (till ${hm(SS.o + 15)})`, reasons: [], against: [] };
+  if (a.curMin >= SS.c - 30) return { state: 'WAIT', title: 'Wait: too late for new trades', sub: a.isMCX ? 'Last 30 minutes of the MCX session: new positions are risky.' : 'New positions after 3:00 are risky. Open positions square off at 3:20.', reasons: [], against: [] };
   const s = a.score;
   let state = s >= 58 ? 'CE' : s <= 42 ? 'PE' : 'WAIT';
   if (state === 'WAIT') return { state, title: 'Wait: no clear setup', sub: `Score ${s}: signals are mixed. Waiting is a position too.`, reasons: [...pro(1).slice(0, 2), ...pro(-1).slice(0, 2)], against: [] };
@@ -156,10 +257,13 @@ function signalFor(a) {
   const caveats = [];
   if (ok(a.adx) && a.adx < 20) { strength = 'mild'; caveats.push('ADX below 20: weak trend'); }
   if (a.stD === -d) { strength = 'mild'; caveats.push('Supertrend still points the other way; better to wait for it to flip'); }
-  if (a.vix && a.vix.v > 18) caveats.push('High VIX: expensive premiums');
+  if (a.vix && a.vix.v > 18 && !a.isMCX) caveats.push('High VIX: expensive premiums');
+  if (a.vol && a.vol.ivp >= 80) caveats.push(`IV percentile ${a.vol.ivp}: rich premiums`);
+  if (a.events && a.events.length) { strength = 'mild'; caveats.push('Event risk: ' + a.events[0].t); }
+  const St = strength === 'strong' ? 'Strong' : 'Mild';
   return {
-    state, strength, dirScore: strength0,
-    title: state === 'CE' ? `▲ ${strength === 'strong' ? 'Strong' : 'Mild'} CALL setup` : `▼ ${strength === 'strong' ? 'Strong' : 'Mild'} PUT setup`,
+    state, strength, dirScore: strength0, noOpt: !a.cf.opt,
+    title: a.cf.opt ? (state === 'CE' ? `▲ ${St} CALL setup` : `▼ ${St} PUT setup`) : (state === 'CE' ? `▲ ${St} bullish setup` : `▼ ${St} bearish setup`),
     sub: `Score ${s}/100. ${pro(d).length} of ${a.active} signals agree with this direction.`,
     reasons: pro(d).slice(0, 3), against: con(d).slice(0, 2), caveats, setup: setupFor(a, state),
   };
@@ -170,5 +274,6 @@ const HI = { strong: 'मज़बूत', mild: 'हल्का', CE: 'कॉ�
 function signalHi(a) {
   const s = signalFor(a);
   if (s.state === 'WAIT') return `${a.cf.voice}: अभी कोई साफ़ सेटअप नहीं, स्कोर ${a.score}।`;
+  if (s.noOpt) return `${a.cf.voice}: ${s.state === 'CE' ? 'तेज़ी' : 'मंदी'} का ${HI[s.strength]} सेटअप, स्कोर ${a.score}।`;
   return `${a.cf.voice}: ${HI[s.state]} का ${HI[s.strength]} सेटअप, स्कोर ${a.score}।`;
 }

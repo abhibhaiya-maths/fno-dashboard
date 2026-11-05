@@ -1,10 +1,20 @@
-# ✅ फ़ाइनल वर्ज़न — अपलोड चेकलिस्ट
+# ✅ फ़ाइनल वर्ज़न (नवंबर 2026: वॉचलिस्ट + प्रो टूल) — अपलोड चेकलिस्ट
 
-**1. GitHub (Vercel अपने-आप लाइव करेगा):** `web` फ़ोल्डर की ये सारी फ़ाइलें बदलें/डालें:
+**1. GitHub (Vercel अपने-आप लाइव करेगा):** `web` फ़ोल्डर की **सारी** फ़ाइलें बदलें (हर फ़ाइल बदली है):
 - `web/index.html`, `web/style.css`
-- `web/js/`: `analysis.js`, `config.js`, `data-demo.js`, `data-live.js`, `engine.js` (नई), `indicators.js`, `main.js`, `paper.js`, `store.js`, `ui.js`, `voice.js`
+- `web/js/`: `analysis.js`, `config.js`, `data-demo.js`, `data-live.js`, `engine.js`, `indicators.js`, `main.js`, `paper.js`, `store.js`, `ui.js`, `voice.js`
 
-**2. Cloudflare Worker (`fno-worker`):** `worker/src/index.js` का पूरा कोड Edit code में पेस्ट करके **Deploy**।
+**2. Cloudflare Worker (`fno-worker`):** `worker/src/index.js` का पूरा कोड Edit code में पेस्ट करके **Deploy**। कोई नई सेटिंग या key नहीं चाहिए। पुराना Worker रहा तो साइट ऊपर "Old Worker code" लिखेगी।
+
+**मोबाइल पर हिंदी दिखे तो:** पेज अब Google Translate को रोकता है और हर फ़ाइल नए वर्ज़न नंबर से लोड होती है। फिर भी दिखे तो Chrome में ⋮ → Settings → Site settings → साइट का डेटा साफ़ करें, या ⋮ → Translate → "Never translate English"।
+
+**नया क्या है:**
+- **+ Add stock / MCX**: Reliance, Wipro, HDFC Bank, Nifty IT, Crude Oil, Gold… कुछ भी खोजकर जोड़ें (अधिकतम 12)। हर एक पर वही इंजन: चार्ट, स्कोर, लेवल, कंपनी न्यूज़। F&O वाले शेयरों पर ऑप्शन चेन और पेपर ट्रेडिंग भी। MCX पर Upstox ऑप्शन चेन नहीं देता, इसलिए वहाँ futures के लेवल। वॉचलिस्ट Firestore में सेव होती है (फ़ोन और लैपटॉप दोनों पर एक जैसी)।
+- **Futures OI buildup** (long/short buildup, short covering, long unwinding), **IV percentile** (India VIX, 1 साल), **IV ÷ realised vol** (शेयर), 52-हफ़्ते और पिछले हफ़्ते के लेवल।
+- **Global cues**: GIFT Nifty (गैप-अप/डाउन संकेत), Dow, S&P, Nasdaq, Nikkei, Hang Seng, Brent, USD/INR (Upstox से, मुफ़्त)।
+- **Event calendar**: RBI पॉलिसी, US Fed, US के बड़े डेटा (ForexFactory), India CPI, एक्सपायरी। इवेंट वाले दिन सेटअप अपने-आप "mild" और चेतावनी।
+- **FII/DII अपने-आप** (NSE से; NSE ब्लॉक करे तो हाथ से डालने का बॉक्स)।
+- **Official** टैब: NSE कॉर्पोरेट announcements, RBI press releases/notifications, SEBI।
 
 **3. Worker की सेटिंग्स (Settings → Variables and Secrets / Bindings):**
 
@@ -17,6 +27,8 @@
 | `KV` | KV binding | ✅ `fno-kv` |
 | `GEMINI_API_KEY` | Secret | वैकल्पिक, मुफ़्त (AI से कुछ भी पूछने के लिए) |
 | `AI` | Workers AI binding | वैकल्पिक, मुफ़्त, बिना key |
+
+मुफ़्त सीमा: Cloudflare 1 लाख रिक्वेस्ट/दिन और KV 1000 writes/दिन। बाज़ार बंद होने पर साइट अपने-आप धीमे polling पर चली जाती है, इसलिए 12 instruments तक आराम से सीमा के अंदर।
 
 **4. Firebase:** Authentication → Authorized domains में अपनी साइट के डोमेन जोड़ें।
 

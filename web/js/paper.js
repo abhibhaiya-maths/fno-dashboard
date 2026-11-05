@@ -10,6 +10,7 @@ const Paper = (() => {
   const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
   const opts = () => Store.pref('paper_opts', { trail: true, autoExit: false, lots: 1 });
   const hiType = (t) => (t === 'CE' ? 'कॉल' : 'पुट');
+  const vname = (t) => (CFG[t.key] ? CFG[t.key].voice : t.label);
   // पुराने (हिंदी) रिकॉर्ड भी पढ़ सकें
   const OUT = { 'सही': 'right', 'ग़लत': 'wrong', 'फ़्लैट': 'flat' };
   const outc = (v) => OUT[v] || v;
@@ -47,6 +48,7 @@ const Paper = (() => {
   async function open({ key, K, type, lots, sl, tgt, src }) {
     const a = A[key];
     if (!ready || !a) return toast('Data is not ready yet');
+    if (!a.cf.opt) return toast(`${a.cf.label} has no options on Upstox, so it can't be paper traded here.`);
     if (!a.sessionLive) return toast('Market is closed. Paper trades open during market hours.');
     const e = estimate(key, K, type, lots);
     if (e.cost > acc.cash) return toast(`Not enough cash: need ${rs(e.cost)}, have ${rs(acc.cash)}`);
@@ -72,7 +74,7 @@ const Paper = (() => {
     await Promise.all([Store.saveTrade(t), Store.saveAccount(acc)]);
     beep(t.net >= 0 ? 880 : 300);
     toast(`Closed: ${t.label} ${t.K} ${t.type}. ${reason}. Net ${t.net >= 0 ? '+' : ''}${rs(t.net)}`);
-    Voice.say(`${CFG[t.key].voice} ${t.K} ${hiType(t.type)} बंद। ${reasonHi || ''}। नेट ${t.net >= 0 ? 'मुनाफ़ा' : 'नुक़सान'} ${Math.abs(Math.round(t.net))} रुपये।`);
+    Voice.say(`${vname(t)} ${t.K} ${hiType(t.type)} बंद। ${reasonHi || ''}। नेट ${t.net >= 0 ? 'मुनाफ़ा' : 'नुक़सान'} ${Math.abs(Math.round(t.net))} रुपये।`);
     render();
   }
 
@@ -85,7 +87,7 @@ const Paper = (() => {
     if (a.stD === -d && t.st0 !== -d) exit.push('Supertrend flipped against you');
     else if (a.stD === -d) warn.push('Supertrend has been against you since entry');
     if ((a.price - a.vw) * d < 0 && ok(mh) && mh * d < 0) exit.push(`Price on the wrong side of ${a.hasVol ? 'VWAP' : 'TWAP'} and MACD reversed`);
-    if (a.curMin >= 345) exit.push('After 3:00: theta and sudden-swing risk');
+    if (a.curMin >= a.SS.c - 30) exit.push('Last 30 minutes: theta and sudden-swing risk');
     if (R >= 1.5) book.push(`Profit is already ${R.toFixed(1)}R`);
     if (t.tgt && t.ltp >= t.tgt * 0.97) book.push('Right at the target');
     if (R > 0.5 && ((d === 1 && a.rsi > 72) || (d === -1 && a.rsi < 28))) book.push(`RSI ${f1(a.rsi)}: the move may be tiring`);
@@ -116,7 +118,7 @@ const Paper = (() => {
       }
       const adv = advise(a, t);
       if (!t.advice || t.advice.state !== adv.state) {
-        if (t.advice) { beep(adv.state === 'EXIT' ? 330 : 520); Voice.say(`${CFG[t.key].voice} ${t.K} ${hiType(t.type)}: ${adv.hi}।`); }
+        if (t.advice) { beep(adv.state === 'EXIT' ? 330 : 520); Voice.say(`${vname(t)} ${t.K} ${hiType(t.type)}: ${adv.hi}।`); }
         t.log.push(`${hm(a.curMin)} ${adv.title}`); dirty = true;
         if (adv.state === 'EXIT' && t.exitSigPx == null) t.exitSigPx = bid;
       }
@@ -125,7 +127,7 @@ const Paper = (() => {
         // trailing on: instead of selling at target, lock profit and let it run
         t.tgtHit = true; t.sl = Math.max(t.sl, tick05(t.tgt - 0.5 * t.risk0));
         t.log.push(`${hm(a.curMin)} Target touched, SL locked at ${f2(t.sl)}`); dirty = true; beep(880);
-        Voice.say(`${CFG[t.key].voice} ${t.K} ने टारगेट छुआ। मुनाफ़ा लॉक करके स्टॉप-लॉस ${Math.round(t.sl)} पर किया।`);
+        Voice.say(`${vname(t)} ${t.K} ने टारगेट छुआ। मुनाफ़ा लॉक करके स्टॉप-लॉस ${Math.round(t.sl)} पर किया।`);
       }
       if (bid <= t.sl) t.sl >= t.entry ? close(t, 'Trailing SL hit (profit locked)', 'ट्रेलिंग स्टॉप-लॉस हिट, मुनाफ़ा लॉक') : close(t, 'Stop-loss hit', 'स्टॉप-लॉस हिट');
       else if (t.tgt && bid >= t.tgt && !o.trail) close(t, 'Target hit', 'टारगेट हिट');
@@ -199,7 +201,11 @@ const Paper = (() => {
     let h = `<div class="sig ${cls}"><div class="sig-k">${a.cf.label} live signal, ${Source.clock().label}</div><div class="sigt">${s.title}</div><div class="sigs">${esc(s.sub)}</div>`;
     if (s.reasons && s.reasons.length) h += `<div class="sigr">${s.reasons.map((x) => `<span class="pill ${x.s > 0 ? 'b' : x.s < 0 ? 's' : 'n'}">✓ ${esc(x.n)}</span>`).join('')}${(s.against || []).map((x) => `<span class="pill s">✗ ${esc(x.n)}</span>`).join('')}</div>`;
     if (s.caveats && s.caveats.length) h += `<div class="alert" style="margin-top:10px">${s.caveats.join('. ')}.</div>`;
-    if (s.setup) {
+    if (s.setup && s.noOpt) {
+      const st = s.setup;
+      h += `<div class="lv"><div><small>${s.state === 'CE' ? 'Long' : 'Short'} around</small><b>${f1(st.e)}</b></div><div><small>Stop-loss</small><b class="down">${f1(st.sl)}</b></div><div><small>Target 1 / 2</small><b class="up">${f1(st.t1)} / ${f1(st.t2)}</b></div></div>
+        <div class="mut" style="font-size:12px;margin-top:6px">${esc(a.cf.label)} has no option chain on Upstox, so paper trading is off. Levels are for the ${a.isMCX ? 'futures contract' : 'stock price'}.</div>`;
+    } else if (s.setup) {
       const st = s.setup, e = estimate(cur, st.K, st.dir, o.lots);
       h += `<div class="lv"><div><small>Strike</small><b>${st.K} ${st.dir}</b></div><div><small>Buy price</small><b>${rs(e.px)}</b></div><div><small>SL / target</small><b><span class="down">${f1(st.pSL)}</span> / <span class="up">${f1(st.pT1)}</span></b></div></div>
         <button class="big ${cls}" onclick="Paper.takeSignal()">Take paper trade: ${o.lots} lot (${e.qty}), total ${rs(e.cost)}</button>`;
@@ -233,7 +239,7 @@ const Paper = (() => {
   }
   function renderOrderForm() {
     const a = A[cur]; if (!a) return;
-    const strikes = a.ch.rows.length ? a.ch.view.map((r) => r.K) : Array.from({ length: 11 }, (_, i) => a.ch.atm + (i - 5) * a.cf.step);
+    const strikes = a.ch.rows.length ? a.ch.view.map((r) => r.K) : Array.from({ length: 11 }, (_, i) => a.ch.atm + (i - 5) * a.ch.step);
     $('oStrike').innerHTML = strikes.map((K) => `<option value="${K}" ${K === a.ch.atm ? 'selected' : ''}>${K}${K === a.ch.atm ? ' (ATM)' : ''}</option>`).join('');
     $('oIdx').textContent = a.cf.label;
     updateEstimate();

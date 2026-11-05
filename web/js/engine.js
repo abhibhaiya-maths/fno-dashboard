@@ -5,7 +5,7 @@ const Engine = (() => {
   const SHORT = (n) => n.replace(/\s*\(.*?\)\s*/g, ' ').replace('Price vs ', '').replace('trend strength', '').trim().slice(0, 18);
 
   function push(k, tone, text, min) {
-    feed.unshift({ id: Date.now() + Math.random(), t: ok(min) ? hm(clamp(min, 0, 374)) : '', k, tone, text, fresh: true });
+    feed.unshift({ id: Date.now() + Math.random(), t: ok(min) ? hm(clamp(min, -15, 869)) : '', k, tone, text, fresh: true });
     if (feed.length > 60) feed.length = 60;
   }
 
@@ -23,13 +23,13 @@ const Engine = (() => {
 
   function scan() {
     scans++; lastScan = Date.now();
-    if (!started) { started = true; push(null, 'info', `Engine online: watching 20 tools across ${KEYS.length} indices.`, A[cur] ? A[cur].curMin : null); }
+    if (!started) { started = true; push(null, 'info', `Engine online: watching ${A[cur] ? A[cur].sigs.length : 20} tools across ${KEYS.length} instruments.`, A[cur] ? A[cur].curMin : null); }
     for (const k of KEYS) {
       const a = A[k]; if (!a) continue;
       const s = signalFor(a), g1 = a.fib[3].v, g2 = a.fib[4].v;
       const now = {
         m: a.curMin, state: s.state, strong: a.score >= 70 ? 1 : a.score <= 30 ? -1 : 0, stD: a.stD, vw: a.price >= a.vw ? 1 : -1,
-        orb: a.curMin < 15 ? 0 : a.price > a.ORH ? 1 : a.price < a.ORL ? -1 : 0, rsi: a.rsi > 70 ? 1 : a.rsi < 30 ? -1 : 0,
+        orb: a.curMin < a.SS.o + 15 ? 0 : a.price > a.ORH ? 1 : a.price < a.ORL ? -1 : 0, rsi: a.rsi > 70 ? 1 : a.rsi < 30 ? -1 : 0,
         pcr: !ok(a.ch.pcr) ? 0 : a.ch.pcr > 1.25 ? 1 : a.ch.pcr < 0.75 ? -1 : prev[k] && Math.abs(a.ch.pcr - 1) > 0.15 ? prev[k].pcr : 0,
         gz: a.price <= Math.max(g1, g2) && a.price >= Math.min(g1, g2) ? 1 : 0,
         cpr: a.price > a.tc ? 1 : a.price < a.bc ? -1 : 0,
@@ -60,7 +60,7 @@ const Engine = (() => {
   function renderFeed() {
     const box = $('feed'); if (!box) return;
     if (!feed.length) { box.innerHTML = '<div class="feed-empty">Nothing has changed yet. When any tool flips, it shows up here.</div>'; return; }
-    box.innerHTML = feed.slice(0, 40).map((e) => `<div class="fd-item ${e.tone}${e.fresh ? ' fresh' : ''}"><span class="fd-time">${e.t}</span><span>${e.k ? `<span class="fd-idx">${CFG[e.k].label}</span>` : ''}${esc(e.text)}</span></div>`).join('');
+    box.innerHTML = feed.slice(0, 40).map((e) => `<div class="fd-item ${e.tone}${e.fresh ? ' fresh' : ''}"><span class="fd-time">${e.t}</span><span>${e.k ? `<span class="fd-idx">${esc(CFG[e.k] ? CFG[e.k].label : e.k)}</span>` : ''}${esc(e.text)}</span></div>`).join('');
     feed.forEach((e) => (e.fresh = false));
   }
 
@@ -70,7 +70,7 @@ const Engine = (() => {
     const S = Source.stream;
     const feed = S ? (S.connected ? `<b>LIVE STREAM</b> tick lag ${S.lag == null ? '–' : Math.max(0, S.lag) + ' ms'}, ${S.ticks} ticks` : S.everConnected ? '<b>RECONNECTING</b> polling every 5 s meanwhile' : '<b>POLLING</b> every 5 s') : '<b>DEMO FEED</b>';
     const agoTxt = Date.now() - lastScan < 1500 ? 'just now' : `${ago}s ago`;
-    $('engTxt').innerHTML = `${feed}. Engine: 20 tools × ${KEYS.length} indices, last scan ${agoTxt} (#${scans})`;
+    $('engTxt').innerHTML = `${feed}. Engine: ${a.active} of ${a.sigs.length} tools live × ${KEYS.length} instruments, last scan ${agoTxt} (#${scans})`;
     $('engTools').innerHTML = a.sigs.filter((x) => x.w > 0).map((x) => `<span class="tool ${x.s > 0 ? 'b' : x.s < 0 ? 's' : ''}">${esc(SHORT(x.n))}</span>`).join('');
   }
 
@@ -82,11 +82,11 @@ const Engine = (() => {
       <div class="pj-bar" role="img" aria-label="Upside ${p.up}%, downside ${p.dn}%"><span class="u" style="width:${p.up}%"></span><span class="d" style="width:${p.dn}%"></span></div>`;
     if (p.dir) {
       h += `<div class="pj-grid">
-        <div><small>${p.dir === 'CE' ? 'CALL' : 'PUT'} entry zone</small><b>${f0(p.entryLo)}–${f0(p.entryHi)}</b></div>
-        <div><small>Stop-loss (index)</small><b class="down">${f0(p.sl)}</b></div>
+        <div><small>${a.cf.opt ? (p.dir === 'CE' ? 'CALL' : 'PUT') : p.dir === 'CE' ? 'Long' : 'Short'} entry zone</small><b>${f0(p.entryLo)}–${f0(p.entryHi)}</b></div>
+        <div><small>Stop-loss (${a.isIdx ? 'index' : 'price'})</small><b class="down">${f0(p.sl)}</b></div>
         <div><small>Target 1 / 2</small><b class="up">${f0(p.t1)} / ${f0(p.t2)}</b></div>
-        <div><small>Strike</small><b>${p.K} ${p.dir}</b></div>
-        <div><small>Premium / SL / target</small><b>${f1(p.P)} / <span class="down">${f1(p.pSL)}</span> / <span class="up">${f1(p.pT1)}</span></b></div>
+        ${a.cf.opt ? `<div><small>Strike</small><b>${p.K} ${p.dir}</b></div>
+        <div><small>Premium / SL / target</small><b>${f1(p.P)} / <span class="down">${f1(p.pSL)}</span> / <span class="up">${f1(p.pT1)}</span></b></div>` : `<div><small>Instrument</small><b>${esc(a.cf.label)}</b></div><div><small>Options</small><b>Not available</b></div>`}
         <div><small>First obstacle</small><b>${p.block ? f0(p.block[1]) : '–'}</b></div></div>
         <div class="pj-note">${p.block ? `First obstacle: ${esc(p.block[0])} at ${f0(p.block[1])}. ` : ''}Expected 30-minute range ${f0(p.lo)} to ${f0(p.hi)} (±${f0(p.exp30)} pts). The setup stays valid until the signal changes or the stop-loss breaks.</div>`;
     } else {
@@ -96,7 +96,7 @@ const Engine = (() => {
         <div><small>Support below</small><b class="up">${a.sup ? f0(a.sup[1]) : '–'}</b></div></div>
         <div class="pj-note">Signals are split, so trading inside the range is best avoided. ${a.res ? `Holding above ${f0(a.res[1])} can build an upside setup; ` : ''}${a.sup ? `breaking below ${f0(a.sup[1])} can build a downside one.` : ''}</div>`;
     }
-    h += `<div class="pj-note">The percentage is the weighted lean of 20 tools, not a guaranteed probability. How often it is right shows up in the signal record.${a.sessionLive ? '' : ' Market is closed; this uses the last session.'}</div>`;
+    h += `<div class="pj-note">The percentage is the weighted lean of ${a.active} tools, not a guaranteed probability. How often it is right shows up in the signal record.${a.sessionLive ? '' : ' Market is closed; this uses the last session.'}</div>`;
     $('proj').innerHTML = h;
   }
 

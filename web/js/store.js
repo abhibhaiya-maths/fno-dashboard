@@ -66,8 +66,18 @@ const Store = (() => {
   // FII/DII (हाथ से डाला गया, आज की तारीख़ के लिए)
   const getFII = () => ls.get('fno_fii_' + istYmd(), null);
   const setFII = (v) => ls.set('fno_fii_' + istYmd(), v);
+  // Watchlist: synced to Firestore when logged in (so phone and laptop share it), else this browser
+  async function loadWatch(demo) {
+    const lk = demo ? 'fno_watch_demo' : 'fno_watch';
+    if (cloud) { try { const d = await base().get(); const w = d.exists && d.data().watch; if (Array.isArray(w)) { ls.set(lk, w); return w; } } catch (e) { /* offline: local copy */ } }
+    return ls.get(lk, []);
+  }
+  async function saveWatch(list, demo) {
+    ls.set(demo ? 'fno_watch_demo' : 'fno_watch', list);
+    if (cloud) { try { await base().set({ watch: list }, { merge: true }); } catch (e) { /* keep local */ } }
+  }
   const pref = (k, d) => ls.get('fno_pref_' + k, d);
   const setPref = (k, v) => ls.set('fno_pref_' + k, v);
-  return { init, signIn, signOut, idToken, load, saveAccount, saveTrade, saveSignal, resetAll, getFII, setFII, pref, setPref, hasFirebase,
+  return { init, signIn, signOut, idToken, load, loadWatch, saveWatch, saveAccount, saveTrade, saveSignal, resetAll, getFII, setFII, pref, setPref, hasFirebase,
     get user() { return user; }, get cloud() { return cloud; } };
 })();

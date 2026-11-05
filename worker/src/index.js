@@ -23,10 +23,18 @@
 const UP = 'https://api.upstox.com';
 
 const INDEX = {
-  NIFTY: { key: 'NSE_INDEX|Nifty 50' },
-  SENSEX: { key: 'BSE_INDEX|SENSEX' },
-  BANKNIFTY: { key: 'NSE_INDEX|Nifty Bank' },
+  NIFTY: { key: 'NSE_INDEX|Nifty 50', sym: 'NIFTY', exch: 'NSE' },
+  SENSEX: { key: 'BSE_INDEX|SENSEX', sym: 'SENSEX', exch: 'BSE' },
+  BANKNIFTY: { key: 'NSE_INDEX|Nifty Bank', sym: 'BANKNIFTY', exch: 'NSE' },
 };
+// Session windows in minutes from 09:15 IST (MCX trades 09:00 to 23:30)
+const SESS = { NSE: [0, 374], MCX: [-15, 869] };
+const KEY_RE = /^[A-Z_]{3,20}\|[\w &.\-^:/]{1,40}$/;
+function keyParam(url, name) {
+  const k = url.searchParams.get(name);
+  if (!k || !KEY_RE.test(k)) throw new HttpError(400, 'Bad instrument key');
+  return k;
+}
 const VIX_KEY = 'NSE_INDEX|India VIX';
 
 // हैवीवेट शेयर: [नाम, ISIN, इंडेक्स में अनुमानित वज़न %]
@@ -76,6 +84,7 @@ function istNow() { return new Date(Date.now() + 5.5 * 3600e3); } // UTC फ़�
 function ymd(d) { return d.toISOString().slice(0, 10); }
 function addDays(d, n) { return new Date(d.getTime() + n * 86400e3); }
 const enc = (s) => encodeURIComponent(s);
+const ok = (v) => v != null && isFinite(v);
 
 function corsHeaders(req, env) {
   const origin = req.headers.get('Origin') || '';
@@ -198,14 +207,14 @@ async function authCallback(req, env, url) {
 }
 
 /* ---------------- एक्सपायरी और लॉट ---------------- */
-async function contracts(env, idx) {
+async function contracts(env, ukey) {
   const today = ymd(istNow());
-  const ck = 'contracts:' + idx + ':' + today;
+  const ck = 'contracts:' + ukey + ':' + today;
   let c = memGet(ck);
   if (c) return c;
   const kv = await env.KV.get(ck, 'json');
   if (kv) { memSet(ck, kv, 3600e3); return kv; }
-  const data = await up(env, '/v2/option/contract?instrument_key=' + enc(INDEX[idx].key));
+  const data = await up(env, '/v2/option/contract?instrument_key=' + enc(ukey));
   const exp = {};
   for (const x of data || []) { if (!exp[x.expiry]) exp[x.expiry] = x.lot_size; }
   const expiries = Object.keys(exp).sort();
@@ -227,40 +236,47 @@ function slimSide(o) {
     iv: g.iv ? g.iv / 100 : 0, de: g.delta || 0, ga: g.gamma || 0, th: g.theta || 0, ve: g.vega || 0,
   };
 }
-async function chain(env, idx) {
-  const c = await contracts(env, idx);
+async function chain(env, ukey) {
+  const c = await contracts(env, ukey);
+  if (!c.expiries.length) throw new HttpError(404, 'No option contracts for this instrument', 'NO_OPTIONS');
   const expiry = pickExpiry(c);
-  const data = await up(env, `/v2/option/chain?instrument_key=${enc(INDEX[idx].key)}&expiry_date=${expiry}`);
+  const data = await up(env, `/v2/option/chain?instrument_key=${enc(ukey)}&expiry_date=${expiry}`);
   const rows = (data || []).map((r) => ({ K: r.strike_price, ce: slimSide(r.call_options), pe: slimSide(r.put_options) })).sort((a, b) => a.K - b.K);
   const spot = data && data[0] ? data[0].underlying_spot_price : null;
   return { expiry, lot: c.lots[expiry] || null, spot, rows };
 }
 
 /* ---------------- भाव ---------------- */
-async function quotes(env) {
-  const keys = new Set([VIX_KEY, ...Object.values(INDEX).map((x) => x.key)]);
-  for (const k in HV) HV[k].forEach((h) => keys.add('NSE_EQ|' + h[1]));
-  const data = await up(env, '/v2/market-quote/quotes?instrument_key=' + [...keys].map(enc).join(','));
+function quoteMap(data) {
   const byKey = {};
   for (const name in data || {}) {
     const q = data[name];
     const tk = q.instrument_token || name.replace(':', '|');
-    const lp = q.last_price, nc = q.net_change || 0;
-    byKey[tk] = { price: lp, prevClose: lp - nc, chg: lp - nc ? (nc / (lp - nc)) * 100 : 0 };
+    const lp = q.last_price, nc = q.net_change || 0, o = q.ohlc || {};
+    byKey[tk] = { price: lp, prevClose: lp - nc, chg: lp - nc ? (nc / (lp - nc)) * 100 : 0, vol: q.volume || 0, oi: q.oi || 0, hi: o.high || null, lo: o.low || null, open: o.open || null, ts: q.last_trade_time || q.timestamp || null };
   }
+  return byKey;
+}
+async function quotes(env, watch) {
+  const keys = new Set([VIX_KEY, ...Object.values(INDEX).map((x) => x.key)]);
+  for (const k in HV) HV[k].forEach((h) => keys.add('NSE_EQ|' + h[1]));
+  (watch || []).forEach((k) => keys.add(k));
+  const data = await up(env, '/v2/market-quote/quotes?instrument_key=' + [...keys].map(enc).join(','));
+  const byKey = quoteMap(data);
   const indices = {};
   for (const k in INDEX) indices[k] = byKey[INDEX[k].key] || null;
   const v = byKey[VIX_KEY];
   const hv = {};
   for (const k in HV) hv[k] = HV[k].map(([n, isin, w]) => ({ n, w, k: 'NSE_EQ|' + isin, c: byKey['NSE_EQ|' + isin] ? byKey['NSE_EQ|' + isin].chg : null }));
   const ikeys = { vix: VIX_KEY }; for (const k in INDEX) ikeys[k] = INDEX[k].key;
-  return { indices, vix: v ? { v: v.price, prev: v.prevClose } : null, hv, keys: ikeys };
+  const w = {}; (watch || []).forEach((k) => { if (byKey[k]) w[k] = byKey[k]; });
+  return { indices, vix: v ? { v: v.price, prev: v.prevClose } : null, hv, keys: ikeys, watch: w };
 }
 
-async function snapshot(env) {
+async function snapshot(env, watch) {
   const [q, ...chains] = await Promise.all([
-    quotes(env),
-    ...Object.keys(INDEX).map((k) => chain(env, k).catch((e) => ({ error: e.message }))),
+    quotes(env, watch),
+    ...Object.keys(INDEX).map((k) => chain(env, INDEX[k].key).catch((e) => ({ error: e.message }))),
   ]);
   const ch = {};
   Object.keys(INDEX).forEach((k, i) => (ch[k] = chains[i]));
@@ -268,20 +284,20 @@ async function snapshot(env) {
 }
 
 /* ---------------- कैंडल्स ---------------- */
-function groupCandles(arr) {
+function groupCandles(arr, sess) {
   // Upstox: [timestamp, open, high, low, close, volume, oi], नई कैंडल पहले
-  const days = {};
+  const [a, b] = SESS[sess] || SESS.NSE, days = {};
   for (const c of arr || []) {
     const ts = c[0], date = ts.slice(0, 10), hh = +ts.slice(11, 13), mm = +ts.slice(14, 16);
     const m = hh * 60 + mm - 555; // 09:15 = 0
-    if (m < 0 || m > 374) continue;
-    (days[date] = days[date] || []).push([m, c[1], c[2], c[3], c[4], c[5] || 0]);
+    if (m < a || m > b) continue;
+    (days[date] = days[date] || []).push([m, c[1], c[2], c[3], c[4], c[5] || 0, c[6] || 0]);
   }
   return Object.keys(days).sort().map((date) => ({ date, c: days[date].sort((a, b) => a[0] - b[0]) }));
 }
-async function candles(env, idx) {
-  const key = INDEX[idx].key, n = istNow(), today = ymd(n);
-  const hk = 'hist:' + idx + ':' + today;
+async function candles(env, key, sess) {
+  const n = istNow(), today = ymd(n);
+  const hk = 'hist:' + key + ':' + today;
   let hist = memGet(hk) || (await env.KV.get(hk, 'json'));
   if (!hist) {
     const to = ymd(addDays(n, -1)), from = ymd(addDays(n, -10));
@@ -289,7 +305,7 @@ async function candles(env, idx) {
       `/v3/historical-candle/${enc(key)}/minutes/1/${to}/${from}`,
       `/v2/historical-candle/${enc(key)}/1minute/${to}/${from}`,
     ]);
-    hist = groupCandles(d && d.candles).filter((x) => x.date < today).slice(-3);
+    hist = groupCandles(d && d.candles, sess).filter((x) => x.date < today).slice(-3);
     await env.KV.put(hk, JSON.stringify(hist), { expirationTtl: 20 * 3600 });
     memSet(hk, hist, 3600e3);
   } else memSet(hk, hist, 3600e3);
@@ -299,7 +315,7 @@ async function candles(env, idx) {
       `/v3/historical-candle/intraday/${enc(key)}/minutes/1`,
       `/v2/historical-candle/intraday/${enc(key)}/1minute`,
     ]);
-    todayDays = groupCandles(d && d.candles).filter((x) => x.date === today);
+    todayDays = groupCandles(d && d.candles, sess).filter((x) => x.date === today);
   } catch (e) { if (e.code === 'UPSTOX_LOGIN') throw e; }
   return { today, days: [...hist, ...todayDays].slice(-3) };
 }
@@ -460,8 +476,8 @@ async function ask(env, body) {
   const ctx = JSON.stringify(body.context || {}).slice(0, 24000);
   const hist = (Array.isArray(body.history) ? body.history : []).slice(-4)
     .map((h) => `User: ${String(h.q || '').slice(0, 300)}\nYou: ${String(h.a || '').slice(0, 600)}`).join('\n\n');
-  const prompt = `You are an experienced Indian F&O (index options) analyst built into the user's private trading dashboard.
-Below is everything the dashboard is showing right now, as JSON: all three indices, the selected index's 20 signals, indicators, the last 12 candles, pivot/CPR/Fibonacci/volume-profile levels, the option chain around ATM, VIX/FII/heavyweights, the 30-minute projection, the trade setup, alerts, news, quarterly results and the user's open paper positions.
+  const prompt = `You are an experienced Indian F&O, equity and MCX analyst built into the user's private trading dashboard.
+Below is everything the dashboard is showing right now, as JSON: the indices and the user's watchlist (stocks, MCX futures), the selected instrument's signals, indicators, the last 12 candles, pivot/CPR/Fibonacci/volume-profile levels, the option chain around ATM, futures OI buildup, IV percentile, VIX/FII/heavyweights, global cues (GIFT Nifty, US, Asia, crude), the event calendar, official NSE/RBI/SEBI announcements, the 30-minute projection, the trade setup, alerts, news, quarterly results and the user's open paper positions.
 ${hist ? `\nEarlier conversation (for follow-ups):\n${hist}\n` : ''}
 User's question (may be Hindi, Hinglish or English): "${q}"
 Data: ${ctx}
@@ -479,6 +495,294 @@ Rules:
   return { answer: en, speak: hi || en };
 }
 
+/* ---------------- Watchlist: instrument search, F&O check, futures, daily history ---------------- */
+function normExp(e) {
+  if (e == null || e === '') return null;
+  if (typeof e === 'number') return ymd(new Date(e + 5.5 * 3600e3));
+  return String(e).slice(0, 10);
+}
+const shortName = (s) => String(s || '').replace(/\b(LIMITED|LTD\.?|INDUSTRIES|CORPORATION|COMPANY)\b/gi, '').replace(/\s+/g, ' ').trim();
+async function upSearch(env, params) {
+  const qs = new URLSearchParams({ records: '30', page_number: '1', ...params });
+  return (await up(env, '/v2/instruments/search?' + qs.toString())) || [];
+}
+// Search any instrument: stocks, indices, stock/index futures, MCX futures
+async function search(env, q) {
+  q = String(q || '').trim().slice(0, 40);
+  if (q.length < 2) return { items: [] };
+  const ck = 'search:' + q.toLowerCase();
+  const c = memGet(ck); if (c) return c;
+  const settle = (p) => p.catch((e) => { if (e.code === 'UPSTOX_LOGIN' || e.code === 'UPSTOX_TOKEN_BAD') throw e; return []; });
+  const [broad, eq, fut, mcx] = await Promise.all([
+    settle(upSearch(env, { query: q })),
+    settle(upSearch(env, { query: q, exchanges: 'NSE,BSE', segments: 'EQ,INDEX' })),
+    settle(upSearch(env, { query: q, exchanges: 'NSE,BSE', instrument_types: 'FUT' })),
+    settle(upSearch(env, { query: q, exchanges: 'MCX', instrument_types: 'FUT' })),
+  ]);
+  const all = [...eq, ...broad, ...fut, ...mcx];
+  const today = ymd(istNow()), seen = new Set(), out = [];
+  const futs = all.filter((x) => String(x.instrument_type || '').toUpperCase() === 'FUT' && (normExp(x.expiry) || '9') >= today);
+  for (const x of all) {
+    const seg = String(x.segment || ''), it = String(x.instrument_type || '').toUpperCase();
+    let item = null;
+    if (/_EQ$/.test(seg) || /_INDEX$/.test(seg)) {
+      const kind = /_INDEX$/.test(seg) ? 'INDEX' : 'EQ';
+      if (kind === 'EQ' && it && !['EQ', 'BE', 'BZ', 'SM', 'ST'].includes(it)) continue; // skip bonds, ETFs etc. we can't trade options on
+      const f = futs.filter((y) => y.underlying_key === x.instrument_key).sort((a, b) => (normExp(a.expiry) < normExp(b.expiry) ? -1 : 1))[0];
+      const sym = String(x.trading_symbol || x.name || '').toUpperCase();
+      item = { id: sym.replace(/[^A-Z0-9&]/g, '').slice(0, 20), label: kind === 'INDEX' ? String(x.name || sym) : sym, name: shortName(x.name || sym), key: x.instrument_key, ukey: x.instrument_key,
+        exch: seg.startsWith('BSE') ? 'BSE' : 'NSE', kind, fo: !!f, lot: f ? f.lot_size : null, sym: f ? (f.underlying_symbol || sym) : sym, tick: x.tick_size || null };
+    } else if (seg === 'MCX_FO' && it === 'FUT') {
+      if ((normExp(x.expiry) || '0') < today) continue;
+      const sym = String(x.underlying_symbol || String(x.trading_symbol || '').split(' ')[0]).toUpperCase();
+      const nearest = futs.filter((y) => y.segment === 'MCX_FO' && String(y.underlying_symbol || String(y.trading_symbol || '').split(' ')[0]).toUpperCase() === sym)
+        .sort((a, b) => (normExp(a.expiry) < normExp(b.expiry) ? -1 : 1))[0] || x;
+      item = { id: sym.replace(/[^A-Z0-9]/g, '').slice(0, 20), label: sym + ' FUT', name: shortName(nearest.name || sym), key: nearest.instrument_key, ukey: null, exch: 'MCX', kind: 'FUT', fo: false,
+        lot: nearest.lot_size || null, expiry: normExp(nearest.expiry), sym, tick: nearest.tick_size || null, tsym: nearest.trading_symbol };
+    }
+    if (!item || seen.has(item.kind + item.id)) continue;
+    seen.add(item.kind + item.id); out.push(item);
+  }
+  // exact symbol matches first, then F&O names, then the rest
+  const Q = q.toUpperCase().replace(/\s+/g, '');
+  out.sort((a, b) => (b.id === Q) - (a.id === Q) || (b.fo || b.kind !== 'EQ') - (a.fo || a.kind !== 'EQ') || a.id.length - b.id.length);
+  const res = { items: out.slice(0, 20) };
+  memSet(ck, res, 10 * 60e3);
+  return res;
+}
+
+// Does this underlying have options? Lot size and expiries from Upstox's contract list.
+async function instInfo(env, ukey) {
+  try {
+    const c = await contracts(env, ukey);
+    if (!c.expiries.length) return { fo: false };
+    const e = pickExpiry(c);
+    return { fo: true, lot: c.lots[e] || null, expiry: e, expiries: c.expiries.slice(0, 4) };
+  } catch (e) { if (e.code === 'UPSTOX_LOGIN') throw e; return { fo: false }; }
+}
+
+// Nearest futures contract of an index / stock
+async function futFor(env, ukey, sym, exch) {
+  const today = ymd(istNow()), ck = 'fut:' + ukey + ':' + today;
+  const c = memGet(ck) || (await env.KV.get(ck, 'json'));
+  if (c) { memSet(ck, c, 3600e3); return c.fkey ? c : null; }
+  const list = await upSearch(env, { query: sym, exchanges: exch === 'BSE' ? 'BSE' : 'NSE', instrument_types: 'FUT' }).catch(() => []);
+  const f = list.filter((x) => x.underlying_key === ukey && (normExp(x.expiry) || '0') >= today).sort((a, b) => (normExp(a.expiry) < normExp(b.expiry) ? -1 : 1))[0];
+  const r = f ? { fkey: f.instrument_key, expiry: normExp(f.expiry), lot: f.lot_size || null } : { fkey: null };
+  await env.KV.put(ck, JSON.stringify(r), { expirationTtl: 26 * 3600 });
+  memSet(ck, r, 3600e3);
+  return r.fkey ? r : null;
+}
+// Daily candles (about one year), cached for the day: HV, IV percentile (VIX), 52-week range, previous week
+async function daily(env, key) {
+  const today = ymd(istNow()), ck = 'daily:' + key + ':' + today;
+  const c = memGet(ck) || (await env.KV.get(ck, 'json'));
+  if (c) { memSet(ck, c, 3600e3); return c; }
+  const to = ymd(addDays(istNow(), -1)), from = ymd(addDays(istNow(), -380));
+  const d = await upAny(env, [`/v3/historical-candle/${enc(key)}/days/1/${to}/${from}`, `/v2/historical-candle/${enc(key)}/day/${to}/${from}`]);
+  const rows = (d && d.candles || []).map((x) => [String(x[0]).slice(0, 10), x[1], x[2], x[3], x[4], x[5] || 0, x[6] || 0])
+    .filter((x) => x[0] < today).sort((a, b) => (a[0] < b[0] ? -1 : 1)).slice(-260);
+  const res = { key, rows };
+  await env.KV.put(ck, JSON.stringify(res), { expirationTtl: 26 * 3600 });
+  memSet(ck, res, 3600e3);
+  return res;
+}
+// Futures: previous-day close and OI + today's 1-minute close/OI (for long/short buildup)
+async function futData(env, ukey, sym, exch, sess) {
+  const f = await futFor(env, ukey, sym, exch);
+  if (!f) return { none: true };
+  const ck = 'futd:' + f.fkey;
+  const c = memGet(ck); if (c) return c;
+  const today = ymd(istNow());
+  let prev = null;
+  try { const d = await daily(env, f.fkey); const l = d.rows[d.rows.length - 1]; if (l) prev = { date: l[0], close: l[4], oi: l[6] }; } catch (e) { if (e.code === 'UPSTOX_LOGIN') throw e; }
+  let rows = [];
+  try {
+    const d = await upAny(env, [`/v3/historical-candle/intraday/${enc(f.fkey)}/minutes/1`, `/v2/historical-candle/intraday/${enc(f.fkey)}/1minute`]);
+    const g = groupCandles(d && d.candles, sess).filter((x) => x.date === today)[0];
+    rows = g ? g.c.map((x) => [x[0], x[4], x[6]]) : [];
+  } catch (e) { if (e.code === 'UPSTOX_LOGIN') throw e; }
+  const res = { fkey: f.fkey, expiry: f.expiry, lot: f.lot, prevClose: prev && prev.close, prevOi: prev && prev.oi, prevDate: prev && prev.date, c: rows.slice(-180) };
+  memSet(ck, res, 45e3);
+  return res;
+}
+
+/* ---------------- Global cues (Upstox global instruments: GIFT Nifty, Dow, S&P, Nikkei, Brent, USD/INR …) ---------------- */
+const GLOBAL_FALLBACK = [
+  { key: 'GLOBAL_INDEX|SGX NIFTY', name: 'GIFT NIFTY', seg: 'GLOBAL_INDEX' },
+  { key: 'GLOBAL_INDICATOR|BZUSD', name: 'Oil (Brent)', seg: 'GLOBAL_INDICATOR' },
+];
+async function globalList(env) {
+  const today = ymd(istNow()), ck = 'glist:' + today;
+  const c = memGet(ck) || (await env.KV.get(ck, 'json'));
+  if (c) { memSet(ck, c, 6 * 3600e3); return c; }
+  let list = null;
+  try {
+    const r = await fetch('https://assets.upstox.com/market-quote/instruments/exchange/global.json.gz');
+    if (r.ok) {
+      const buf = new Uint8Array(await r.arrayBuffer());
+      let text;
+      if (buf[0] === 0x1f && buf[1] === 0x8b) text = await new Response(new Blob([buf]).stream().pipeThrough(new DecompressionStream('gzip'))).text();
+      else text = new TextDecoder().decode(buf);
+      const arr = JSON.parse(text);
+      list = (Array.isArray(arr) ? arr : []).filter((x) => x.instrument_key).slice(0, 40)
+        .map((x) => ({ key: x.instrument_key, name: x.name || x.trading_symbol, sym: x.trading_symbol, seg: x.segment, country: x.country || '', latency: x.latency || '' }));
+    }
+  } catch (e) { list = null; }
+  if (!list || !list.length) return GLOBAL_FALLBACK;
+  await env.KV.put(ck, JSON.stringify(list), { expirationTtl: 26 * 3600 });
+  memSet(ck, list, 6 * 3600e3);
+  return list;
+}
+async function globalCues(env) {
+  const c = memGet('global'); if (c) return c;
+  const list = await globalList(env);
+  let byKey = {};
+  try { byKey = quoteMap(await up(env, '/v2/market-quote/quotes?instrument_key=' + list.map((x) => enc(x.key)).join(','))); }
+  catch (e) { if (e.code === 'UPSTOX_LOGIN') throw e; }
+  const items = list.map((x) => ({ ...x, ...(byKey[x.key] || {}) })).filter((x) => ok(x.price));
+  const res = { ts: Date.now(), items };
+  memSet('global', res, 20e3);
+  return res;
+}
+/* ---------------- Economic calendar ---------------- */
+// RBI MPC FY2026-27 (RBI press release, 23 Mar 2026). Decision on the last day, 10:00 IST.
+const MPC = ['2026-04-08', '2026-06-05', '2026-08-05', '2026-10-07', '2026-12-04', '2027-02-05'];
+// US FOMC 2026 decisions: 2:00 pm New York = 00:30 / 23:30 IST next day
+const FOMC = ['2026-01-29', '2026-03-19', '2026-04-30', '2026-06-18', '2026-07-30', '2026-09-17', '2026-10-29', '2026-12-10'];
+async function calendar(env) {
+  const c = memGet('cal'); if (c) return c;
+  const ev = [];
+  MPC.forEach((d) => ev.push({ date: d, time: '10:00', t: 'RBI monetary policy decision', ctry: 'IN', imp: 'high', src: 'RBI' }));
+  FOMC.forEach((d) => ev.push({ date: d, time: '00:30', t: 'US Fed (FOMC) rate decision', ctry: 'US', imp: 'high', src: 'Federal Reserve' }));
+  // India CPI: MoSPI publishes on the 12th at 16:00
+  const n = istNow();
+  for (let i = 0; i < 2; i++) { const d = new Date(Date.UTC(n.getUTCFullYear(), n.getUTCMonth() + i, 12)); ev.push({ date: ymd(d), time: '16:00', t: 'India CPI inflation (MoSPI, usual date)', ctry: 'IN', imp: 'medium', src: 'MoSPI' }); }
+  let ff = 0;
+  try {
+    const ctl = new AbortController(); const tm = setTimeout(() => ctl.abort(), 6000);
+    const r = await fetch('https://nfs.faireconomy.media/ff_calendar_thisweek.json', { signal: ctl.signal, headers: { 'User-Agent': 'Mozilla/5.0 (FnO Dashboard)' } });
+    clearTimeout(tm);
+    if (r.ok) {
+      const arr = await r.json();
+      for (const x of arr || []) {
+        if (!/high/i.test(x.impact || '') || !['USD', 'CNY', 'EUR', 'JPY', 'INR'].includes(x.country)) continue;
+        const t = Date.parse(x.date); if (!t) continue;
+        const ist = new Date(t + 5.5 * 3600e3);
+        ev.push({ date: ymd(ist), time: ist.toISOString().slice(11, 16), t: `${x.country}: ${x.title}`, ctry: x.country, imp: 'high', src: 'ForexFactory', fc: x.forecast || '', pv: x.previous || '' });
+        ff++;
+      }
+    }
+  } catch (e) { /* calendar feed unavailable: keep the fixed events */ }
+  const today = ymd(istNow()), until = ymd(addDays(istNow(), 10));
+  const items = ev.filter((x) => x.date >= today && x.date <= until).sort((a, b) => (a.date + a.time < b.date + b.time ? -1 : 1));
+  const res = { ts: Date.now(), items, sources: { 'RBI (fixed dates)': 1, 'Fed (fixed dates)': 1, ForexFactory: ff } };
+  memSet('cal', res, (ff ? 3 : 0.5) * 3600e3);
+  return res;
+}
+
+/* ---------------- FII / DII cash (NSE, best effort) ---------------- */
+async function fiiDii(env) {
+  const c = memGet('fiidii'); if (c) return c;
+  let res = null;
+  try {
+    const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36';
+    const h = await fetch('https://www.nseindia.com/reports/fii-dii', { headers: { 'User-Agent': UA, Accept: 'text/html' } });
+    const ck = (h.headers.getSetCookie ? h.headers.getSetCookie() : [h.headers.get('set-cookie') || '']).map((x) => x.split(';')[0]).filter(Boolean).join('; ');
+    const r = await fetch('https://www.nseindia.com/api/fiidiiTradeReact', { headers: { 'User-Agent': UA, Accept: 'application/json', Referer: 'https://www.nseindia.com/reports/fii-dii', Cookie: ck } });
+    if (r.ok) {
+      const arr = await r.json();
+      const pick = (re) => (arr || []).find((x) => re.test(x.category || ''));
+      const f = pick(/FII|FPI/i), d = pick(/DII/i);
+      if (f && d) res = { fii: +f.netValue, dii: +d.netValue, date: f.date || d.date, src: 'NSE', ts: Date.now() };
+    }
+  } catch (e) { /* NSE often blocks cloud servers */ }
+  if (res && ok(res.fii)) { await env.KV.put('fiidii:last', JSON.stringify(res), { expirationTtl: 7 * 86400 }); memSet('fiidii', res, 30 * 60e3); return res; }
+  const last = await env.KV.get('fiidii:last', 'json');
+  const out = last ? { ...last, stale: true } : { none: true };
+  memSet('fiidii', out, 10 * 60e3);
+  return out;
+}
+
+/* ---------------- Official sources: NSE announcements, RBI, SEBI ---------------- */
+const OFFICIAL = [
+  ['NSE announcements', 'https://nsearchives.nseindia.com/content/RSS/Online_announcements.xml'],
+  ['RBI press releases', 'https://rbi.org.in/pressreleases_rss.xml'],
+  ['RBI notifications', 'https://rbi.org.in/notifications_rss.xml'],
+  ['SEBI', 'https://www.sebi.gov.in/sebirss.xml'],
+];
+const MON = { jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11 };
+function parseDateIST(s) {
+  const m = String(s || '').match(/(\d{1,2})[- ](\w{3})[a-z]*[- ,]+(\d{4})(?:[ T]+(\d{1,2}):(\d{2}))?/i);
+  if (m && MON[m[2].toLowerCase()] != null && !/GMT|\+\d{4}|UTC/.test(s)) return Date.UTC(+m[3], MON[m[2].toLowerCase()], +m[1], +(m[4] || 0), +(m[5] || 0)) - 5.5 * 3600e3;
+  return Date.parse(s) || null;
+}
+const ANN_KEEP = /result|board meeting|dividend|buy ?back|bonus|split|acquisition|amalgamation|merger|order|credit rating|outcome|fund raising|qip|resignation|appointment of (md|ceo|managing)|pledge|insider|default|investigation|penalty|litigation|guidance|update/i;
+const ANN_DROP = /net asset value|\bnav\b|mutual fund|\betf\b|newspaper publication|trading window|loss of share|duplicate share|recording|transcript|74\s*\(5\)|certificate/i;
+async function official(env) {
+  const c = memGet('official'); if (c) return c;
+  const out = [], sources = {};
+  await Promise.all(OFFICIAL.map(async ([src, url]) => {
+    let n = 0;
+    try {
+      const ctl = new AbortController(); const tm = setTimeout(() => ctl.abort(), 7000);
+      const r = await fetch(url, { signal: ctl.signal, headers: { 'User-Agent': 'Mozilla/5.0 (FnO Dashboard)', Accept: 'application/rss+xml, application/xml, text/xml' } });
+      clearTimeout(tm);
+      if (r.ok) {
+        const x = await r.text();
+        for (const it of x.split(/<item[\s>]/i).slice(1, 80)) {
+          const g = (tag) => { const m = it.match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)</${tag}>`, 'i')); return m ? xmlText(m[1]) : ''; };
+          const title = g('title'), desc = g('description'), ts = parseDateIST(g('pubDate')) || Date.now();
+          if (!title) continue;
+          let t = title, co = '', sub = '';
+          if (src === 'NSE announcements') {
+            sub = (desc.split('|SUBJECT:')[1] || '').trim();
+            const body = desc.split('|SUBJECT:')[0].replace(/has informed the Exchange (about|that)?/i, '').trim();
+            if (ANN_DROP.test(desc + ' ' + title) || !ANN_KEEP.test(sub + ' ' + body)) continue;
+            co = title; t = sub ? `${sub}: ${body}`.slice(0, 220) : body.slice(0, 220);
+          }
+          out.push({ t, co, sub, src, link: g('link'), ts }); n++;
+        }
+      }
+    } catch (e) { /* source unreachable */ }
+    sources[src] = n;
+  }));
+  out.sort((a, b) => b.ts - a.ts);
+  const res = { ts: Date.now(), items: out.slice(0, 120), sources };
+  memSet('official', res, 10 * 60e3);
+  return res;
+}
+
+/* ---------------- Company news for a watchlist stock / commodity ---------------- */
+async function newsFor(env, id, name) {
+  name = String(name || id).replace(/[^\w &.-]/g, '').trim().slice(0, 40);
+  const ck = 'wnews:' + id;
+  const c = memGet(ck); if (c) return c;
+  const words = name.split(/\s+/).filter((w) => w.length > 2 && !/^(the|and|ltd|limited|bank|india|fut)$/i.test(w));
+  const re = new RegExp('\\b(' + [id, ...words.slice(0, 2)].map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|') + ')', 'i');
+  const g = await fetchFeed(['Google News', `https://news.google.com/rss/search?q=${enc('"' + name + '"')}+when:3d&hl=en-IN&gl=IN&ceid=IN:en`]);
+  const feed = await allFeeds(env);
+  const seen = new Set();
+  const items = [...g, ...feed.items.filter((i) => re.test(i.t))]
+    .filter((i) => { const k = i.t.toLowerCase().slice(0, 80); if (seen.has(k) || i.ts < Date.now() - 72 * 3600e3) return false; seen.add(k); return true; })
+    .sort((a, b) => b.ts - a.ts).slice(0, 12);
+  let scored = items.map((i) => ({ ...i, s: lexScore(i.t), imp: 'medium' })), ai = false;
+  if (hasAI(env) && items.length) {
+    try {
+      const prompt = `You are a markets analyst. For each headline, rate its likely short-term (today/this week) impact on ${name} (${id}) price.
+Return ONLY a JSON array, same order: {"i": index, "s": -1 (very bearish) to 1 (very bullish), "imp": "high" | "medium" | "low"}. Use 0 if the headline is not really about ${name}.
+Headlines:
+${items.map((x, i) => `${i}. ${x.t}`).join('\n')}`;
+      const arr = parseAIArray(await aiText(env, prompt, 1200, 'bulk'));
+      scored = items.map((x, i) => { const a = arr.find((z) => z.i === i) || {}; return { ...x, s: typeof a.s === 'number' ? Math.max(-1, Math.min(1, a.s)) : lexScore(x.t), imp: a.imp || 'medium' }; });
+      ai = true;
+    } catch (e) { /* keyword score */ }
+  }
+  const res = { ts: Date.now(), ai, items: scored, sources: { 'Google News': g.length, 'Market feeds': items.length - g.length } };
+  memSet(ck, res, 15 * 60e3);
+  return res;
+}
+
 /* ---------------- रूटर ---------------- */
 async function route(req, env, url) {
   const p = url.pathname;
@@ -488,16 +792,34 @@ async function route(req, env, url) {
   if (p === '/' || p === '/health') return json({ ok: true, name: 'F&O Terminal Worker' }, 200, req, env);
 
   const email = await verifyUser(req, env);
-  const idx = (url.searchParams.get('index') || 'NIFTY').toUpperCase();
-  if (!['/api/status', '/api/ask', '/api/snapshot', '/api/results', '/api/feed-url'].includes(p) && !INDEX[idx]) throw new HttpError(400, 'Unknown index');
+  const idx = (url.searchParams.get('index') || '').toUpperCase();
+  const sess = url.searchParams.get('s') === 'MCX' ? 'MCX' : 'NSE';
+  const R = (d) => json(d, 200, req, env);
 
   switch (p) {
     case '/api/status': {
       const t = env.UPSTOX_ACCESS_TOKEN || (await env.KV.get('upstox_token'));
-      return json({ email, upstox: !!t, ai: hasAI(env), aiVia: env.GEMINI_API_KEY ? 'Gemini' : env.AI ? 'Workers AI' : env.ANTHROPIC_API_KEY ? 'Claude' : null, tokenMode: env.UPSTOX_ACCESS_TOKEN ? 'analytics' : 'oauth' }, 200, req, env);
+      return R({ email, upstox: !!t, ai: hasAI(env), aiVia: env.GEMINI_API_KEY ? 'Gemini' : env.AI ? 'Workers AI' : env.ANTHROPIC_API_KEY ? 'Claude' : null, tokenMode: env.UPSTOX_ACCESS_TOKEN ? 'analytics' : 'oauth', v: 2 });
     }
-    case '/api/snapshot': return json(await snapshot(env), 200, req, env);
-    case '/api/candles': return json(await candles(env, idx), 200, req, env);
+    case '/api/snapshot': {
+      const w = (url.searchParams.get('w') || '').split(',').filter((k) => KEY_RE.test(k)).slice(0, 40);
+      return R(await snapshot(env, w));
+    }
+    case '/api/candles': return R(await candles(env, INDEX[idx] ? INDEX[idx].key : keyParam(url, 'key'), sess));
+    case '/api/chain': return R(await chain(env, keyParam(url, 'u')));
+    case '/api/search': return R(await search(env, url.searchParams.get('q')));
+    case '/api/inst': return R(await instInfo(env, keyParam(url, 'u')));
+    case '/api/fut': {
+      const u = INDEX[idx] ? INDEX[idx].key : keyParam(url, 'u');
+      const sym = INDEX[idx] ? INDEX[idx].sym : String(url.searchParams.get('sym') || '').toUpperCase().replace(/[^A-Z0-9&-]/g, '').slice(0, 20);
+      const ex = INDEX[idx] ? INDEX[idx].exch : url.searchParams.get('exch') === 'BSE' ? 'BSE' : 'NSE';
+      return R(await futData(env, u, sym, ex, 'NSE'));
+    }
+    case '/api/daily': return R(await daily(env, keyParam(url, 'key')));
+    case '/api/global': return R(await globalCues(env));
+    case '/api/calendar': return R(await calendar(env));
+    case '/api/fiidii': return R(await fiiDii(env));
+    case '/api/official': return R(await official(env));
     case '/api/feed-url': {
       // Upstox लाइव WebSocket के लिए एक बार इस्तेमाल होने वाला URL (टोकन Worker में ही रहता है)
       const d = await up(env, '/v3/feed/market-data-feed/authorize');
@@ -505,7 +827,12 @@ async function route(req, env, url) {
       if (!url) throw new HttpError(502, 'Upstox did not return a live-feed URL', 'FEED_URL');
       return json({ url }, 200, req, env);
     }
-    case '/api/news': return json(await news(env, idx), 200, req, env);
+    case '/api/news': {
+      if (INDEX[idx]) return R(await news(env, idx));
+      const id = String(url.searchParams.get('id') || '').toUpperCase().replace(/[^A-Z0-9&]/g, '').slice(0, 20);
+      if (!id) throw new HttpError(400, 'Unknown index');
+      return R(await newsFor(env, id, url.searchParams.get('name')));
+    }
     case '/api/results': return json(await results(env), 200, req, env);
     case '/api/ask': {
       if (req.method !== 'POST') throw new HttpError(405, 'POST required');

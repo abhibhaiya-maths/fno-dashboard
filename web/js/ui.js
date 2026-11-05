@@ -4,7 +4,7 @@ const COL = {
   grid: 'rgba(0,229,255,.07)', line: 'rgba(0,229,255,.16)', vwap: '#00E5FF', ema20: '#B69CFF', ema50: '#FF7AE0', bb: '#5B7BA6', cpr: '#4DA3FF', orb: '#E6F1FF', panel: 'rgba(6,12,22,.9)',
 };
 const FONT = '600 12px Rajdhani, system-ui, sans-serif';
-let sub = 'rsi', tab = 'chain', tf = 5, CI = null, newsTab = 'news', lastOrb = null;
+let lastActiveTk = null, sub = 'rsi', tab = 'chain', tf = 5, CI = null, newsTab = 'news', lastOrb = null;
 const OV = Store.pref('overlays', { vwap: true, ema20: true, ema50: false, bb: false, st: true, fib: true, cpr: true, piv: false, orb: false, vp: false });
 const OVL = { vwap: 'VWAP', ema20: 'EMA 20', ema50: 'EMA 50', bb: 'Bollinger', st: 'Supertrend', fib: 'Fibonacci', cpr: 'CPR', piv: 'Pivots', orb: 'Opening range', vp: 'Volume profile' };
 const OVC = { vwap: COL.vwap, ema20: COL.ema20, ema50: COL.ema50, bb: COL.bb, st: COL.call, fib: COL.brass, cpr: COL.cpr, piv: COL.muted, orb: COL.text, vp: COL.vwap };
@@ -14,6 +14,8 @@ const ALL_HV = ['HDFC Bank', 'ICICI Bank', 'Reliance', 'Infosys', 'Bharti Airtel
 
 function dirOf(a) { const s = signalFor(a); return s.state === 'CE' ? 'ce' : s.state === 'PE' ? 'pe' : 'wait'; }
 const DIRTXT = { ce: 'CALL', pe: 'PUT', wait: 'WAIT' };
+const dirTxt = (a, d) => (a && !a.cf.opt && d !== 'wait' ? (d === 'ce' ? 'BULL' : 'BEAR') : DIRTXT[d]);
+const KIND = { INDEX: 'Index', EQ: 'Stock', FUT: 'Futures' };
 
 function sparkSVG(a) {
   const pts = a.I5.k.filter((x) => x.d === 2).map((x) => x.c);
@@ -27,14 +29,17 @@ function sparkSVG(a) {
 }
 function renderTickers() {
   $('tickers').innerHTML = KEYS.map((k) => {
-    const a = A[k];
-    if (!a) return `<button class="tk"><div><div class="tk-name">${CFG[k].label}</div><div class="tk-px mut">Loading</div></div></button>`;
+    const a = A[k], cf = CFG[k];
+    const rm = cf.core ? '' : `<button class="tk-x" onclick="removeWatch('${k}', event)" aria-label="Remove ${esc(cf.label)} from watchlist" title="Remove">✕</button>`;
+    const tag = cf.core ? '' : `<span class="tk-tag">${KIND[cf.kind] || ''}${cf.opt ? ' · F&O' : ''}</span>`;
+    if (!a) return `<div class="tk-wrap"><button class="tk ${k === cur ? 'active' : ''}" onclick="pick('${k}')"><div><div class="tk-name">${esc(cf.label)}${tag}</div><div class="tk-px mut">Loading</div></div></button>${rm}</div>`;
     const d = dirOf(a);
-    return `<button class="tk ${k === cur ? 'active' : ''}" onclick="pick('${k}')" aria-pressed="${k === cur}">
-      <div><div class="tk-name">${a.cf.label}</div><div class="tk-px">${f2(a.price)}</div>
+    return `<div class="tk-wrap"><button class="tk ${k === cur ? 'active' : ''}" onclick="pick('${k}')" aria-pressed="${k === cur}">
+      <div><div class="tk-name">${esc(a.cf.label)}${tag}</div><div class="tk-px">${f2(a.price)}</div>
       <div class="tk-chg ${a.chg >= 0 ? 'up' : 'down'}">${a.chg >= 0 ? '▲' : '▼'} ${f2(Math.abs(a.price - a.PC))} (${f2(a.chg)}%)</div></div>
-      <div class="tk-right"><span class="dirchip ${d}">${DIRTXT[d]} ${a.score}</span>${sparkSVG(a)}</div></button>`;
-  }).join('');
+      <div class="tk-right"><span class="dirchip ${d}">${dirTxt(a, d)} ${a.score}</span>${sparkSVG(a)}</div></button>${rm}</div>`;
+  }).join('') + `<button class="tk-add" onclick="openSearch()" aria-label="Add a stock, index or MCX future"><span>+</span>Add stock / MCX</button>`;
+  if (lastActiveTk !== cur) { lastActiveTk = cur; const el = document.querySelector('.tk.active'); if (el && el.parentElement.scrollIntoView) el.parentElement.scrollIntoView({ block: 'nearest', inline: 'nearest' }); }
   $('clock').textContent = Source.clock().label;
   $('clock').classList.toggle('open', !!(A[cur] && A[cur].sessionLive));
 }
@@ -44,9 +49,9 @@ function renderOrb() {
   const a = A[cur], o = $('orb'); if (!a) return;
   const d = dirOf(a);
   o.classList.remove('ce', 'pe', 'wait'); o.classList.add(d);
-  $('orbDir').textContent = DIRTXT[d];
+  $('orbDir').textContent = dirTxt(a, d);
   $('orbSub').textContent = `${a.cf.label}  ${a.score}/100`;
-  o.setAttribute('aria-label', `${a.cf.label}: ${DIRTXT[d]}, score ${a.score}`);
+  o.setAttribute('aria-label', `${a.cf.label}: ${dirTxt(a, d)}, score ${a.score}`);
   const key = cur + d;
   if (lastOrb && lastOrb !== key) { o.classList.remove('pop'); void o.offsetWidth; o.classList.add('pop'); }
   lastOrb = key;
@@ -61,10 +66,10 @@ function renderControls() {
   $('ovChips').innerHTML = Object.keys(OV).map((k) => `<button class="chip ${OV[k] ? 'on' : ''}" onclick="togOV('${k}')" aria-pressed="${OV[k]}"><span class="sw" style="background:${OVC[k]}"></span>${k === 'vwap' && !a.hasVol ? 'TWAP' : k === 'vp' && !a.hasVol ? 'TPO profile' : OVL[k]}</button>`).join('');
   $('subBtns').innerHTML = [['rsi', 'RSI'], ['macd', 'MACD'], ['adx', 'ADX']].map(([k, l]) => `<button class="btn ${k === sub ? 'on' : ''}" onclick="setSub('${k}')">${l}</button>`).join('');
   $('chartTitle').textContent = `${a.cf.label} · ${TFL[tf]} chart`;
-  $('tabs').innerHTML = [['chain', 'Option chain'], ['mood', 'Market mood'], ['sig', 'All 20 signals']].map(([k, l]) => `<button class="btn ${k === tab ? 'on' : ''}" onclick="setTab('${k}')">${l}</button>`).join('');
-  $('newsTabs').innerHTML = [['news', 'News'], ['results', 'Quarterly results']].map(([k, l]) => `<button class="btn ${k === newsTab ? 'on' : ''}" onclick="setNewsTab('${k}')">${l}</button>`).join('');
+  $('tabs').innerHTML = [['chain', a.cf.opt ? 'Option chain' : 'Futures & volatility'], ['mood', 'Market mood'], ['sig', `All ${a.sigs.length} signals`]].map(([k, l]) => `<button class="btn ${k === tab ? 'on' : ''}" onclick="setTab('${k}')">${l}</button>`).join('');
+  $('newsTabs').innerHTML = [['news', a.cf.core ? 'News' : 'Company news'], ['results', 'Results'], ['official', 'Official']].map(([k, l]) => `<button class="btn ${k === newsTab ? 'on' : ''}" onclick="setNewsTab('${k}')">${l}</button>`).join('');
   const cf = a.cf;
-  $('qchips').innerHTML = [`Should I buy ${cf.label} ${a.ch.atm} CE?`, `Should I buy ${cf.label} ${a.ch.atm} PE?`, `How far did ${cf.label} move today?`, 'Hold or exit my position?']
+  $('qchips').innerHTML = (cf.opt ? [`Should I buy ${cf.label} ${a.ch.atm} CE?`, `Should I buy ${cf.label} ${a.ch.atm} PE?`] : [`Is ${cf.label} bullish or bearish now?`, `Where is the stop-loss for ${cf.label}?`]).concat([`How far did ${cf.label} move today?`, 'Hold or exit my position?'])
     .map((t) => `<button class="chip" onclick="$('q').value='${t}';Voice.ask()">${t}</button>`).join('');
 }
 
@@ -86,7 +91,7 @@ function renderScore() {
   $('gauge').innerHTML = gaugeSVG(s);
   $('score').textContent = s; $('score').className = 'score ' + (s >= 58 ? 'up' : s <= 42 ? 'down' : '');
   $('verdict').textContent = s >= 65 ? 'Most signals lean CALL' : s >= 58 ? 'Signals lean mildly CALL' : s <= 35 ? 'Most signals lean PUT' : s <= 42 ? 'Signals lean mildly PUT' : 'Mixed signals';
-  $('scoreSub').textContent = `Weighted score of ${a.active} signals, updates every 5 s`;
+  $('scoreSub').textContent = `Weighted score of ${a.active} live signals, re-checked on every tick`;
   const act = a.sigs.filter((x) => x.w > 0), b = act.filter((x) => x.s > 0).length, n = act.filter((x) => x.s === 0).length, d = act.filter((x) => x.s < 0).length;
   $('counts').innerHTML = `<div class="up"><b>${b}</b>Bullish</div><div><b>${n}</b>Neutral</div><div class="down"><b>${d}</b>Bearish</div>`;
 }
@@ -95,9 +100,9 @@ function renderSetup() {
   if (!dir) h += `<div class="dirbox n">No clear setup right now<br><small>Score ${s}. Waiting is a position too.</small></div>`;
   else {
     const t = setupFor(a, dir);
-    h += `<div class="dirbox ${dir === 'CE' ? 'b' : 's'}">${dir === 'CE' ? 'CALL' : 'PUT'} bias, ${t.K} ${dir}</div>
-      <div class="sec">Index levels</div><div class="lv"><div><small>Entry</small><b>${f0(t.e)}</b></div><div><small>Stop-loss</small><b class="down">${f0(t.sl)}</b></div><div><small>Target 1 / 2</small><b class="up">${f0(t.t1)} / ${f0(t.t2)}</b></div></div>
-      <div class="sec">Option premium</div><div class="lv"><div><small>Premium</small><b>${rs(t.P)}</b></div><div><small>Premium SL</small><b class="down">${rs(t.pSL)}</b></div><div><small>Premium T1</small><b class="up">${rs(t.pT1)}</b></div></div>
+    h += `<div class="dirbox ${dir === 'CE' ? 'b' : 's'}">${a.cf.opt ? `${dir === 'CE' ? 'CALL' : 'PUT'} bias, ${t.K} ${dir}` : `${dir === 'CE' ? 'Bullish (long)' : 'Bearish (short)'} bias`}</div>
+      <div class="sec">${a.isIdx ? 'Index' : a.isMCX ? 'Futures' : 'Stock'} levels</div><div class="lv"><div><small>Entry</small><b>${f0(t.e)}</b></div><div><small>Stop-loss</small><b class="down">${f0(t.sl)}</b></div><div><small>Target 1 / 2</small><b class="up">${f0(t.t1)} / ${f0(t.t2)}</b></div></div>
+      ${a.cf.opt ? `<div class="sec">Option premium</div><div class="lv"><div><small>Premium</small><b>${rs(t.P)}</b></div><div><small>Premium SL</small><b class="down">${rs(t.pSL)}</b></div><div><small>Premium T1</small><b class="up">${rs(t.pT1)}</b></div></div>` : ''}
       <div class="row"><span>Risk : reward</span><b>1 : 1.5 and 1 : 2.5</b></div><div class="row"><span>Stop-loss basis</span><span>1.5 × ATR (5m) = ${f0(t.risk)} pts</span></div>`;
   }
   h += alertsFor(a, dir).map(([c, t]) => `<div class="alert ${c === 'd' ? 'd' : c === 'i' ? 'i' : ''}">${t}</div>`).join('');
@@ -107,6 +112,7 @@ function lrow(n, v, a, key) { const near = Math.abs(v - a.price) < a.atr * 0.5; 
 function renderLevels() {
   const a = A[cur];
   let h = `<div class="row"><span>Current price</span><b class="cur">${f1(a.price)}</b></div><div class="row"><span>ATR (14, 5m)</span><b>${f1(a.atr)}</b></div>`;
+  if (a.vol && ok(a.vol.hi52)) h += '<div class="sec">Bigger picture, daily candles</div>' + lrow('52-week high', a.vol.hi52, a) + (ok(a.vol.pwH) ? lrow('Previous week high', a.vol.pwH, a) + lrow('Previous week low', a.vol.pwL, a) : '') + lrow('52-week low', a.vol.lo52, a);
   h += '<div class="sec">Pivots and CPR, from previous session</div>';
   ['R3', 'R2', 'R1'].forEach((k) => (h += lrow(k, a.piv[k], a)));
   h += lrow('CPR TC', a.tc, a) + lrow('Pivot P', a.p, a, true) + lrow('CPR BC', a.bc, a);
@@ -117,10 +123,27 @@ function renderLevels() {
   h += `<div class="sec">Opening range and ${a.hasVol ? 'volume' : 'TPO'} profile</div>` + lrow('Opening high (15m)', a.ORH, a) + lrow('Opening low (15m)', a.ORL, a) + lrow('VAH', a.VP.VAH, a) + lrow('POC', a.VP.POC, a, true) + lrow('VAL', a.VP.VAL, a);
   $('levels').innerHTML = h;
 }
+// Futures OI buildup + volatility regime (pro tools shared by the chain tab and no-options instruments)
+function futVolHTML(a) {
+  const F = a.fut, V = a.vol || {}, pill = (x) => (x ? `<span class="pill ${x[1] > 0 ? 'b' : 's'}">${x[0]}</span>` : '<span class="pill n">Flat</span>');
+  let h = '<div class="sec" style="margin-top:14px">Futures open interest</div>';
+  h += F ? `<div class="stats" style="margin-top:6px"><div><small>Last 30 minutes</small>${pill(F.m30)}<br><small>OI ${ok(F.d30) ? sgn(F.d30) + f2(F.d30) + '%' : '–'}</small></div>
+      <div><small>Since yesterday</small>${pill(F.day)}<br><small>OI ${ok(F.doi) ? sgn(F.doi) + f1(F.doi) + '%' : '–'}</small></div>
+      <div><small>Futures price${F.expiry ? ', ' + esc(F.expiry) : ''}</small><b>${f1(F.px)}</b><br><small>${a.isMCX ? 'This is the traded contract' : `basis ${sgn(F.basis)}${f1(F.basis)} vs spot`}</small></div></div>
+      <div class="legend">Price up + OI up = long buildup (bullish). Price down + OI up = short buildup (bearish). Price up + OI down = short covering. Price down + OI down = long unwinding.</div>`
+    : `<div class="mut">${a.isIdx || a.cf.opt || a.isMCX ? 'Futures data loads with the next minute refresh.' : 'This stock has no futures contract.'}</div>`;
+  h += '<div class="sec" style="margin-top:14px">Volatility regime</div><div class="stats" style="margin-top:6px">';
+  if (ok(V.ivp)) h += `<div><small>IV percentile (${esc(V.src)})</small><b class="${V.ivp >= 80 ? 'down' : V.ivp <= 20 ? 'up' : ''}">${V.ivp}</b><br><small>${V.ivp >= 80 ? 'Options expensive' : V.ivp <= 20 ? 'Options cheap' : 'Normal range'}</small></div><div><small>IV rank</small><b>${V.ivr}</b></div>`;
+  if (a.cf.opt && a.ch.rows.length) h += `<div><small>ATM IV</small><b>${f1(a.ch.atmIV * 100)}%</b></div>`;
+  h += `<div><small>Realised vol (20 day)</small><b>${ok(V.hv20) ? f1(V.hv20 * 100) + '%' : '–'}</b></div>`;
+  if (ok(V.ivhv)) h += `<div><small>ATM IV ÷ realised vol</small><b class="${V.ivhv > 1.4 ? 'down' : V.ivhv < 0.8 ? 'up' : ''}">${f2(V.ivhv)}×</b><br><small>${V.ivhv > 1.4 ? 'Premiums rich' : V.ivhv < 0.8 ? 'Premiums cheap' : 'Fair'}</small></div>`;
+  return h + '</div>';
+}
 function renderTab() {
   const a = A[cur], ch = a.ch; let h = '';
   if (tab === 'chain') {
-    if (!ch.rows.length) { $('tabBody').innerHTML = '<div class="mut">No option chain data yet. Check the Upstox connection.</div>'; return; }
+    if (!a.cf.opt) { $('tabBody').innerHTML = `<div class="mut">${esc(a.cf.label)} ${a.isMCX ? 'is an MCX futures contract. Upstox does not provide an MCX option chain' : 'has no options on NSE/BSE'}, so this tab shows futures and volatility tools instead.</div>` + futVolHTML(a); return; }
+    if (!ch.rows.length) { $('tabBody').innerHTML = '<div class="mut">No option chain data yet. It refreshes every 15–30 seconds.</div>' + futVolHTML(a); return; }
     const L = (v) => f1(v / 1e5), mxOI = Math.max(...ch.view.map((r) => Math.max(r.ce.oi, r.pe.oi))) || 1;
     const bar = (v, c) => `<span class="oibar" style="width:${Math.round((v / mxOI) * 46)}px;background:${c}"></span>`;
     h = `<div class="tbl"><table><thead><tr><th>CE OI (L)</th><th>OI chg</th><th>IV</th><th>Delta</th><th>CE LTP</th><th class="k">Strike</th><th class="l">PE LTP</th><th class="l">Delta</th><th class="l">IV</th><th class="l">OI chg</th><th class="l">PE OI (L)</th></tr></thead><tbody>` +
@@ -134,13 +157,21 @@ function renderTab() {
       <div><small>Call OI wall (resistance)</small><b class="down">${f0(ch.maxCE)}</b></div><div><small>Put OI wall (support)</small><b class="up">${f0(ch.maxPE)}</b></div>
       <div><small>ATM gamma / vega</small><b>${ch.atmRow ? ch.atmRow.ce.ga.toFixed(4) : '–'} / ${ch.atmRow ? f2(ch.atmRow.ce.ve) : '–'}</b></div><div><small>ATM theta per day (CE)</small><b class="down">${ch.atmRow ? '₹' + f1(ch.atmRow.ce.th) : '–'}</b></div>
       <div><small>Expiry, lot</small><b>${esc(ch.expiry)}, ${a.lot}</b><br><small>${f1(ch.dte)} days left</small></div></div>
-      <div class="legend">Shaded cells are in the money. Red bars show call writers' walls, green bars show put writers' walls. ${Source.mode === 'live' ? 'Prices and greeks from Upstox.' : 'Demo: prices and greeks from Black-Scholes.'}</div>`;
+      <div class="legend">Shaded cells are in the money. Red bars show call writers' walls, green bars show put writers' walls. ${Source.mode === 'live' ? 'Prices and greeks from Upstox.' : 'Demo: prices and greeks from Black-Scholes.'}</div>` + futVolHTML(a);
   } else if (tab === 'mood') {
     const v = a.vix;
     h = `<div class="stats" style="margin-top:0"><div><small>India VIX</small>${v ? `<span class="vix ${v.v < v.prev ? 'up' : 'down'}">${f2(v.v)}</span><br><small>${v.v < v.prev ? '▼ fear easing' : '▲ fear rising'}, prev ${f2(v.prev)}</small>` : '<b>–</b>'}</div>
       <div><small>FII cash (₹ cr)</small><b class="${a.fii > 0 ? 'up' : 'down'}">${ok(a.fii) ? sgn(a.fii) + f0(a.fii) : '–'}</b></div><div><small>DII cash (₹ cr)</small><b class="${a.dii > 0 ? 'up' : 'down'}">${ok(a.dii) ? sgn(a.dii) + f0(a.dii) : '–'}</b></div></div>`;
-    if (Source.mode === 'live') h += `<div class="fii"><span class="mut">There is no free FII/DII API. Enter today's figures from NSE or the news:</span>
+    const fa = Source.fiiAuto ? Source.fiiAuto() : null;
+    h += `<div class="legend" style="margin-top:6px">FII/DII source: ${fa && ok(fa.fii) ? `NSE (automatic), ${esc(fa.date || '')}${fa.stale ? ', last available day' : ''}` : 'not available automatically right now (NSE sometimes blocks cloud servers). Enter it below.'}</div>`;
+    if (Source.mode === 'live' && !(fa && ok(fa.fii) && !fa.stale)) h += `<div class="fii"><span class="mut">Enter today's figures from NSE or the news:</span>
       <div class="frow"><input id="fiiIn" type="number" placeholder="FII ₹ cr, e.g. -1200" value="${ok(a.fii) ? a.fii : ''}"><input id="diiIn" type="number" placeholder="DII ₹ cr" value="${ok(a.dii) ? a.dii : ''}"><button class="go" onclick="saveFII()">Save</button></div></div>`;
+    if (a.glob && a.glob.items.length) h += `<div class="sec" style="margin-top:16px">${a.isMCX ? 'Global crude' : 'Global cues'}</div><div class="gl-row">${a.glob.items.map((g) => `<span class="gl-chip ${g.chg >= 0 ? 'up' : 'down'}">${esc(shortG(g.name))} <b>${sgn(g.chg)}${f2(g.chg)}%</b></span>`).join('')}</div>`;
+    if (!a.cf.core) {
+      const rs2 = a.sigs.find((x) => x.n.startsWith('Relative strength')), bm = a.sigs.find((x) => x.n.startsWith('Broad market'));
+      if (rs2) h += `<div class="sec" style="margin-top:16px">Versus the market</div><div class="row"><span>Relative strength vs Nifty</span><b>${esc(rs2.v)}</b></div><div class="row"><span>Nifty score</span><b>${esc(bm ? bm.v : '–')}</b></div>`;
+      $('tabBody').innerHTML = h; return;
+    }
     h += `<div class="sec" style="margin-top:16px">Heavyweight stocks (approx. weights)</div>` + (a.hv.length ? `<div class="tbl"><table><thead><tr><th class="l">Stock</th><th>Weight</th><th>Change</th><th>Index impact</th></tr></thead><tbody>` +
       a.hv.map((x) => `<tr><td class="l">${esc(x.n)}</td><td>${f1(x.w)}%</td><td class="${x.c >= 0 ? 'up' : 'down'}">${sgn(x.c)}${f2(x.c)}%</td><td class="${x.pts >= 0 ? 'up' : 'down'}">${sgn(x.pts)}${f1(x.pts)} pts</td></tr>`).join('') +
       `</tbody></table></div><div class="row" style="margin-top:6px"><span>Weighted heavyweight change</span><b class="${a.hvW >= 0 ? 'up' : 'down'}">${sgn(a.hvW)}${f2(a.hvW)}%</b></div>` : '<div class="mut">No data.</div>');
@@ -149,7 +180,7 @@ function renderTab() {
     h = `<div class="tbl"><table><thead><tr><th class="l">Signal</th><th>Value</th><th>Direction</th><th>Weight</th></tr></thead><tbody>` +
       a.sigs.map((x) => { const r = x.g !== g ? `<tr><td colspan="4" class="l mut" style="padding-top:12px">${x.g}</td></tr>` : ''; g = x.g; const l = x.w ? lb[x.s] : ['n', 'Not counted'];
         return r + `<tr><td class="l">${esc(x.n)}</td><td>${esc(x.v)}</td><td><span class="pill ${l[0]}">${l[1]}</span></td><td>${x.w}</td></tr>`; }).join('') +
-      `</tbody></table></div><div class="legend">Score = 50 + 50 × (Σ weight × direction) ÷ Σ weight. Every signal is re-checked automatically every 5 seconds. Signals with no data are left out of the score.</div>`;
+      `</tbody></table></div><div class="legend">Score = 50 + 50 × (Σ weight × direction) ÷ Σ weight. Every signal is re-checked on every tick. Signals with no data are left out of the score. IV percentile and event risk don't move the score; they downgrade a setup to "mild" and show as warnings.</div>`;
   }
   $('tabBody').innerHTML = h;
 }
@@ -159,13 +190,22 @@ const sentLb = (s) => (s > 0.15 ? ['b', 'Bullish'] : s < -0.15 ? ['s', 'Bearish'
 function renderNews() {
   const a = A[cur]; let h = '';
   if (newsTab === 'news') {
-    if (!a.news.length) h = '<div class="mut">No news yet. Feeds are checked again every 10 minutes.</div>';
+    if (!a.news.length) h = `<div class="mut">No ${a.cf.core ? '' : esc(a.cf.label) + ' '}news in the last 3 days yet. Feeds are checked again every 10 minutes.</div>`;
     else {
       const pos = ((clamp(a.newsAvg, -1, 1) + 1) / 2) * 100, avg = sentLb(a.newsAvg);
-      h = `<div class="row" style="border:0;padding-bottom:0"><span>News impact on ${a.cf.label} ${Source.mode === 'live' ? (Source.newsAI(cur) ? '(AI scored)' : '(keyword scored)') : '(demo)'}</span><span class="pill ${avg[0]}">${avg[1]} ${f2(a.newsAvg)}</span></div>
+      h = `<div class="row" style="border:0;padding-bottom:0"><span>News impact on ${esc(a.cf.label)} ${Source.mode === 'live' ? (Source.newsAI(cur) ? '(AI scored)' : '(keyword scored)') : '(demo)'}</span><span class="pill ${avg[0]}">${avg[1]} ${f2(a.newsAvg)}</span></div>
         <div class="sentbar"><i style="left:calc(${pos}% - 1px)"></i></div>` +
         a.news.slice(0, 8).map((n) => { const l = sentLb(n.s); return `<div class="news"><p>${n.link ? `<a href="${esc(n.link)}" target="_blank" rel="noopener">${esc(n.t)}</a>` : esc(n.t)}</p><div class="meta"><span class="pill ${l[0]}">${l[1]} ${sgn(n.s)}${n.s.toFixed(1)}</span><span>impact ${esc(n.imp)}</span><span>${esc(n.ago || '')}</span>${n.src ? `<span>${esc(n.src)}</span>` : ''}</div></div>`; }).join('');
     }
+  } else if (newsTab === 'official') {
+    const O = Source.official ? Source.official() : { items: [], sources: {} };
+    const names = KEYS.filter((k) => !CFG[k].core).map((k) => (CFG[k].name || CFG[k].label).split(' ')[0].toLowerCase()).filter((x) => x.length > 2);
+    const mine = (n) => n.co && names.some((w) => n.co.toLowerCase().includes(w));
+    const items = [...O.items.filter(mine), ...O.items.filter((n) => !mine(n))].slice(0, 14);
+    h = `<div class="legend" style="margin:0 0 6px">Straight from the source: NSE corporate announcements (results, board meetings, orders, ratings), RBI press releases and notifications, SEBI circulars.${names.length ? ' Your watchlist companies come first.' : ''}</div>` +
+      (items.length ? items.map((n) => `<div class="news">${n.co ? `<div class="res-co">${esc(n.co)}${mine(n) ? '<span class="pill g">Watchlist</span>' : ''}</div>` : ''}<p>${n.link ? `<a href="${esc(n.link)}" target="_blank" rel="noopener">${esc(n.t)}</a>` : esc(n.t)}</p><div class="meta"><span class="pill n">${esc(n.src)}</span><span>${esc(n.ago || '')}</span></div></div>`).join('') : '<div class="mut">Nothing from the official feeds yet. They are checked every 10 minutes.</div>');
+    $('newsBody').innerHTML = h + `<div class="srcline">Official feeds: ${Object.entries(O.sources || {}).map(([n2, c]) => `${esc(n2)} ${c}`).join(', ') || 'loading'}</div>`;
+    return;
   } else {
     const R = Source.results ? Source.results() : { items: [] };
     if (!R.items.length) h = '<div class="mut">No quarterly results news in the last 3 days.</div>';
@@ -173,7 +213,8 @@ function renderNews() {
       h = `<div class="legend" style="margin:0 0 6px">Quarterly results (Q2/Q3 etc.), last 3 days. ${R.ai ? 'Strong or weak rated by AI.' : ''}</div>` + R.items.slice(0, 10).map((n) => {
         const l = n.s > 0.15 ? ['b', 'Strong'] : n.s < -0.15 ? ['s', 'Weak'] : ['n', 'Mixed'];
         const hv = n.co && ALL_HV.some((x) => n.co.toLowerCase().includes(x.toLowerCase().split(' ')[0]));
-        return `<div class="news"><div class="res-co">${esc(n.co || 'Company')}${n.q ? `<span class="pill n">${esc(n.q)}</span>` : ''}${hv ? '<span class="pill g">Index heavyweight</span>' : ''}</div>
+        const wl = n.co && KEYS.some((k) => !CFG[k].core && n.co.toLowerCase().includes((CFG[k].name || CFG[k].label).split(' ')[0].toLowerCase()));
+        return `<div class="news"><div class="res-co">${esc(n.co || 'Company')}${n.q ? `<span class="pill n">${esc(n.q)}</span>` : ''}${hv ? '<span class="pill g">Index heavyweight</span>' : ''}${wl ? '<span class="pill g">Watchlist</span>' : ''}</div>
           <p>${n.link ? `<a href="${esc(n.link)}" target="_blank" rel="noopener">${esc(n.t)}</a>` : esc(n.t)}</p><div class="meta"><span class="pill ${l[0]}">${l[1]}</span><span>${esc(n.ago || '')}</span>${n.src ? `<span>${esc(n.src)}</span>` : ''}</div></div>`;
       }).join('');
     }
@@ -181,6 +222,30 @@ function renderNews() {
   const src = Source.newsSources ? Source.newsSources(cur) : null;
   if (src) h += `<div class="srcline">Sources (free RSS): ${Object.entries(src).map(([n, c]) => `${esc(n)} ${c}`).join(', ')}</div>`;
   $('newsBody').innerHTML = h;
+}
+/* Global cues, economic calendar, FII/DII (side panel) */
+const GNAME = [[/gift|sgx/i, 'GIFT Nifty'], [/dow|\^dji|us 30/i, 'Dow'], [/s&p|gspc/i, 'S&P 500'], [/us tech|ndx|nasdaq/i, 'Nasdaq 100'], [/nikkei/i, 'Nikkei'], [/hang seng/i, 'Hang Seng'], [/dax/i, 'DAX'], [/ftse/i, 'FTSE'], [/cac/i, 'CAC 40'], [/brent|bzusd/i, 'Brent'], [/wti/i, 'WTI'], [/usd ?inr/i, 'USD/INR']];
+function shortG(n) { const m = GNAME.find(([re]) => re.test(n)); return m ? m[1] : n; }
+function renderGlobal() {
+  const G = Source.global ? Source.global() : [], C = Source.calendar ? Source.calendar() : { items: [] }, a = A[cur];
+  let h = '';
+  const gift = G.find((g) => /gift|sgx/i.test(g.name + g.sym)), N = A.NIFTY;
+  if (gift && N && ok(gift.price)) {
+    const gap = gift.price - N.PC, pre = !N.sessionLive && istMin() < 0;
+    h += `<div class="gift ${gap >= 0 ? 'up' : 'down'}"><div><small>GIFT Nifty</small><b>${f1(gift.price)}</b><span>${sgn(gift.chg)}${f2(gift.chg)}%</span></div><p>${pre ? `Points to a ${Math.abs(gap) < 30 ? 'flat' : gap > 0 ? 'gap-up' : 'gap-down'} open: ${sgn(gap)}${f0(gap)} pts vs Nifty's last close.` : `${sgn(gap)}${f0(gap)} pts vs Nifty's previous close. Most useful before 9:15.`}</p></div>`;
+  }
+  const rest = G.filter((g) => g !== gift);
+  h += rest.length ? `<div class="gl-grid">${rest.map((g) => `<div class="gl"><small>${esc(shortG(g.name))}</small><b>${g.price >= 1000 ? f0(g.price) : f2(g.price)}</b><span class="${g.chg >= 0 ? 'up' : 'down'}">${sgn(g.chg)}${f2(g.chg)}%</span></div>`).join('')}</div>`
+    : '<div class="mut">Global markets load from Upstox (deploy the new Worker if this stays empty).</div>';
+  h += `<div class="legend">US indices show their last close during Indian hours; Asia trades live. ${G.some((g) => /15|delay/i.test(g.latency || '')) ? 'Some quotes are delayed by Upstox.' : ''}</div>`;
+  // calendar
+  const today = istYmd(), tom = new Date(Date.now() + 5.5 * 3600e3 + 864e5).toISOString().slice(0, 10);
+  const exp = KEYS.filter((k) => A[k] && A[k].cf.opt && A[k].ch.expiry && A[k].ch.expiry !== 'Demo' && A[k].ch.dte <= 7).map((k) => ({ date: A[k].ch.expiry, time: '15:30', t: `${A[k].cf.label} options expiry`, imp: A[k].cf.core ? 'high' : 'medium', src: 'Exchange' }));
+  const seen = new Set(), ev = [...(C.items || []), ...exp].filter((e) => { const k = e.date + e.t; if (seen.has(k)) return false; seen.add(k); return e.date >= today; }).sort((x, y) => (x.date + x.time < y.date + y.time ? -1 : 1)).slice(0, 9);
+  const dl = (d) => (d === today ? 'Today' : d === tom ? 'Tomorrow' : new Date(d + 'T00:00:00Z').toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' }));
+  h += '<div class="sec">Event calendar, next 10 days (IST)</div>' + (ev.length ? ev.map((e) => `<div class="ev ${e.imp}"><span class="ev-d">${dl(e.date)}<br><small>${esc(e.time)}</small></span><span>${esc(e.t)}${e.fc ? `<br><small class="mut">Forecast ${esc(e.fc)}, previous ${esc(e.pv)}</small>` : ''}</span></div>`).join('') : '<div class="mut">No high-impact events found.</div>');
+  if (C.sources) h += `<div class="srcline">Calendar: ${Object.entries(C.sources).map(([n, c]) => `${esc(n)} ${c}`).join(', ')}</div>`;
+  $('globalBody').innerHTML = h;
 }
 function setNewsTab(k) { newsTab = k; renderControls(); renderNews(); }
 function saveFII() { const f = $('fiiIn').value, d = $('diiIn').value; Store.setFII({ fii: f === '' ? null : +f, dii: d === '' ? null : +d }); toast('FII/DII saved'); refreshAll(); }
@@ -286,3 +351,27 @@ function drawSub(I, s0) {
   }
   $('subVal').textContent = txt;
 }
+
+/* ---------- Search and add to watchlist ---------- */
+let sTimer = null, sSeq = 0, sLast = [];
+function openSearch() {
+  $('srch').classList.add('open'); $('srchIn').value = ''; $('srchRes').innerHTML = `<div class="mut">Type a company, index or commodity: Reliance, HDFC Bank, Wipro, Nifty IT, crude oil, gold…</div>`;
+  setTimeout(() => $('srchIn').focus(), 30);
+}
+function closeSearch() { $('srch').classList.remove('open'); }
+function onSearch(v) {
+  clearTimeout(sTimer);
+  if (v.trim().length < 2) return;
+  sTimer = setTimeout(async () => {
+    const my = ++sSeq; $('srchRes').innerHTML = '<div class="mut">Searching…</div>';
+    try {
+      const r = await Source.search(v.trim()); if (my !== sSeq) return;
+      sLast = r.items || [];
+      $('srchRes').innerHTML = sLast.length ? sLast.map((x, i) => `<button class="sr" onclick="addWatch(sLast[${i}])">
+          <span class="sr-n"><b>${esc(x.label)}</b><small>${esc(x.name || '')}</small></span>
+          <span class="sr-t"><span class="pill n">${x.exch} ${KIND[x.kind] || x.kind}</span>${x.fo ? `<span class="pill b">F&O lot ${x.lot || '?'}</span>` : x.exch === 'MCX' ? `<span class="pill g">Lot ${x.lot || '?'}${x.expiry ? ', exp ' + esc(x.expiry) : ''}</span>` : '<span class="pill">No F&O</span>'}${CFG[x.id] ? '<span class="pill g">Added</span>' : ''}</span></button>`).join('')
+        : '<div class="mut">Nothing found. Try the NSE symbol (e.g. HDFCBANK) or a commodity name (CRUDEOIL, GOLD, SILVER, NATURALGAS).</div>';
+    } catch (e) { if (my === sSeq) $('srchRes').innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+  }, 280);
+}
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && $('srch') && $('srch').classList.contains('open')) closeSearch(); });
