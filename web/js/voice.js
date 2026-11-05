@@ -121,7 +121,7 @@ const Voice = (() => {
       $(slot).innerHTML = `<div class="alert i"><b>AI answer</b><br>${esc(r.answer).replace(/\n/g, '<br>')}</div>`;
       say(r.speak || r.answer);
       return true;
-    } catch (e) { $(slot).innerHTML = `<div class="alert">No answer from AI: ${esc(e.message)}</div>`; return false; }
+    } catch (e) { $(slot).innerHTML = `<div class="alert">${e.code === 'AI_QUOTA' ? '' : 'AI couldn’t answer: '}${esc(String(e.message).slice(0, 220))}</div>`; return false; }
   }
 
   // ===== Any question that isn't "buy CE/PE?" =====
@@ -133,6 +133,16 @@ const Voice = (() => {
     const dayEn = live ? 'Today' : `Last session (${a.dayLabels[2]})`, dayHi = live ? 'आज' : 'पिछले सत्र में';
     const open = today.length ? today[0].o : a.PC, pts = a.price - a.PC;
     const has = (re) => re.test(t);
+    if (has(/चांस|चान्स|chance|probab|प्रोबेब|संभावना|उम्मीद|जाने के|जाएगा|जायेगा|will it|go up|go down|upside|downside|outlook|projection|प्रोजेक्शन|आगे क्या/)) {
+      const pj = Engine.projection(a), s = signalFor(a);
+      return { html: `<h3>${cf.label}: chances, next 30 minutes</h3>
+        <div class="pj-nums"><div class="u"><strong>${pj.up}%</strong>Upside</div><div class="d"><strong>${pj.dn}%</strong>Downside</div></div>
+        <div class="row"><span>Signal</span><b>${esc(s.title)}</b></div>
+        <div class="row"><span>Expected 30-min range</span><b>${f0(pj.lo)} – ${f0(pj.hi)}</b></div>
+        <div class="row"><span>Resistance / support</span><b>${a.res ? f0(a.res[1]) : '–'} / ${a.sup ? f0(a.sup[1]) : '–'}</b></div>
+        ${a.sessionLive ? '' : '<div class="legend">Market is closed: this is from the last session and will update at the next open.</div>'}`,
+        say: `${cf.voice}: ${a.sessionLive ? '' : 'पिछले सत्र के हिसाब से, '}ऊपर जाने की झुकाव ${pj.up} प्रतिशत और नीचे जाने की ${pj.dn} प्रतिशत है। ${pj.up >= 58 ? 'संकेत ऊपर की तरफ़ हैं' : pj.up <= 42 ? 'संकेत नीचे की तरफ़ हैं' : 'संकेत मिले-जुले हैं'}। ऊपर रेज़िस्टेंस ${a.res ? Math.round(a.res[1]) : 'नहीं'}, नीचे सपोर्ट ${a.sup ? Math.round(a.sup[1]) : 'नहीं'}। ये गारंटी नहीं, संभावना है।` };
+    }
     if (has(/हाई|high|लो\b|low|टच|touch|ऊपर|नीचे|पॉइंट|point|रेंज|range|खुला|open|बंद|close|गिरा|चढ़ा|बढ़ा|कितना|कहाँ तक|move|moved/)) return { html: `<h3>${cf.label}: ${dayEn}</h3>
         <div class="lv"><div><small>Open</small><b>${f2(open)}</b></div><div><small>Day high</small><b class="up">${f2(a.DH)}</b></div><div><small>Day low</small><b class="down">${f2(a.DL)}</b></div></div>
         <div class="row"><span>${a.sessionLive ? 'Current price' : 'Last price'}</span><b>${f2(a.price)}</b></div>
