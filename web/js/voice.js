@@ -33,7 +33,7 @@ const Voice = (() => {
     const hold = /होल्ड|hold|exit|एग्जिट|एग्ज़िट|बेच|निकल/.test(t);
     return { key, type, K: m ? +m[0] : null, hold };
   }
-  function show(h, s) { $('answer').innerHTML = h; $('answer').classList.add('show'); hint('माइक दबाकर अगला सवाल पूछो।'); say(s); }
+  function show(h, s) { openAsk(); $('answer').innerHTML = h; $('answer').classList.add('show'); hint('माइक दबाकर अगला सवाल पूछो।'); say(s); }
 
   async function ask() {
     const raw = $('q').value.trim(); if (!raw) return hint('पहले कुछ पूछिए।');

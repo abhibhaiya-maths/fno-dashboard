@@ -66,5 +66,12 @@ const DemoSource = (() => {
     };
   }
   function clock() { const m = S.NIFTY.series[S.NIFTY.series.length - 1].m; return { min: m, date: 'DEMO', label: m >= 374 ? 'बाज़ार बंद (डेमो)' : `डेमो समय ${hm(m)} (तेज़)` }; }
-  return { mode: 'demo', init, tick, get, clock, TICK_MS: 2000 };
+  const RES = [
+    ['HDFC Bank', 'Q2 FY27', 'शुद्ध मुनाफ़ा 11% बढ़ा, ब्याज आय उम्मीद से बेहतर (डेमो)', 0.6, '1 दिन पहले'],
+    ['ICICI Bank', 'Q2 FY27', 'मुनाफ़ा 14% ऊपर, एसेट क्वालिटी स्थिर (डेमो)', 0.7, '2 दिन पहले'],
+    ['Infosys', 'Q2 FY27', 'मुनाफ़ा अनुमान के मुताबिक़, पर सालाना गाइडेंस घटाई (डेमो)', -0.3, '2 दिन पहले'],
+    ['Axis Bank', 'Q2 FY27', 'स्लिपेज बढ़ने से मुनाफ़ा अनुमान से कम (डेमो)', -0.5, '3 दिन पहले'],
+    ['Reliance', 'Q2 FY27', 'रिटेल और जियो मज़बूत, O2C कमज़ोर (डेमो)', 0.1, '3 दिन पहले'],
+  ].map(([co, q, t, s, ago]) => ({ co, q, t, s, ago }));
+  return { mode: 'demo', init, tick, get, clock, TICK_MS: 2000, results: () => ({ ai: false, items: RES }) };
 })();

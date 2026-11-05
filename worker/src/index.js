@@ -50,7 +50,11 @@ const FEEDS = [
   ['Moneycontrol', 'https://www.moneycontrol.com/rss/marketreports.xml'],
   ['Mint Markets', 'https://www.livemint.com/rss/markets'],
   ['Business Standard', 'https://www.business-standard.com/rss/markets-106.rss'],
+  ['Moneycontrol Results', 'https://www.moneycontrol.com/rss/results.xml'],
+  ['Business Standard Results', 'https://www.business-standard.com/rss/companies/results-10301.rss'],
 ];
+// तिमाही नतीजों वाली ख़बरें पहचानने के लिए
+const RESULT_RE = /\b(Q[1-4]|quarter(ly)?|results?|earnings|net profit|PAT|EBITDA|revenue|profit (rises|falls|jumps|drops|up|down))\b/i;
 const NEWS_KW = {
   BANKNIFTY: /bank|banking|rbi|nbfc|lender|loan|credit|deposit|hdfc|icici|sbi|kotak|axis|indusind|repo|liquidity|npa/i,
   NIFTY: /nifty|sensex|market|stock|share|equit|fii|fpi|dii|dalal|rbi|fed|crude|oil|rupee|inflation|gdp|earning|q[1-4]|result|tariff|bond|yield/i,
@@ -331,15 +335,28 @@ const POS = /surge|soar|rall|gain|jump|rise|rises|record high|beat|strong|upgrad
 const NEG = /fall|falls|drop|slump|plunge|crash|decline|weak|miss|downgrade|bear|sell-off|selloff|outflow|loss|lower|cut|fear|concern|worr|tension|war|tariff hike/i;
 function lexScore(t) { const p = POS.test(t), n = NEG.test(t); return p && !n ? 0.4 : n && !p ? -0.4 : 0; }
 
+// सारी फ़ीड एक बार लाओ, 8 मिनट कैश (ख़बरें और नतीजे दोनों इसी से)
+async function allFeeds(env) {
+  const ck = 'feeds:all';
+  const c = memGet(ck) || (await env.KV.get(ck, 'json'));
+  if (c && c.ts > Date.now() - 8 * 60e3) { memSet(ck, c, 8 * 60e3); return c; }
+  const all = (await Promise.all(FEEDS.map(fetchFeed))).flat();
+  const seen = new Set();
+  const items = all.filter((i) => { const k = i.t.toLowerCase().slice(0, 80); if (seen.has(k)) return false; seen.add(k); return true; })
+    .sort((a, b) => b.ts - a.ts).slice(0, 200);
+  const res = { ts: Date.now(), items };
+  await env.KV.put(ck, JSON.stringify(res), { expirationTtl: 3600 });
+  memSet(ck, res, 8 * 60e3);
+  return res;
+}
+function parseAIArray(out) { return JSON.parse(out.slice(out.indexOf('['), out.lastIndexOf(']') + 1)); }
+
 async function news(env, idx) {
   const ck = 'news:' + idx;
   const c = memGet(ck) || (await env.KV.get(ck, 'json'));
   if (c && c.ts > Date.now() - 10 * 60e3) { memSet(ck, c, 10 * 60e3); return c; }
-  const all = (await Promise.all(FEEDS.map(fetchFeed))).flat();
-  const seen = new Set();
-  const items = all.filter((i) => { const k = i.t.toLowerCase().slice(0, 80); if (seen.has(k)) return false; seen.add(k); return true; })
-    .filter((i) => i.ts > Date.now() - 36 * 3600e3 && NEWS_KW[idx].test(i.t))
-    .sort((a, b) => b.ts - a.ts).slice(0, 12);
+  const feed = await allFeeds(env);
+  const items = feed.items.filter((i) => i.ts > Date.now() - 36 * 3600e3 && NEWS_KW[idx].test(i.t) && !RESULT_RE.test(i.t)).slice(0, 12);
   let scored = items.map((i) => ({ ...i, s: lexScore(i.t), imp: 'मध्यम', hi: '' }));
   let ai = false;
   if (env.ANTHROPIC_API_KEY && items.length) {
@@ -349,8 +366,7 @@ async function news(env, idx) {
 Return ONLY a JSON array, one object per headline, in the same order: {"i": index, "s": score from -1 (very bearish) to 1 (very bullish), "imp": "ऊँचा" | "मध्यम" | "कम", "hi": short Hindi translation of the headline (max 14 words)}.
 Headlines:
 ${items.map((x, i) => `${i}. ${x.t}`).join('\n')}`;
-      const out = await claude(env, prompt, 1500);
-      const arr = JSON.parse(out.slice(out.indexOf('['), out.lastIndexOf(']') + 1));
+      const arr = parseAIArray(await claude(env, prompt, 1500));
       scored = items.map((x, i) => {
         const a = arr.find((z) => z.i === i) || {};
         return { ...x, s: typeof a.s === 'number' ? Math.max(-1, Math.min(1, a.s)) : lexScore(x.t), imp: a.imp || 'मध्यम', hi: a.hi || '' };
@@ -361,6 +377,35 @@ ${items.map((x, i) => `${i}. ${x.t}`).join('\n')}`;
   const res = { ts: Date.now(), ai, items: scored };
   await env.KV.put(ck, JSON.stringify(res), { expirationTtl: 3600 });
   memSet(ck, res, 10 * 60e3);
+  return res;
+}
+
+// तिमाही नतीजे (Q1-Q4): पिछले 3 दिन की ख़बरों में से
+async function results(env) {
+  const ck = 'results:v1';
+  const c = memGet(ck) || (await env.KV.get(ck, 'json'));
+  if (c && c.ts > Date.now() - 15 * 60e3) { memSet(ck, c, 15 * 60e3); return c; }
+  const feed = await allFeeds(env);
+  const items = feed.items.filter((i) => i.ts > Date.now() - 72 * 3600e3 && RESULT_RE.test(i.t)).slice(0, 16);
+  let out = items.map((i) => ({ ...i, co: '', q: (i.t.match(/\bQ[1-4](\s?FY\s?\d{2,4})?/i) || [''])[0].toUpperCase(), s: lexScore(i.t), hi: '' }));
+  let ai = false;
+  if (env.ANTHROPIC_API_KEY && items.length) {
+    try {
+      const prompt = `You read Indian company quarterly-results headlines for an index options trader.
+Return ONLY a JSON array, one object per headline, same order: {"i": index, "co": company name (short, e.g. "HDFC Bank"), "q": quarter like "Q2 FY27" or "" if unknown, "s": -1 (clearly weak / missed) to 1 (clearly strong / beat), "hi": Hindi summary of the result (max 14 words)}.
+Headlines:
+${items.map((x, i) => `${i}. ${x.t}`).join('\n')}`;
+      const arr = parseAIArray(await claude(env, prompt, 1800));
+      out = out.map((x, i) => {
+        const a = arr.find((z) => z.i === i) || {};
+        return { ...x, co: a.co || '', q: a.q || x.q, s: typeof a.s === 'number' ? Math.max(-1, Math.min(1, a.s)) : x.s, hi: a.hi || '' };
+      });
+      ai = true;
+    } catch (e) { /* सरल स्कोर */ }
+  }
+  const res = { ts: Date.now(), ai, items: out };
+  await env.KV.put(ck, JSON.stringify(res), { expirationTtl: 3600 });
+  memSet(ck, res, 15 * 60e3);
   return res;
 }
 
@@ -391,7 +436,7 @@ async function route(req, env, url) {
 
   const email = await verifyUser(req, env);
   const idx = (url.searchParams.get('index') || 'NIFTY').toUpperCase();
-  if (p !== '/api/status' && p !== '/api/ask' && p !== '/api/snapshot' && !INDEX[idx]) throw new HttpError(400, 'ग़लत इंडेक्स');
+  if (!['/api/status', '/api/ask', '/api/snapshot', '/api/results'].includes(p) && !INDEX[idx]) throw new HttpError(400, 'ग़लत इंडेक्स');
 
   switch (p) {
     case '/api/status': {
@@ -401,6 +446,7 @@ async function route(req, env, url) {
     case '/api/snapshot': return json(await snapshot(env), 200, req, env);
     case '/api/candles': return json(await candles(env, idx), 200, req, env);
     case '/api/news': return json(await news(env, idx), 200, req, env);
+    case '/api/results': return json(await results(env), 200, req, env);
     case '/api/ask': {
       if (req.method !== 'POST') throw new HttpError(405, 'POST चाहिए');
       return json(await ask(env, await req.json()), 200, req, env);

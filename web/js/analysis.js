@@ -155,11 +155,12 @@ function signalFor(a) {
   let strength = strength0 >= 70 ? 'मज़बूत' : 'हल्का';
   const caveats = [];
   if (ok(a.adx) && a.adx < 20) { strength = 'हल्का'; caveats.push('ADX 20 से कम: ट्रेंड कमज़ोर'); }
+  if (a.stD === -d) { strength = 'हल्का'; caveats.push('Supertrend अभी उलटी दिशा में है, पलटने का इंतज़ार बेहतर'); }
   if (a.vix && a.vix.v > 18) caveats.push('VIX ऊँचा: प्रीमियम महँगे');
   return {
     state, strength, dirScore: strength0,
-    title: state === 'CE' ? `📈 कॉल (CE) का ${strength} सेटअप` : `📉 पुट (PE) का ${strength} सेटअप`,
-    sub: `${a.cf.label} · स्कोर ${s} · ${a.active} में से ${pro(d).length} संकेत पक्ष में`,
+    title: state === 'CE' ? `▲ कॉल का ${strength} सेटअप` : `▼ पुट का ${strength} सेटअप`,
+    sub: `स्कोर ${s}/100। ${a.active} में से ${pro(d).length} संकेत इस दिशा के पक्ष में।`,
     reasons: pro(d).slice(0, 3), against: con(d).slice(0, 2), caveats, setup: setupFor(a, state),
   };
 }

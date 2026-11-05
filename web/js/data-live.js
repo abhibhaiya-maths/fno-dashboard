@@ -2,7 +2,7 @@
 const LiveSource = (() => {
   const HDAY = ['रवि', 'सोम', 'मंगल', 'बुध', 'गुरु', 'शुक्र', 'शनि'];
   const raw = {}; KEYS.forEach((k) => (raw[k] = { days: null, news: [], newsAI: false }));
-  let snap = null, status = null, lastErr = null, lastOk = 0;
+  let snap = null, status = null, lastErr = null, lastOk = 0, resultsData = { ai: false, items: [] };
 
   async function api(path, opts = {}) {
     const t = await Store.idToken();
@@ -26,6 +26,9 @@ const LiveSource = (() => {
         raw[k].news = (j.items || []).map((n) => ({ t: n.hi || n.t, orig: n.t, s: n.s, imp: n.imp, link: n.link, src: n.src, ago: agoText(n.ts) }));
       } catch (e) { fail(e); }
     }));
+  }
+  async function refreshResults() {
+    try { const j = await api('/api/results'); resultsData = { ai: j.ai, items: (j.items || []).map((n) => ({ co: n.co, q: n.q, t: n.hi || n.t, orig: n.t, s: n.s, link: n.link, src: n.src, ago: agoText(n.ts) })) }; } catch (e) { fail(e); }
   }
   function agoText(ts) { const m = Math.round((Date.now() - ts) / 60000); return m < 60 ? `${m} मिनट पहले` : m < 1440 ? `${Math.round(m / 60)} घंटे पहले` : 'कल'; }
 
@@ -67,6 +70,6 @@ const LiveSource = (() => {
   }
   async function ask(question, context) { return api('/api/ask', { method: 'POST', body: JSON.stringify({ question, context }) }); }
   function connectUrl(idToken) { return APP_CONFIG.WORKER_URL.replace(/\/$/, '') + '/auth/login?id_token=' + encodeURIComponent(idToken); }
-  return { mode: 'live', init, refreshSnapshot, refreshCandles, refreshNews, get, clock, ask, connectUrl,
+  return { mode: 'live', init, refreshSnapshot, refreshCandles, refreshNews, refreshResults, get, clock, ask, connectUrl, results: () => resultsData,
     get status() { return status; }, get error() { return lastErr; }, newsAI: (k) => raw[k].newsAI };
 })();

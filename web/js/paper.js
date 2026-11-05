@@ -43,7 +43,7 @@ const Paper = (() => {
     acc.cash -= e.cost;
     const t = { id: uid(), key, label: a.cf.label, K, type, lots, lot: a.lot, qty: e.qty, exch: a.cf.exch, entry: e.px, entryCh: e.ch, sl: slv, sl0: slv, tgt: tgv,
       risk0: e.px - slv, high: e.px, ltp: e.px, status: 'open', openedTs: Date.now(), openedDate: dateKey(), openedMin: a.curMin, openIdx: a.price,
-      score: a.score, src: src || 'manual', advice: null, exitSigPx: null, log: [] };
+      score: a.score, st0: a.stD, src: src || 'manual', advice: null, exitSigPx: null, log: [] };
     trades.unshift(t);
     await Promise.all([Store.saveTrade(t), Store.saveAccount(acc)]);
     beep(660); toast(`पेपर ख़रीद: ${t.label} ${K} ${type} · ${lots} लॉट @ ${rs(e.px)}`);
@@ -69,7 +69,8 @@ const Paper = (() => {
     const R = (t.ltp - t.entry) / (t.risk0 || 1), mh = a.I5.macd.hist[a.I5.k.length - 1];
     const exit = [], book = [], warn = [];
     if (ds <= 42) exit.push(`स्कोर उलट गया (आपकी दिशा में ${ds}/100)`);
-    if (a.stD === -d) exit.push('Supertrend आपके ख़िलाफ़ पलट गया');
+    if (a.stD === -d && t.st0 !== -d) exit.push('Supertrend आपके ख़िलाफ़ पलट गया');
+    else if (a.stD === -d) warn.push('Supertrend एंट्री के समय से ही उलटी दिशा में है');
     if ((a.price - a.vw) * d < 0 && ok(mh) && mh * d < 0) exit.push(`भाव ${a.hasVol ? 'VWAP' : 'TWAP'} के ग़लत तरफ़ और MACD उलटा`);
     if (a.curMin >= 345) exit.push('3 बजे के बाद: थीटा और अचानक झटकों का जोखिम');
     if (R >= 1.5) book.push(`मुनाफ़ा ${R.toFixed(1)}R हो चुका है`);
@@ -181,16 +182,16 @@ const Paper = (() => {
   function renderBanner() {
     const a = A[cur], s = signalFor(a), o = opts();
     const cls = s.state === 'CE' ? 'b' : s.state === 'PE' ? 's' : 'n';
-    let h = `<div class="sig ${cls}"><div class="sigt">${s.title}</div><div class="sigs">${esc(s.sub)}</div>`;
-    if (s.reasons && s.reasons.length) h += `<div class="sigr">${s.reasons.map((x) => `<span class="pill ${x.s > 0 ? 'b' : 'n'}">✓ ${esc(x.n)}</span>`).join('')}${(s.against || []).map((x) => `<span class="pill s">✗ ${esc(x.n)}</span>`).join('')}</div>`;
-    if (s.caveats && s.caveats.length) h += `<div class="sigs">⚠️ ${s.caveats.join(' · ')}</div>`;
+    let h = `<div class="sig ${cls}"><div class="sig-k">${a.cf.label} का लाइव सिग्नल, ${Source.clock().label}</div><div class="sigt">${s.title}</div><div class="sigs">${esc(s.sub)}</div>`;
+    if (s.reasons && s.reasons.length) h += `<div class="sigr">${s.reasons.map((x) => `<span class="pill ${x.s > 0 ? 'b' : x.s < 0 ? 's' : 'n'}">✓ ${esc(x.n)}</span>`).join('')}${(s.against || []).map((x) => `<span class="pill s">✗ ${esc(x.n)}</span>`).join('')}</div>`;
+    if (s.caveats && s.caveats.length) h += `<div class="alert" style="margin-top:10px">${s.caveats.join('। ')}</div>`;
     if (s.setup) {
       const st = s.setup, e = estimate(cur, st.K, st.dir, o.lots);
-      h += `<div class="lv" style="margin-top:10px"><div><small>स्ट्राइक</small><b>${st.K} ${st.dir}</b></div><div><small>प्रीमियम (ख़रीद भाव)</small><b>${rs(e.px)}</b></div><div><small>SL / टारगेट</small><b><span class="down">${f1(st.pSL)}</span> / <span class="up">${f1(st.pT1)}</span></b></div></div>
-        <button class="big ${cls}" onclick="Paper.takeSignal()">इस सिग्नल पर पेपर ट्रेड लो · ${o.lots} लॉट (${e.qty}) · कुल ${rs(e.cost)}</button>`;
+      h += `<div class="lv"><div><small>स्ट्राइक</small><b>${st.K} ${st.dir}</b></div><div><small>ख़रीद भाव</small><b>${rs(e.px)}</b></div><div><small>SL / टारगेट</small><b><span class="down">${f1(st.pSL)}</span> / <span class="up">${f1(st.pT1)}</span></b></div></div>
+        <button class="big ${cls}" onclick="Paper.takeSignal()">पेपर ट्रेड लें: ${o.lots} लॉट (${e.qty}), कुल ${rs(e.cost)}</button>`;
     }
     const ss = sigStats(signals.filter((x) => x.key === cur));
-    h += `<div class="sigs" style="margin-top:8px">📊 ${a.cf.label} के अब तक ${ss.n} सिग्नल · 30 मिनट बाद ${ss.pct == null ? 'अभी नतीजा नहीं' : ss.pct + '% सही (' + ss.dec + ' में से ' + ss.win + ')'}</div></div>`;
+    h += `<div class="sig-foot">${a.cf.label} के अब तक ${ss.n} सिग्नल। 30 मिनट बाद ${ss.pct == null ? 'अभी नतीजा नहीं' : ss.pct + '% सही निकले (' + ss.dec + ' में से ' + ss.win + ')'}</div></div>`;
     $('pBanner').innerHTML = h;
   }
   function renderAccount() {

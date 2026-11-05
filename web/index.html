@@ -4,94 +4,135 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="robots" content="noindex, nofollow">
-<title>F&O एनालिटिक्स डैशबोर्ड</title>
+<meta name="theme-color" content="#12161C">
+<title>F&O टर्मिनल</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans+Devanagari:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<header>
-  <h1>📊 F&O एनालिटिक्स डैशबोर्ड</h1>
-  <div class="hright"><span><span class="live"></span><span id="clock"></span></span></div>
+
+<header class="topbar">
+  <div class="brand"><span class="brand-mark" aria-hidden="true"></span><span>F&O टर्मिनल</span></div>
+  <div class="mkt" id="clock"></div>
+  <div class="cmd">
+    <button class="mic" id="mic" onclick="Voice.toggleMic()" aria-label="बोलकर पूछें">
+      <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M12 15a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v6a3 3 0 0 0 3 3Zm5-3a1 1 0 1 1 2 0 7 7 0 0 1-6 6.93V21h3a1 1 0 1 1 0 2H8a1 1 0 1 1 0-2h3v-2.07A7 7 0 0 1 5 12a1 1 0 1 1 2 0 5 5 0 0 0 10 0Z"/></svg>
+    </button>
+    <input id="q" placeholder="पूछें: बैंक निफ्टी 57300 कॉल लूँ क्या?" onfocus="openAsk()" onkeydown="if(event.key==='Enter')Voice.ask()">
+    <button class="cmd-go" onclick="Voice.ask()">पूछें</button>
+  </div>
+  <div class="status" id="statusBar"></div>
 </header>
-<div class="statusbar" id="statusBar"></div>
 
-<div class="tickers" id="tickers"></div>
-
-<div id="main" style="display:none">
-  <!-- पेपर ट्रेडिंग -->
-  <div class="card" style="margin-bottom:14px">
-    <h2>🧪 पेपर ट्रेडिंग <span class="mut" style="font-weight:400;font-size:12px">डमी पैसा · असली जैसे भाव और चार्ज</span>
-      <label class="mut" style="font-weight:400;font-size:12px">लॉट <input id="pLots" class="lots" type="number" min="1" step="1" onchange="Paper.setLots(this.value)"></label></h2>
-    <div id="pBanner"></div>
-    <div class="acc" id="pAcc"></div>
-    <div class="sec" style="margin-top:14px">खुली पोज़िशन</div>
-    <div id="pPos"></div>
-    <details class="order"><summary>✍️ ख़ुद ऑर्डर लगाओ (मैन्युअल)</summary>
-      <div class="ofrm">
-        <div><small>इंडेक्स</small><b id="oIdx"></b></div>
-        <label><small>स्ट्राइक</small><select id="oStrike" onchange="Paper.updateEstimate()"></select></label>
-        <label><small>टाइप</small><select id="oType" onchange="Paper.updateEstimate()"><option value="CE">कॉल (CE)</option><option value="PE">पुट (PE)</option></select></label>
-        <label><small>लॉट</small><input id="oLots" type="number" min="1" value="1" oninput="Paper.updateEstimate()"></label>
-        <label><small>SL प्रीमियम (ख़ाली = अपने-आप)</small><input id="oSL" type="number" step="0.05"></label>
-        <label><small>टारगेट प्रीमियम (ख़ाली = अपने-आप)</small><input id="oTgt" type="number" step="0.05"></label>
-      </div>
-      <div class="hint" id="oEst" style="display:block"></div>
-      <button class="big b" onclick="Paper.placeManual()">पेपर ख़रीद लगाओ</button>
-    </details>
-    <details class="order"><summary>📊 सिग्नल का रिकॉर्ड (कितने % सही निकले)</summary><div id="pRec"></div></details>
-    <details class="order"><summary>📒 ट्रेड हिस्ट्री और आँकड़े</summary><div id="pHist"></div></details>
+<div class="askpanel" id="askPanel">
+  <div class="ask-head">
+    <span id="hint">माइक दबाकर हिंदी या इंग्लिश में बोलें, या टाइप करें</span>
+    <label class="tts"><input type="checkbox" id="tts" checked> बोलकर जवाब और अलर्ट</label>
+    <button class="x" onclick="closeAsk()" aria-label="बंद करें">✕</button>
   </div>
-
-  <!-- वॉइस -->
-  <div class="card" style="margin-bottom:14px">
-    <h2>🎙️ ट्रेड के बारे में पूछो</h2>
-    <div class="ask">
-      <button class="mic" id="mic" onclick="Voice.toggleMic()" aria-label="बोलकर पूछो">🎤</button>
-      <input id="q" placeholder="जैसे: बैंक निफ्टी 57300 कॉल लूँ क्या?" onkeydown="if(event.key==='Enter')Voice.ask()">
-      <button class="go" onclick="Voice.ask()">पूछो</button>
-    </div>
-    <div class="hint"><span id="hint">माइक दबाकर हिंदी या इंग्लिश में बोलो, या टाइप करो।</span><label><input type="checkbox" id="tts" checked> 🔊 बोलकर जवाब और अलर्ट</label></div>
-    <div class="qchips" id="qchips"></div>
-    <div class="answer" id="answer"></div>
-  </div>
-
-  <div class="grid">
-    <div class="col">
-      <div class="card">
-        <h2><span id="chartTitle"></span><span class="btns" id="tfBtns"></span></h2>
-        <div class="chips" id="ovChips"></div>
-        <canvas id="chart"></canvas>
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;gap:8px;flex-wrap:wrap">
-          <span class="btns" id="subBtns"></span><span class="legend" id="subVal"></span>
-        </div>
-        <canvas id="sub"></canvas>
-      </div>
-      <div class="card">
-        <div class="tabs" id="tabs"></div>
-        <div id="tabBody"></div>
-      </div>
-    </div>
-    <div class="col">
-      <div class="card">
-        <h2>प्रोबेबिलिटी स्कोर <span class="mut" id="scoreSub" style="font-weight:400;font-size:11px"></span></h2>
-        <div class="score" id="score">--</div>
-        <div class="verdict" id="verdict"></div>
-        <div class="bar"><div class="needle" id="needle"></div></div>
-        <div class="scale"><span>पुट की तरफ़</span><span>न्यूट्रल</span><span>कॉल की तरफ़</span></div>
-        <div class="counts" id="counts"></div>
-      </div>
-      <div class="card"><h2>⚠️ ट्रेड सेटअप और रिस्क</h2><div id="setup"></div></div>
-      <div class="card"><h2>📍 अहम लेवल</h2><div id="levels"></div></div>
-    </div>
-  </div>
+  <div class="qchips" id="qchips"></div>
+  <div class="answer" id="answer"></div>
 </div>
 
+<nav class="tickers" id="tickers" aria-label="इंडेक्स"></nav>
+
+<main id="main" style="display:none">
+  <div class="col col-main">
+    <section class="panel p-chart">
+      <div class="ph">
+        <h2 id="chartTitle"></h2>
+        <div class="seg" id="tfBtns"></div>
+      </div>
+      <div class="chips" id="ovChips"></div>
+      <canvas id="chart"></canvas>
+      <div class="subbar"><div class="seg" id="subBtns"></div><span class="subval" id="subVal"></span></div>
+      <canvas id="sub"></canvas>
+    </section>
+
+    <section class="panel p-paper">
+      <div class="ph">
+        <h2>पेपर ट्रेडिंग <span class="ph-note">डमी पैसा, असली भाव और चार्ज</span></h2>
+        <label class="lotpick">लॉट <input id="pLots" type="number" min="1" step="1" onchange="Paper.setLots(this.value)"></label>
+      </div>
+      <div class="acc" id="pAcc"></div>
+      <h3 class="sub-h">खुली पोज़िशन</h3>
+      <div id="pPos"></div>
+      <details class="drawer"><summary>ख़ुद ऑर्डर लगाएँ</summary>
+        <div class="ofrm">
+          <div><small>इंडेक्स</small><b id="oIdx"></b></div>
+          <label><small>स्ट्राइक</small><select id="oStrike" onchange="Paper.updateEstimate()"></select></label>
+          <label><small>टाइप</small><select id="oType" onchange="Paper.updateEstimate()"><option value="CE">कॉल (CE)</option><option value="PE">पुट (PE)</option></select></label>
+          <label><small>लॉट</small><input id="oLots" type="number" min="1" value="1" oninput="Paper.updateEstimate()"></label>
+          <label><small>SL प्रीमियम (ख़ाली = अपने-आप)</small><input id="oSL" type="number" step="0.05"></label>
+          <label><small>टारगेट प्रीमियम (ख़ाली = अपने-आप)</small><input id="oTgt" type="number" step="0.05"></label>
+        </div>
+        <div class="est" id="oEst"></div>
+        <button class="btn-solid ce" onclick="Paper.placeManual()">पेपर ख़रीद लगाएँ</button>
+      </details>
+      <details class="drawer"><summary>सिग्नल का रिकॉर्ड: कितने सही निकले</summary><div id="pRec"></div></details>
+      <details class="drawer"><summary>ट्रेड हिस्ट्री और आँकड़े</summary><div id="pHist"></div></details>
+    </section>
+
+    <section class="panel p-tabs">
+      <div class="ph"><div class="seg" id="tabs"></div></div>
+      <div id="tabBody"></div>
+    </section>
+  </div>
+
+  <div class="col col-side">
+    <section class="panel p-signal" id="signalPanel">
+      <div id="pBanner"></div>
+      <div class="gauge-wrap">
+        <div id="gauge"></div>
+        <div class="gauge-meta">
+          <div class="score" id="score">--</div>
+          <div class="verdict" id="verdict"></div>
+          <div class="score-sub" id="scoreSub"></div>
+        </div>
+      </div>
+      <div class="counts" id="counts"></div>
+      <span id="needle" hidden></span>
+    </section>
+
+    <section class="panel p-setup">
+      <div class="ph"><h2>सेटअप और रिस्क</h2></div>
+      <div id="setup"></div>
+    </section>
+
+    <section class="panel p-news">
+      <div class="ph"><h2>ख़बरें और नतीजे</h2><div class="seg" id="newsTabs"></div></div>
+      <div id="newsBody"></div>
+    </section>
+
+    <section class="panel p-levels">
+      <div class="ph"><h2>अहम लेवल</h2></div>
+      <div id="levels"></div>
+    </section>
+  </div>
+</main>
+
 <footer>
-यह टूल सिर्फ़ विश्लेषण और प्रैक्टिस के लिए है, निवेश सलाह नहीं। कोई भी संकेत गारंटी नहीं है, असली पैसे का फ़ैसला और जोखिम पूरी तरह आपका है।<br>
-यह टूल कोई असली ऑर्डर नहीं लगाता।
+ये टूल विश्लेषण और प्रैक्टिस के लिए है, निवेश सलाह नहीं। कोई भी संकेत गारंटी नहीं है। असली पैसे का फ़ैसला और जोखिम आपका है। ये कोई असली ऑर्डर नहीं लगाता।
 </footer>
 
+<button class="orb wait" id="orb" onclick="orbClick()" aria-live="polite" aria-label="लाइव सिग्नल">
+  <span class="orb-ring" aria-hidden="true"></span><span class="orb-ring r2" aria-hidden="true"></span>
+  <span class="orb-globe" aria-hidden="true">
+    <svg viewBox="0 0 100 100">
+      <circle cx="50" cy="50" r="46" class="g-edge"/>
+      <ellipse cx="50" cy="50" rx="46" ry="15" class="g-lat"/>
+      <ellipse cx="50" cy="50" rx="40" ry="30" class="g-lat" transform="translate(0 -1)"/>
+      <line x1="4" y1="50" x2="96" y2="50" class="g-lat"/>
+      <g class="g-spin"><ellipse cx="50" cy="50" rx="46" ry="46" class="g-mer m1"/><ellipse cx="50" cy="50" rx="46" ry="46" class="g-mer m2"/><ellipse cx="50" cy="50" rx="46" ry="46" class="g-mer m3"/></g>
+    </svg>
+  </span>
+  <span class="orb-txt"><b id="orbDir">रुकें</b><small id="orbSub"></small></span>
+</button>
+
 <div class="gate" id="gate"></div>
-<div class="toast" id="toast"></div>
+<div class="toast" id="toast" role="status"></div>
 
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>

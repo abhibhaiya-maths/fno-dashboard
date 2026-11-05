@@ -15,20 +15,20 @@ function renderAll() {
   renderTickers(); renderStatus();
   const a = A[cur];
   $('main').style.display = a ? '' : 'none';
+  $('orb').style.display = a ? '' : 'none';
   if (!a) return;
-  renderControls(); renderScore(); renderSetup(); renderLevels(); renderTab(); drawChart(); Paper.render();
+  renderControls(); renderScore(); renderSetup(); renderLevels(); renderTab(); renderNews(); renderOrb(); drawChart(); Paper.render();
   if (orderFor !== cur || !$('oStrike').value) { orderFor = cur; Paper.renderOrderForm(); } else Paper.updateEstimate();
 }
 function renderStatus() {
   let h = '';
-  if (DEMO) h = `<span class="badge">डेमो डेटा</span><span class="mut">सब कुछ नकली और तेज़ है। लाइव के लिए README देखें।</span>`;
+  if (DEMO) h = `<span class="tag demo">डेमो डेटा</span><span class="mut">नकली भाव, तेज़ समय</span>`;
   else {
     const st = Source.status, u = Store.user, e = Source.error;
-    h = `<span class="badge live">लाइव</span>${u ? `<span class="mut">${esc(u.email)}</span>` : ''}`;
-    if (st && !st.upstox) h += `<button class="go up-btn" onclick="connectUpstox()">🔗 Upstox से कनेक्ट करें (रोज़ एक बार)</button>`;
-    else if (st) h += `<span class="up">● Upstox जुड़ा है</span>${st.ai ? '<span class="mut">· AI चालू</span>' : '<span class="mut">· AI बंद</span>'}`;
-    if (e && e.code !== 'UPSTOX_LOGIN') h += `<span class="down">⚠ ${esc(e.message)}</span>`;
-    h += `<button class="btn" onclick="Store.signOut()">लॉग आउट</button>`;
+    if (st && !st.upstox) h += `<button class="btn-up" onclick="connectUpstox()">Upstox से कनेक्ट करें</button>`;
+    else if (st) h += `<span class="tag ok">Upstox जुड़ा है</span>${st.ai ? '<span class="tag">AI चालू</span>' : ''}`;
+    if (e && e.code !== 'UPSTOX_LOGIN') h += `<span class="err" title="${esc(e.message)}">⚠ ${esc(e.message.slice(0, 60))}</span>`;
+    if (u) h += `<button class="btn-ghost" onclick="Store.signOut()" title="${esc(u.email)}">लॉग आउट</button>`;
   }
   $('statusBar').innerHTML = h;
 }
@@ -49,9 +49,10 @@ async function startLive() {
   const first = async () => { await Promise.all([LiveSource.refreshSnapshot(), LiveSource.refreshCandles()]); refreshAll(); };
   await first();
   LiveSource.refreshNews().then(refreshAll);
+  LiveSource.refreshResults().then(refreshAll);
   setInterval(async () => { await LiveSource.refreshSnapshot(); refreshAll(); }, APP_CONFIG.POLL.SNAPSHOT_MS);
   setInterval(async () => { await LiveSource.refreshCandles(); refreshAll(); }, APP_CONFIG.POLL.CANDLES_MS);
-  setInterval(async () => { await LiveSource.refreshNews(); refreshAll(); }, APP_CONFIG.POLL.NEWS_MS);
+  setInterval(async () => { await Promise.all([LiveSource.refreshNews(), LiveSource.refreshResults()]); refreshAll(); }, APP_CONFIG.POLL.NEWS_MS);
 }
 
 (async function boot() {
@@ -69,7 +70,7 @@ async function startLive() {
   if (!Store.hasFirebase()) { gate(`<div class="gbox"><h2>सेटअप अधूरा है</h2><p>js/config.js में Firebase की जानकारी भरें।</p><a class="go" href="?demo=1">तब तक डेमो देखें</a></div>`); return; }
   let started = false;
   Store.init(false, async (u) => {
-    if (!u) { gate(`<div class="gbox"><h2>📊 F&O डैशबोर्ड</h2><p>आगे बढ़ने के लिए लॉगिन करें।</p><button class="go" onclick="Store.signIn().catch(e=>toast(e.message))">Google से लॉगिन</button><p><a href="?demo=1">डेमो देखें</a></p></div>`); renderStatus(); return; }
+    if (!u) { gate(`<div class="gbox"><h2>F&O टर्मिनल</h2><p class="mut">अपने Google अकाउंट से लॉगिन करें।</p><button class="go" onclick="Store.signIn().catch(e=>toast(e.message))">Google से लॉगिन करें</button><a class="mut" href="?demo=1">डेमो देखें</a></div>`); renderStatus(); return; }
     if (started) return; started = true;
     gate('<div class="gbox"><p>डेटा लोड हो रहा है…</p></div>');
     await Paper.load();
