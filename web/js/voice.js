@@ -55,21 +55,38 @@ const Voice = (() => {
     recog.onend = () => { listening = false; micState(false); if (!heard) hint('Tap the mic and speak, or type your question.'); };
     try { recog.start(); } catch { listening = false; micState(false); tell('Couldn’t start the mic. Tap it again.'); }
   }
+  // Hindi / common names → NSE or MCX symbol, so "रिलायंस" or "crude" finds the right instrument
+  const NAMES = [
+    [/रिलायंस|रिलाइंस|reliance/, 'RELIANCE'], [/एचडीएफसी\s*बैंक|hdfc\s*bank/, 'HDFCBANK'], [/आईसीआईसीआई|icici/, 'ICICIBANK'], [/एसबीआई|स्टेट बैंक|\bsbi\b|state bank/, 'SBIN'],
+    [/इंफोसिस|इन्फोसिस|infosys|infy/, 'INFY'], [/टीसीएस|\btcs\b/, 'TCS'], [/विप्रो|wipro/, 'WIPRO'], [/एचसीएल|hcl/, 'HCLTECH'], [/टेक\s*महिंद्रा|tech\s*mahindra/, 'TECHM'],
+    [/टाटा\s*मोटर्स|tata\s*motors/, 'TATAMOTORS'], [/टाटा\s*स्टील|tata\s*steel/, 'TATASTEEL'], [/टाटा\s*पावर|tata\s*power/, 'TATAPOWER'], [/एयरटेल|airtel|bharti/, 'BHARTIARTL'],
+    [/आईटीसी|\bitc\b/, 'ITC'], [/एल\s*एंड\s*टी|लार्सन|l\s*&\s*t|larsen/, 'LT'], [/एक्सिस|axis/, 'AXISBANK'], [/कोटक|kotak/, 'KOTAKBANK'], [/इंडसइंड|indusind/, 'INDUSINDBK'],
+    [/बजाज\s*फाइनेंस|bajaj\s*finance/, 'BAJFINANCE'], [/मारुति|maruti/, 'MARUTI'], [/महिंद्रा|mahindra|\bm\s*&\s*m\b/, 'M&M'], [/अदानी\s*पोर्ट|adani\s*port/, 'ADANIPORTS'], [/अदानी|adani/, 'ADANIENT'],
+    [/सन\s*फार्मा|sun\s*pharma/, 'SUNPHARMA'], [/सिप्ला|cipla/, 'CIPLA'], [/एशियन\s*पेंट|asian\s*paint/, 'ASIANPAINT'], [/ओएनजीसी|ongc/, 'ONGC'], [/कोल\s*इंडिया|coal\s*india/, 'COALINDIA'],
+    [/एनटीपीसी|ntpc/, 'NTPC'], [/पावर\s*ग्रिड|power\s*grid/, 'POWERGRID'], [/\bbel\b|भारत\s*इलेक्ट्रॉनिक्स/, 'BEL'], [/\bhal\b|हिंदुस्तान\s*एयरोनॉटिक्स/, 'HAL'], [/वेदांता|vedanta/, 'VEDL'],
+    [/हिंडाल्को|hindalco/, 'HINDALCO'], [/जेएसडब्ल्यू|jsw\s*steel/, 'JSWSTEEL'], [/टाइटन|titan/, 'TITAN'], [/अल्ट्राटेक|ultratech/, 'ULTRACEMCO'], [/हिंदुस्तान\s*यूनिलीवर|\bhul\b|hindustan\s*unilever/, 'HINDUNILVR'],
+    [/ज़ोमैटो|जोमैटो|zomato|eternal/, 'ETERNAL'], [/पेटीएम|paytm/, 'PAYTM'], [/आईआरएफसी|irfc/, 'IRFC'], [/सुजलॉन|suzlon/, 'SUZLON'], [/यस\s*बैंक|yes\s*bank/, 'YESBANK'], [/बैंक\s*ऑफ\s*बड़ौदा|bank\s*of\s*baroda/, 'BANKBARODA'],
+    [/पीएनबी|पंजाब\s*नेशनल|\bpnb\b/, 'PNB'], [/एलआईसी|\blic\b/, 'LICI'], [/डीएलएफ|\bdlf\b/, 'DLF'], [/बीएचईएल|bhel/, 'BHEL'], [/सेल\b|\bsail\b/, 'SAIL'], [/बीपीसीएल|bpcl/, 'BPCL'], [/आईओसी|indian\s*oil/, 'IOC'],
+    [/क्रूड|कच्चा\s*तेल|crude/, 'CRUDEOIL'], [/नेचुरल\s*गैस|natural\s*gas/, 'NATURALGAS'], [/चांदी|सिल्वर|silver/, 'SILVER'], [/सोना|गोल्ड|gold/, 'GOLD'], [/कॉपर|तांबा|copper/, 'COPPER'],
+    [/निफ्टी\s*आईटी|nifty\s*it/, 'Nifty IT'], [/फिन\s*निफ्टी|finnifty|fin\s*nifty/, 'FINNIFTY'], [/मिडकैप|midcap/, 'MIDCPNIFTY'],
+  ];
+  const nameIn = (t) => { const m = NAMES.find(([re]) => re.test(t)); return m ? m[1] : null; };
   function parseQ(raw) {
     const t = raw.replace(/[०-९]/g, (d) => '०१२३४५६७८९'.indexOf(d)).replace(/(\d)[,\s](?=\d{3}\b)/g, '$1').toLowerCase();
-    let key = null;
+    let key = null, other = null;
     if (/bank\s*nifty|banknifty|बैंक\s*निफ़?्टी|बैंकनिफ्टी/.test(t)) key = 'BANKNIFTY';
     else if (/sensex|सेंसेक्स|सेनसेक्स/.test(t)) key = 'SENSEX';
     else {
       // watchlist names: "reliance", "hdfc bank", "crude" …
       const w = KEYS.filter((k) => !CFG[k].core).find((k) => { const c = CFG[k]; return [k, c.label, c.name, c.sym].filter(Boolean).some((n) => { const x = String(n).toLowerCase().replace(/\s*fut$/, ''); return x.length > 2 && (t.includes(x) || t.replace(/\s+/g, '').includes(x.replace(/\s+/g, ''))); }); });
-      if (w) key = w; else if (/nifty|निफ़?्टी/.test(t)) key = 'NIFTY';
+      const nm = nameIn(t), nid = nm && nm.toUpperCase().replace(/[^A-Z0-9&]/g, '');
+      if (w) key = w; else if (nid && CFG[nid]) key = nid; else if (nm) other = nm; else if (/nifty|निफ़?्टी/.test(t)) key = 'NIFTY';
     }
     let type = null;
     if (/\bput\b|पुट|\bpe\b/.test(t)) type = 'PE'; else if (/\bcall\b|कॉल|काल|\bce\b/.test(t)) type = 'CE';
     const m = t.match(/\d{3,6}(\.\d+)?/);
     const hold = /होल्ड|hold|exit|एग्जिट|एग्ज़िट|बेच|निकल|sell my|my position/.test(t);
-    return { key, type, K: m ? +m[0] : null, hold };
+    return { key, other, type, K: m ? +m[0] : null, hold };
   }
 
   // ===== Full dashboard data for the AI =====
@@ -189,7 +206,18 @@ const Voice = (() => {
     stop();
     const raw = $('q').value.trim(); if (!raw) return hint('Type or speak a question first.');
     const q = parseQ(raw);
-    if (q.key && q.key !== cur) { cur = q.key; renderAll(); }
+    if (!q.key && q.other) {
+      // asked about something not on the watchlist: find it and add it, then answer
+      hint(`Adding ${q.other} to your watchlist…`); openAsk();
+      try {
+        const r = await Source.search(q.other), id = q.other.toUpperCase().replace(/[^A-Z0-9&]/g, '');
+        const it = r.items.find((x) => x.id === id) || r.items.find((x) => x.label.toUpperCase().startsWith(id)) || r.items[0];
+        if (!it) return show(`<h3>${esc(q.other)}</h3><div class="mut">Couldn't find this on NSE/BSE/MCX. Try "+ Add stock / MCX".</div>`, 'ये शेयर नहीं मिला।');
+        await addWatch(it); if (!CFG[it.id]) return show('<div class="mut">Watchlist is full (12). Remove one to add another.</div>', 'वॉचलिस्ट भरी हुई है।'); q.key = it.id;
+        if (!A[it.id]) return show(`<h3>${esc(it.label)}</h3><div class="mut">Added to your watchlist. Its data is loading; ask again in a few seconds.</div>`, `${it.label} वॉचलिस्ट में जोड़ दिया, डेटा आ रहा है। कुछ सेकंड बाद फिर पूछें।`);
+      } catch (e) { return show(`<div class="alert">${esc(e.message)}</div>`, ''); }
+    }
+    if (q.key && q.key !== cur) { cur = q.key; Store.setPref('index', cur); renderAll(); }
     const a = A[cur]; if (!a) return hint('Data is still loading…');
     const cf = a.cf;
     // About an open position: "hold or exit?"
