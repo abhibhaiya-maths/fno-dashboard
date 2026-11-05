@@ -1,0 +1,23 @@
+# Cloudflare Worker की सेटिंग (अगर आप CLI से deploy करें)
+# Dashboard से कॉपी-पेस्ट करके deploy कर रहे हैं तो ये फ़ाइल ज़रूरी नहीं।
+
+name = "fno-worker"
+main = "src/index.js"
+compatibility_date = "2026-10-01"
+
+# KV namespace: `npx wrangler kv namespace create KV` चलाकर जो id मिले वो यहाँ डालें
+kv_namespaces = [
+  { binding = "KV", id = "PASTE_YOUR_KV_NAMESPACE_ID" }
+]
+
+[vars]
+FRONTEND_URL = "https://trade.yourdomain.com"
+UPSTOX_REDIRECT_URI = "https://fno-worker.YOUR-SUBDOMAIN.workers.dev/auth/callback"
+ALLOWED_EMAIL = "your-email@gmail.com"
+FIREBASE_API_KEY = "PASTE_FIREBASE_WEB_API_KEY"
+CLAUDE_MODEL = "claude-haiku-5-5"
+
+# Secrets (कभी इस फ़ाइल में न लिखें), इन्हें ऐसे डालें:
+#   npx wrangler secret put UPSTOX_API_KEY
+#   npx wrangler secret put UPSTOX_API_SECRET
+#   npx wrangler secret put ANTHROPIC_API_KEY
