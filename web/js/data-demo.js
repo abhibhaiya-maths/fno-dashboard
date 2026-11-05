@@ -3,16 +3,16 @@ const DemoSource = (() => {
   const P = {
     NIFTY: { base: 25420, dte: 1, ivf: 1.0, seed: 101,
       hv: [['HDFC Bank', 13], ['ICICI Bank', 9], ['Reliance', 8.5], ['Infosys', 5], ['Bharti Airtel', 4.5], ['L&T', 4], ['ITC', 3.5], ['TCS', 3]],
-      news: [['FII ने लगातार तीसरे दिन कैश मार्केट में ख़रीदारी की', 0.6, 'मध्यम', '1 घंटा पहले'], ['बड़े निजी बैंकों के Q2 नतीजे उम्मीद से बेहतर', 0.5, 'ऊँचा', '3 घंटे पहले'],
-        ['IT कंपनियों की गाइडेंस सतर्क, शेयरों पर दबाव', -0.3, 'मध्यम', '5 घंटे पहले'], ['कच्चे तेल के दाम में हल्की तेज़ी', -0.3, 'मध्यम', '6 घंटे पहले'], ['इस हफ़्ते US फ़ेड के बयान पर नज़र', -0.1, 'ऊँचा', 'कल']] },
+      news: [['FIIs buy in the cash market for a third straight day', 0.6, 'medium', '1 hour ago'], ['Large private banks beat Q2 estimates', 0.5, 'high', '3 hours ago'],
+        ['IT companies give cautious guidance, stocks under pressure', -0.3, 'medium', '5 hours ago'], ['Crude oil prices edge higher', -0.3, 'medium', '6 hours ago'], ['Markets watch US Fed commentary this week', -0.1, 'high', 'yesterday']] },
     SENSEX: { base: 83150, dte: 3, ivf: 0.95, seed: 202,
       hv: [['HDFC Bank', 15], ['ICICI Bank', 10], ['Reliance', 10], ['Infosys', 6], ['Bharti Airtel', 5], ['L&T', 4.5], ['ITC', 4], ['TCS', 3.5]],
-      news: [['घरेलू म्यूचुअल फ़ंड में SIP निवेश रिकॉर्ड स्तर पर', 0.5, 'मध्यम', '2 घंटे पहले'], ['बैंकिंग और फ़ाइनेंशियल शेयरों में ख़रीदारी', 0.5, 'ऊँचा', '3 घंटे पहले'],
-        ['ऑटो सेक्टर की बिक्री त्योहारों से पहले मज़बूत', 0.4, 'मध्यम', '4 घंटे पहले'], ['वैश्विक बाज़ारों में मिला-जुला रुख़', -0.1, 'कम', '6 घंटे पहले']] },
+      news: [['Domestic mutual fund SIP inflows hit a record', 0.5, 'medium', '2 hours ago'], ['Buying in banking and financial stocks', 0.5, 'high', '3 hours ago'],
+        ['Auto sales strong ahead of the festive season', 0.4, 'medium', '4 hours ago'], ['Mixed trend in global markets', -0.1, 'low', '6 hours ago']] },
     BANKNIFTY: { base: 57280, dte: 8, ivf: 1.12, seed: 303,
       hv: [['HDFC Bank', 28], ['ICICI Bank', 25], ['SBI', 9], ['Kotak Bank', 8], ['Axis Bank', 8], ['IndusInd Bank', 3.5], ['Federal Bank', 3], ['AU Bank', 2.5]],
-      news: [['बड़े निजी बैंकों के Q2 नतीजे मज़बूत, ब्याज आय में बढ़त', 0.7, 'ऊँचा', '2 घंटे पहले'], ['RBI: सिस्टम में लिक्विडिटी सहज रहने के संकेत', 0.4, 'ऊँचा', '4 घंटे पहले'],
-        ['PSU बैंकों में मुनाफ़ावसूली', -0.3, 'मध्यम', '5 घंटे पहले'], ['अनसिक्योर्ड लोन पर कुछ बैंकों में चिंता बरकरार', -0.4, 'मध्यम', 'कल']] },
+      news: [['Large private banks post strong Q2, net interest income up', 0.7, 'high', '2 hours ago'], ['RBI signals comfortable system liquidity', 0.4, 'high', '4 hours ago'],
+        ['Profit booking in PSU banks', -0.3, 'medium', '5 hours ago'], ['Concerns persist over unsecured loans at some banks', -0.4, 'medium', 'yesterday']] },
   };
   const S = {};
   let vix = 13.4; const vixPrev = 13.9;
@@ -53,25 +53,25 @@ const DemoSource = (() => {
       };
       rows.push({ K, ce: side('CE', ceL, ceC), pe: side('PE', peL, peC) });
     }
-    return { expiry: 'डेमो', dte, lot: APP_CONFIG.LOT_FALLBACK[key], rows };
+    return { expiry: 'Demo', dte, lot: APP_CONFIG.LOT_FALLBACK[key], rows };
   }
   function get(key) {
     const pc = P[key], s1 = S[key].series, prev = s1.filter((x) => x.d === 1), last = s1[s1.length - 1];
     const PC = prev[prev.length - 1].c, price = last.c, chg = ((price - PC) / PC) * 100;
     return {
-      key, candles: s1, price, prevClose: PC, sessionLive: last.m < 374, dayLabels: ['गुरु', 'शुक्र', 'आज'],
+      key, candles: s1, price, prevClose: PC, sessionLive: last.m < 374, dayLabels: ['Thu', 'Fri', 'Today'],
       chain: chainFor(key, price, last.m, chg), vix: { v: vix, prev: vixPrev }, fii: 1184, dii: 926,
       hv: pc.hv.map(([n, w], i) => ({ n, w, c: chg * (0.8 + 0.5 * hrand(i, pc.seed)) + (hrand(i, pc.seed + 1) - 0.5) * 1.2 })),
       news: pc.news.map(([t, s, imp, ago]) => ({ t, s, imp, ago })),
     };
   }
-  function clock() { const m = S.NIFTY.series[S.NIFTY.series.length - 1].m; return { min: m, date: 'DEMO', label: m >= 374 ? 'बाज़ार बंद (डेमो)' : `डेमो समय ${hm(m)} (तेज़)` }; }
+  function clock() { const m = S.NIFTY.series[S.NIFTY.series.length - 1].m; return { min: m, date: 'DEMO', label: m >= 374 ? 'Market closed (demo)' : `Demo time ${hm(m)} (fast)` }; }
   const RES = [
-    ['HDFC Bank', 'Q2 FY27', 'शुद्ध मुनाफ़ा 11% बढ़ा, ब्याज आय उम्मीद से बेहतर (डेमो)', 0.6, '1 दिन पहले'],
-    ['ICICI Bank', 'Q2 FY27', 'मुनाफ़ा 14% ऊपर, एसेट क्वालिटी स्थिर (डेमो)', 0.7, '2 दिन पहले'],
-    ['Infosys', 'Q2 FY27', 'मुनाफ़ा अनुमान के मुताबिक़, पर सालाना गाइडेंस घटाई (डेमो)', -0.3, '2 दिन पहले'],
-    ['Axis Bank', 'Q2 FY27', 'स्लिपेज बढ़ने से मुनाफ़ा अनुमान से कम (डेमो)', -0.5, '3 दिन पहले'],
-    ['Reliance', 'Q2 FY27', 'रिटेल और जियो मज़बूत, O2C कमज़ोर (डेमो)', 0.1, '3 दिन पहले'],
+    ['HDFC Bank', 'Q2 FY27', 'Net profit up 11%, interest income beats estimates (demo)', 0.6, '1 day ago'],
+    ['ICICI Bank', 'Q2 FY27', 'Profit up 14%, asset quality stable (demo)', 0.7, '2 days ago'],
+    ['Infosys', 'Q2 FY27', 'Profit in line, but full-year guidance cut (demo)', -0.3, '2 days ago'],
+    ['Axis Bank', 'Q2 FY27', 'Profit misses as slippages rise (demo)', -0.5, '3 days ago'],
+    ['Reliance', 'Q2 FY27', 'Retail and Jio strong, O2C weak (demo)', 0.1, '3 days ago'],
   ].map(([co, q, t, s, ago]) => ({ co, q, t, s, ago }));
   return { mode: 'demo', init, tick, get, clock, TICK_MS: 2000, results: () => ({ ai: false, items: RES }) };
 })();

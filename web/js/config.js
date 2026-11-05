@@ -35,5 +35,8 @@ window.APP_CONFIG = {
   LOT_FALLBACK: { NIFTY: 65, BANKNIFTY: 30, SENSEX: 20 },
 
   // कितनी देर में डेटा रिफ़्रेश हो (मिलीसेकंड)
-  POLL: { SNAPSHOT_MS: 5000, CANDLES_MS: 30000, NEWS_MS: 600000 },
+  // STREAM: Upstox WebSocket ticks (≈ real-time). If it can't connect, the page falls back to polling.
+  STREAM: true,
+  // RENDER_MS: how often the screen redraws while ticks stream in (lower = snappier, higher = lighter)
+  POLL: { SNAPSHOT_MS: 5000, STREAM_SNAPSHOT_MS: 20000, CANDLES_MS: 60000, NEWS_MS: 600000, RENDER_MS: 150 },
 };

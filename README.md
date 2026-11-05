@@ -1,3 +1,31 @@
+# ✅ फ़ाइनल वर्ज़न — अपलोड चेकलिस्ट
+
+**1. GitHub (Vercel अपने-आप लाइव करेगा):** `web` फ़ोल्डर की ये सारी फ़ाइलें बदलें/डालें:
+- `web/index.html`, `web/style.css`
+- `web/js/`: `analysis.js`, `config.js`, `data-demo.js`, `data-live.js`, `engine.js` (नई), `indicators.js`, `main.js`, `paper.js`, `store.js`, `ui.js`, `voice.js`
+
+**2. Cloudflare Worker (`fno-worker`):** `worker/src/index.js` का पूरा कोड Edit code में पेस्ट करके **Deploy**।
+
+**3. Worker की सेटिंग्स (Settings → Variables and Secrets / Bindings):**
+
+| नाम | टाइप | ज़रूरी? |
+|---|---|---|
+| `UPSTOX_ACCESS_TOKEN` | Secret | ✅ (Upstox Analytics Token, 1 साल चलता है) |
+| `ALLOWED_EMAIL` | Text | ✅ `raiabhinaykumar@gmail.com` |
+| `FIREBASE_API_KEY` | Text | ✅ |
+| `FRONTEND_URL` | Text | ✅ जैसे `https://fno-dashboard-web.vercel.app,https://padhleindia.live` |
+| `KV` | KV binding | ✅ `fno-kv` |
+| `GEMINI_API_KEY` | Secret | वैकल्पिक, मुफ़्त (AI से कुछ भी पूछने के लिए) |
+| `AI` | Workers AI binding | वैकल्पिक, मुफ़्त, बिना key |
+
+**4. Firebase:** Authentication → Authorized domains में अपनी साइट के डोमेन जोड़ें।
+
+**5. जाँच:** बाज़ार खुलने पर साइट में ऊपर **"Live stream"** और इंजन पट्टी में **"tick lag … ms"** दिखना चाहिए। स्ट्रीम न जुड़े तो डैशबोर्ड अपने-आप हर 5 सेकंड वाले polling पर चलता रहेगा।
+
+स्क्रीन English में है, बोलकर जवाब और अलर्ट हिंदी में।
+
+---
+
 # 📊 F&O एनालिटिक्स डैशबोर्ड — सेटअप गाइड
 
 Nifty, Sensex और Bank Nifty के लिए आपका निजी डैशबोर्ड। इसमें ये सब है:
@@ -85,13 +113,22 @@ fno-dashboard/
 4. App बनने पर **API Key** और **API Secret** मिलेंगे → इन्हें Worker के Secrets `UPSTOX_API_KEY` और `UPSTOX_API_SECRET` में डालें → **Deploy**।
 5. Upstox की मौजूदा API फ़ीस और नियम उनकी साइट पर एक बार ज़रूर जाँच लें।
 
-### 4️⃣ Anthropic API key (वैकल्पिक) — 5 मिनट
+### 4️⃣ AI (मुफ़्त) — 5 मिनट, वैकल्पिक
 
-ये ख़बरों को AI से बुलिश/बेयरिश स्कोर देने और वॉइस सवालों के AI जवाब के लिए है। इसके बिना भी डैशबोर्ड चलेगा, बस ख़बरों का स्कोर सरल शब्दों के आधार पर निकलेगा।
+AI से वॉइस/टाइप करके डैशबोर्ड से कुछ भी पूछ सकते हैं, और ख़बरों का सेंटिमेंट बेहतर निकलता है। दोनों तरीक़े मुफ़्त हैं, एक या दोनों लगा सकते हैं:
 
-1. https://console.anthropic.com → **API Keys → Create key**।
-2. थोड़ा क्रेडिट डालें। इस्तेमाल बहुत हल्का है, क्योंकि ख़बरें हर 10 मिनट में एक बार स्कोर होती हैं।
-3. Worker Secret `ANTHROPIC_API_KEY` में डालें → **Deploy**।
+**A. Google Gemini (बेहतर हिंदी, मुफ़्त key):**
+1. https://aistudio.google.com पर Google अकाउंट से लॉगिन करें → **Get API key → Create API key**।
+2. Worker में **Secret** बनाएँ: `GEMINI_API_KEY` = वो key → Deploy।
+3. मुफ़्त प्लान में रोज़ के सवालों की एक सीमा होती है; सीमा पूरी होने पर Worker अपने-आप Cloudflare AI (B) पर चला जाता है।
+
+**B. Cloudflare Workers AI (बिना किसी key के):**
+1. Worker → **Settings → Bindings → Add → Workers AI** → Variable name: `AI` → Save/Deploy।
+2. Cloudflare रोज़ एक मुफ़्त कोटा देता है। ख़बरों का स्कोर पहले इसी से निकलता है ताकि Gemini का कोटा आपके सवालों के लिए बचा रहे।
+
+(पेड Anthropic key `ANTHROPIC_API_KEY` भी चलती है, पर ज़रूरी नहीं।)
+
+**ख़बरें:** किसी key की ज़रूरत नहीं। Worker Google News, ET, Moneycontrol, Mint और Business Standard की मुफ़्त RSS फ़ीड ख़ुद पढ़ता है। ख़बरों वाले पैनल के नीचे दिखता है कि किस स्रोत से कितनी ख़बरें आईं।
 
 ### 5️⃣ `web/js/config.js` भरें — 2 मिनट
 

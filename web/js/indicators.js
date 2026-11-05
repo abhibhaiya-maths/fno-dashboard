@@ -99,16 +99,16 @@ function ind(k, useVol) {
   return { k, c, ema9: ema(c, 9), ema20: ema(c, 20), ema50: ema(c, 50), vwap: vwap(k, useVol), bb: bbands(c), rsi: rsi(c), macd: macd(c), atr: atr(k), adx: adx(k), st: supertrend(k) };
 }
 function pattern(k) {
-  if (k.length < 2) return ['कोई ख़ास पैटर्न नहीं', 0];
+  if (k.length < 2) return ['No notable pattern', 0];
   const a = k[k.length - 2], b = k[k.length - 1];
   const body = Math.abs(b.c - b.o), rg = b.h - b.l || 1e-9, up = b.h - Math.max(b.o, b.c), dn = Math.min(b.o, b.c) - b.l;
-  if (a.c < a.o && b.c > b.o && b.c >= a.o && b.o <= a.c) return ['बुलिश एंगल्फ़िंग', 1];
-  if (a.c > a.o && b.c < b.o && b.o >= a.c && b.c <= a.o) return ['बेयरिश एंगल्फ़िंग', -1];
-  if (body / rg < 0.1) return ['डोजी (अनिर्णय)', 0];
-  if (dn >= 2 * body && up <= body * 0.5) return ['हैमर', 1];
-  if (up >= 2 * body && dn <= body * 0.5) return ['शूटिंग स्टार', -1];
-  if (body / rg > 0.7) return [b.c > b.o ? 'मज़बूत हरी कैंडल' : 'मज़बूत लाल कैंडल', b.c > b.o ? 1 : -1];
-  return ['कोई ख़ास पैटर्न नहीं', 0];
+  if (a.c < a.o && b.c > b.o && b.c >= a.o && b.o <= a.c) return ['Bullish engulfing', 1];
+  if (a.c > a.o && b.c < b.o && b.o >= a.c && b.c <= a.o) return ['Bearish engulfing', -1];
+  if (body / rg < 0.1) return ['Doji (indecision)', 0];
+  if (dn >= 2 * body && up <= body * 0.5) return ['Hammer', 1];
+  if (up >= 2 * body && dn <= body * 0.5) return ['Shooting star', -1];
+  if (body / rg > 0.7) return [b.c > b.o ? 'Strong green candle' : 'Strong red candle', b.c > b.o ? 1 : -1];
+  return ['No notable pattern', 0];
 }
 
 /* Black-Scholes (भाव और ग्रीक्स) */

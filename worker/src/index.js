@@ -13,7 +13,7 @@
  * ज़रूरी सेटिंग्स (Cloudflare Worker → Settings → Variables and Secrets):
  *  Secrets:   UPSTOX_ACCESS_TOKEN (Upstox Analytics Token, आसान तरीक़ा, रोज़ लॉगिन नहीं)
  *             या फिर UPSTOX_API_KEY + UPSTOX_API_SECRET (OAuth, रोज़ लॉगिन)
- *             ANTHROPIC_API_KEY (वैकल्पिक)
+ *             GEMINI_API_KEY (मुफ़्त, वैकल्पिक) या Workers AI binding "AI" (बिना key) या ANTHROPIC_API_KEY (पेड)
  *  Variables: FRONTEND_URL, ALLOWED_EMAIL, FIREBASE_API_KEY, UPSTOX_REDIRECT_URI (सिर्फ़ OAuth में), CLAUDE_MODEL (वैकल्पिक)
  *  KV binding: KV
  *
@@ -51,6 +51,10 @@ const FEEDS = [
   ['Mint Markets', 'https://www.livemint.com/rss/markets'],
   ['Business Standard', 'https://www.business-standard.com/rss/markets-106.rss'],
   ['Moneycontrol Results', 'https://www.moneycontrol.com/rss/results.xml'],
+  // Google News RSS: मुफ़्त, बिना key, सबसे भरोसेमंद
+  ['Google News', 'https://news.google.com/rss/search?q=(Nifty+OR+Sensex+OR+%22stock+market%22)+when:2d&hl=en-IN&gl=IN&ceid=IN:en'],
+  ['Google News', 'https://news.google.com/rss/search?q=(%22Bank+Nifty%22+OR+RBI+OR+%22bank+shares%22)+when:2d&hl=en-IN&gl=IN&ceid=IN:en'],
+  ['Google News', 'https://news.google.com/rss/search?q=(%22Q2+results%22+OR+%22Q3+results%22+OR+%22quarterly+results%22)+profit+when:3d&hl=en-IN&gl=IN&ceid=IN:en'],
   ['Business Standard Results', 'https://www.business-standard.com/rss/companies/results-10301.rss'],
 ];
 // तिमाही नतीजों वाली ख़बरें पहचानने के लिए
@@ -96,19 +100,19 @@ async function sha(s) {
 /* ---------------- Firebase लॉगिन जाँच ---------------- */
 async function verifyUser(req, env, tokenOverride) {
   const tok = tokenOverride || (req.headers.get('Authorization') || '').replace(/^Bearer\s+/i, '');
-  if (!tok) throw new HttpError(401, 'लॉगिन ज़रूरी है', 'NO_AUTH');
+  if (!tok) throw new HttpError(401, 'Login required', 'NO_AUTH');
   const ck = 'auth:' + (await sha(tok));
   const cached = memGet(ck);
   if (cached) return cached;
-  if (!env.FIREBASE_API_KEY) throw new HttpError(500, 'Worker में FIREBASE_API_KEY सेट नहीं है', 'CONFIG');
+  if (!env.FIREBASE_API_KEY) throw new HttpError(500, 'FIREBASE_API_KEY is not set in the Worker', 'CONFIG');
   const r = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=${env.FIREBASE_API_KEY}`, {
     method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ idToken: tok }),
   });
-  if (!r.ok) throw new HttpError(401, 'लॉगिन टोकन अमान्य या पुराना है, दोबारा लॉगिन करें', 'BAD_AUTH');
+  if (!r.ok) throw new HttpError(401, 'Login token is invalid or expired. Log in again.', 'BAD_AUTH');
   const j = await r.json();
   const email = (j.users && j.users[0] && j.users[0].email || '').toLowerCase();
   const allowed = (env.ALLOWED_EMAIL || '').toLowerCase().split(',').map((s) => s.trim()).filter(Boolean);
-  if (!email || !allowed.includes(email)) throw new HttpError(403, 'इस ईमेल को अनुमति नहीं है', 'FORBIDDEN');
+  if (!email || !allowed.includes(email)) throw new HttpError(403, 'This email is not allowed', 'FORBIDDEN');
   memSet(ck, email, 5 * 60e3);
   return email;
 }
@@ -120,7 +124,7 @@ async function upstoxToken(env) {
   let t = memGet('upstox_token');
   if (t) return t;
   t = await env.KV.get('upstox_token');
-  if (!t) throw new HttpError(428, 'Upstox से कनेक्ट करें (रोज़ सुबह एक बार)', 'UPSTOX_LOGIN');
+  if (!t) throw new HttpError(428, 'Connect Upstox (once each morning)', 'UPSTOX_LOGIN');
   memSet('upstox_token', t, 5 * 60e3);
   return t;
 }
@@ -129,12 +133,12 @@ async function up(env, path) {
   const r = await fetch(UP + path, { headers: { Accept: 'application/json', Authorization: 'Bearer ' + t } });
   const j = await r.json().catch(() => ({}));
   if (r.status === 401 && env.UPSTOX_ACCESS_TOKEN) {
-    throw new HttpError(502, 'Upstox Analytics Token अमान्य या एक्सपायर है। Upstox → My Apps → Analytics से नया टोकन लेकर UPSTOX_ACCESS_TOKEN अपडेट करें', 'UPSTOX_TOKEN_BAD');
+    throw new HttpError(502, 'Upstox Analytics Token is invalid or expired. Create a new one in Upstox → My Apps → Analytics and update UPSTOX_ACCESS_TOKEN.', 'UPSTOX_TOKEN_BAD');
   }
   if (r.status === 401) {
     MEM.delete('upstox_token');
     await env.KV.delete('upstox_token');
-    throw new HttpError(428, 'Upstox टोकन की मियाद ख़त्म, दोबारा कनेक्ट करें', 'UPSTOX_LOGIN');
+    throw new HttpError(428, 'Upstox token expired. Connect again.', 'UPSTOX_LOGIN');
   }
   if (!r.ok || j.status === 'error') {
     const m = (j.errors && j.errors[0] && (j.errors[0].message || j.errors[0].errorCode)) || ('HTTP ' + r.status);
@@ -175,9 +179,9 @@ async function authCallback(req, env, url) {
   const front = (env.FRONTEND_URL || '').split(',')[0].trim().replace(/\/$/, '');
   const back = (q) => Response.redirect(front + '/?' + q, 302);
   const code = url.searchParams.get('code'), state = url.searchParams.get('state');
-  if (!code || !state) return back('upstox=error&msg=' + enc('लॉगिन रद्द हुआ'));
+  if (!code || !state) return back('upstox=error&msg=' + enc('Login cancelled'));
   const ok = await env.KV.get('oauth_state:' + state);
-  if (!ok) return back('upstox=error&msg=' + enc('लॉगिन सत्र पुराना हो गया, फिर से कोशिश करें'));
+  if (!ok) return back('upstox=error&msg=' + enc('Login session expired, try again'));
   await env.KV.delete('oauth_state:' + state);
   const body = new URLSearchParams({
     code, client_id: env.UPSTOX_API_KEY, client_secret: env.UPSTOX_API_SECRET,
@@ -187,7 +191,7 @@ async function authCallback(req, env, url) {
     method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded', Accept: 'application/json' }, body,
   });
   const j = await r.json().catch(() => ({}));
-  if (!r.ok || !j.access_token) return back('upstox=error&msg=' + enc('टोकन नहीं मिला: ' + ((j.errors && j.errors[0] && j.errors[0].message) || r.status)));
+  if (!r.ok || !j.access_token) return back('upstox=error&msg=' + enc('No token received: ' + ((j.errors && j.errors[0] && j.errors[0].message) || r.status)));
   await env.KV.put('upstox_token', j.access_token, { expiration: nextTokenExpiry() });
   memSet('upstox_token', j.access_token, 5 * 60e3);
   return back('upstox=connected');
@@ -219,7 +223,7 @@ function pickExpiry(c) {
 function slimSide(o) {
   const m = (o && o.market_data) || {}, g = (o && o.option_greeks) || {};
   return {
-    ltp: m.ltp || 0, bid: m.bid_price || 0, ask: m.ask_price || 0, oi: m.oi || 0, poi: m.prev_oi || 0, vol: m.volume || 0,
+    key: (o && o.instrument_key) || null, ltp: m.ltp || 0, bid: m.bid_price || 0, ask: m.ask_price || 0, oi: m.oi || 0, poi: m.prev_oi || 0, vol: m.volume || 0,
     iv: g.iv ? g.iv / 100 : 0, de: g.delta || 0, ga: g.gamma || 0, th: g.theta || 0, ve: g.vega || 0,
   };
 }
@@ -248,8 +252,9 @@ async function quotes(env) {
   for (const k in INDEX) indices[k] = byKey[INDEX[k].key] || null;
   const v = byKey[VIX_KEY];
   const hv = {};
-  for (const k in HV) hv[k] = HV[k].map(([n, isin, w]) => ({ n, w, c: byKey['NSE_EQ|' + isin] ? byKey['NSE_EQ|' + isin].chg : null }));
-  return { indices, vix: v ? { v: v.price, prev: v.prevClose } : null, hv };
+  for (const k in HV) hv[k] = HV[k].map(([n, isin, w]) => ({ n, w, k: 'NSE_EQ|' + isin, c: byKey['NSE_EQ|' + isin] ? byKey['NSE_EQ|' + isin].chg : null }));
+  const ikeys = { vix: VIX_KEY }; for (const k in INDEX) ikeys[k] = INDEX[k].key;
+  return { indices, vix: v ? { v: v.price, prev: v.prevClose } : null, hv, keys: ikeys };
 }
 
 async function snapshot(env) {
@@ -300,15 +305,50 @@ async function candles(env, idx) {
 }
 
 /* ---------------- AI ---------------- */
-async function claude(env, prompt, maxTokens) {
+// ===== AI: मुफ़्त विकल्प पहले =====
+// 1) GEMINI_API_KEY  -> Google Gemini (मुफ़्त key, aistudio.google.com)
+// 2) AI binding      -> Cloudflare Workers AI (कोई key नहीं, रोज़ मुफ़्त कोटा)
+// 3) ANTHROPIC_API_KEY -> Claude (पेड, वैकल्पिक)
+const hasAI = (env) => !!(env.GEMINI_API_KEY || env.AI || env.ANTHROPIC_API_KEY);
+async function gemini(env, prompt, maxTokens) {
+  const model = env.GEMINI_MODEL || 'gemini-2.5-flash';
+  const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${env.GEMINI_API_KEY}`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: prompt }] }], generationConfig: { maxOutputTokens: maxTokens || 800, temperature: 0.3, thinkingConfig: { thinkingBudget: 0 } } }),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error('Gemini: ' + ((j.error && j.error.message) || r.status));
+  const parts = (j.candidates && j.candidates[0] && j.candidates[0].content && j.candidates[0].content.parts) || [];
+  const txt = parts.map((p) => p.text || '').join('');
+  if (!txt) throw new Error('Gemini: empty reply');
+  return txt;
+}
+async function workersAI(env, prompt, maxTokens) {
+  const out = await env.AI.run(env.CF_AI_MODEL || '@cf/meta/llama-3.1-8b-instruct', { messages: [{ role: 'user', content: prompt }], max_tokens: maxTokens || 800 });
+  const txt = (out && (out.response || (out.result && out.result.response))) || '';
+  if (!txt) throw new Error('Workers AI: empty reply');
+  return typeof txt === 'string' ? txt : JSON.stringify(txt);
+}
+async function anthropic(env, prompt, maxTokens) {
   const r = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: { 'x-api-key': env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
     body: JSON.stringify({ model: env.CLAUDE_MODEL || 'claude-haiku-5-5', max_tokens: maxTokens || 800, messages: [{ role: 'user', content: prompt }] }),
   });
   const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error('AI: ' + ((j.error && j.error.message) || r.status));
+  if (!r.ok) throw new Error('Claude: ' + ((j.error && j.error.message) || r.status));
   return (j.content || []).map((c) => c.text || '').join('');
+}
+// purpose 'chat' = यूज़र के सवाल (बेहतर हिंदी: Gemini पहले), 'bulk' = ख़बरों का स्कोर (कोटा बचाने को Workers AI पहले)
+async function aiText(env, prompt, maxTokens, purpose) {
+  const order = purpose === 'bulk' ? ['AI', 'GEMINI_API_KEY', 'ANTHROPIC_API_KEY'] : ['GEMINI_API_KEY', 'AI', 'ANTHROPIC_API_KEY'];
+  const fn = { GEMINI_API_KEY: gemini, AI: workersAI, ANTHROPIC_API_KEY: anthropic };
+  let last = new Error('No AI configured');
+  for (const k of order) {
+    if (!env[k]) continue;
+    try { return await fn[k](env, prompt, maxTokens); } catch (e) { last = e; }
+  }
+  throw last;
 }
 
 /* ---------------- न्यूज़ ---------------- */
@@ -327,7 +367,9 @@ async function fetchFeed([src, url]) {
     return items.map((it) => {
       const g = (tag) => { const m = it.match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)</${tag}>`, 'i')); return m ? xmlText(m[1]) : ''; };
       const ts = Date.parse(g('pubDate')) || Date.now();
-      return { t: g('title'), link: g('link'), ts, src };
+      let t = g('title'), s2 = src;
+      if (src === 'Google News') { const m = t.match(/^(.*)\s+-\s+([^-]{2,50})$/); if (m) { t = m[1]; s2 = m[2].trim(); } }
+      return { t, link: g('link'), ts, src: s2, feed: src };
     }).filter((i) => i.t);
   } catch { return []; } finally { clearTimeout(t); }
 }
@@ -344,7 +386,10 @@ async function allFeeds(env) {
   const seen = new Set();
   const items = all.filter((i) => { const k = i.t.toLowerCase().slice(0, 80); if (seen.has(k)) return false; seen.add(k); return true; })
     .sort((a, b) => b.ts - a.ts).slice(0, 200);
-  const res = { ts: Date.now(), items };
+  const sources = {};
+  all.forEach((i) => { sources[i.feed] = (sources[i.feed] || 0) + 1; });
+  FEEDS.forEach(([n]) => { if (!(n in sources)) sources[n] = 0; });
+  const res = { ts: Date.now(), items, sources };
   await env.KV.put(ck, JSON.stringify(res), { expirationTtl: 3600 });
   memSet(ck, res, 8 * 60e3);
   return res;
@@ -354,27 +399,27 @@ function parseAIArray(out) { return JSON.parse(out.slice(out.indexOf('['), out.l
 async function news(env, idx) {
   const ck = 'news:' + idx;
   const c = memGet(ck) || (await env.KV.get(ck, 'json'));
-  if (c && c.ts > Date.now() - 10 * 60e3) { memSet(ck, c, 10 * 60e3); return c; }
+  if (c && c.ts > Date.now() - 20 * 60e3) { memSet(ck, c, 10 * 60e3); return c; }
   const feed = await allFeeds(env);
   const items = feed.items.filter((i) => i.ts > Date.now() - 36 * 3600e3 && NEWS_KW[idx].test(i.t) && !RESULT_RE.test(i.t)).slice(0, 12);
-  let scored = items.map((i) => ({ ...i, s: lexScore(i.t), imp: 'मध्यम', hi: '' }));
+  let scored = items.map((i) => ({ ...i, s: lexScore(i.t), imp: 'medium' }));
   let ai = false;
-  if (env.ANTHROPIC_API_KEY && items.length) {
+  if (hasAI(env) && items.length) {
     try {
       const name = { NIFTY: 'Nifty 50', SENSEX: 'Sensex', BANKNIFTY: 'Bank Nifty' }[idx];
       const prompt = `You are a markets analyst for Indian index options traders. For each headline below, rate its likely short-term (today/this week) impact on the ${name} index.
-Return ONLY a JSON array, one object per headline, in the same order: {"i": index, "s": score from -1 (very bearish) to 1 (very bullish), "imp": "ऊँचा" | "मध्यम" | "कम", "hi": short Hindi translation of the headline (max 14 words)}.
+Return ONLY a JSON array, one object per headline, in the same order: {"i": index, "s": score from -1 (very bearish) to 1 (very bullish), "imp": "high" | "medium" | "low"}.
 Headlines:
 ${items.map((x, i) => `${i}. ${x.t}`).join('\n')}`;
-      const arr = parseAIArray(await claude(env, prompt, 1500));
+      const arr = parseAIArray(await aiText(env, prompt, 1500, 'bulk'));
       scored = items.map((x, i) => {
         const a = arr.find((z) => z.i === i) || {};
-        return { ...x, s: typeof a.s === 'number' ? Math.max(-1, Math.min(1, a.s)) : lexScore(x.t), imp: a.imp || 'मध्यम', hi: a.hi || '' };
+        return { ...x, s: typeof a.s === 'number' ? Math.max(-1, Math.min(1, a.s)) : lexScore(x.t), imp: a.imp || 'medium' };
       });
       ai = true;
     } catch (e) { /* AI फ़ेल हो तो शब्दों वाला सरल स्कोर */ }
   }
-  const res = { ts: Date.now(), ai, items: scored };
+  const res = { ts: Date.now(), ai, items: scored, sources: feed.sources };
   await env.KV.put(ck, JSON.stringify(res), { expirationTtl: 3600 });
   memSet(ck, res, 10 * 60e3);
   return res;
@@ -384,21 +429,21 @@ ${items.map((x, i) => `${i}. ${x.t}`).join('\n')}`;
 async function results(env) {
   const ck = 'results:v1';
   const c = memGet(ck) || (await env.KV.get(ck, 'json'));
-  if (c && c.ts > Date.now() - 15 * 60e3) { memSet(ck, c, 15 * 60e3); return c; }
+  if (c && c.ts > Date.now() - 30 * 60e3) { memSet(ck, c, 15 * 60e3); return c; }
   const feed = await allFeeds(env);
   const items = feed.items.filter((i) => i.ts > Date.now() - 72 * 3600e3 && RESULT_RE.test(i.t)).slice(0, 16);
-  let out = items.map((i) => ({ ...i, co: '', q: (i.t.match(/\bQ[1-4](\s?FY\s?\d{2,4})?/i) || [''])[0].toUpperCase(), s: lexScore(i.t), hi: '' }));
+  let out = items.map((i) => ({ ...i, co: '', q: (i.t.match(/\bQ[1-4](\s?FY\s?\d{2,4})?/i) || [''])[0].toUpperCase(), s: lexScore(i.t) }));
   let ai = false;
-  if (env.ANTHROPIC_API_KEY && items.length) {
+  if (hasAI(env) && items.length) {
     try {
       const prompt = `You read Indian company quarterly-results headlines for an index options trader.
-Return ONLY a JSON array, one object per headline, same order: {"i": index, "co": company name (short, e.g. "HDFC Bank"), "q": quarter like "Q2 FY27" or "" if unknown, "s": -1 (clearly weak / missed) to 1 (clearly strong / beat), "hi": Hindi summary of the result (max 14 words)}.
+Return ONLY a JSON array, one object per headline, same order: {"i": index, "co": company name (short, e.g. "HDFC Bank"), "q": quarter like "Q2 FY27" or "" if unknown, "s": -1 (clearly weak / missed) to 1 (clearly strong / beat)}.
 Headlines:
 ${items.map((x, i) => `${i}. ${x.t}`).join('\n')}`;
-      const arr = parseAIArray(await claude(env, prompt, 1800));
+      const arr = parseAIArray(await aiText(env, prompt, 1800, 'bulk'));
       out = out.map((x, i) => {
         const a = arr.find((z) => z.i === i) || {};
-        return { ...x, co: a.co || '', q: a.q || x.q, s: typeof a.s === 'number' ? Math.max(-1, Math.min(1, a.s)) : x.s, hi: a.hi || '' };
+        return { ...x, co: a.co || '', q: a.q || x.q, s: typeof a.s === 'number' ? Math.max(-1, Math.min(1, a.s)) : x.s };
       });
       ai = true;
     } catch (e) { /* सरल स्कोर */ }
@@ -410,20 +455,28 @@ ${items.map((x, i) => `${i}. ${x.t}`).join('\n')}`;
 }
 
 async function ask(env, body) {
-  if (!env.ANTHROPIC_API_KEY) throw new HttpError(400, 'AI key सेट नहीं है', 'NO_AI');
-  const q = String(body.question || '').slice(0, 300);
-  const ctx = JSON.stringify(body.context || {}).slice(0, 6000);
-  const prompt = `तुम एक अनुभवी भारतीय F&O (इंडेक्स ऑप्शन) एनालिस्ट हो। यूज़र अपने निजी डैशबोर्ड से पूछ रहा है। नीचे डैशबोर्ड का अभी का डेटा JSON में है (इंडिकेटर्स, ऑप्शन चेन, लेवल, स्कोर)।
-यूज़र का सवाल: "${q}"
-डेटा: ${ctx}
+  if (!hasAI(env)) throw new HttpError(400, 'AI is off: add GEMINI_API_KEY or a Workers AI binding (AI) in the Worker', 'NO_AI');
+  const q = String(body.question || '').slice(0, 500);
+  const ctx = JSON.stringify(body.context || {}).slice(0, 24000);
+  const hist = (Array.isArray(body.history) ? body.history : []).slice(-4)
+    .map((h) => `User: ${String(h.q || '').slice(0, 300)}\nYou: ${String(h.a || '').slice(0, 600)}`).join('\n\n');
+  const prompt = `You are an experienced Indian F&O (index options) analyst built into the user's private trading dashboard.
+Below is everything the dashboard is showing right now, as JSON: all three indices, the selected index's 20 signals, indicators, the last 12 candles, pivot/CPR/Fibonacci/volume-profile levels, the option chain around ATM, VIX/FII/heavyweights, the 30-minute projection, the trade setup, alerts, news, quarterly results and the user's open paper positions.
+${hist ? `\nEarlier conversation (for follow-ups):\n${hist}\n` : ''}
+User's question (may be Hindi, Hinglish or English): "${q}"
+Data: ${ctx}
 
-नियम:
-- सरल हिंदी में 4 से 6 छोटे वाक्य, बोलकर सुनाने लायक़ (कोई मार्कडाउन, बुलेट या इमोजी नहीं)।
-- सिर्फ़ ऊपर के डेटा पर आधारित बात करो, अपनी तरफ़ से कोई नया आँकड़ा मत बनाओ।
-- पहले बताओ कि संकेत उसकी दिशा के पक्ष में हैं या ख़िलाफ़, फिर 2-3 सबसे अहम कारण, फिर स्टॉप-लॉस और सबसे बड़ा जोखिम।
-- कभी गारंटी मत दो। ये संभावना है, फ़ैसला यूज़र का है।`;
-  const answer = await claude(env, prompt, 500);
-  return { answer: answer.trim() };
+Rules:
+- Whatever the question, answer it directly from this data with the exact numbers. Do simple arithmetic from the data if needed.
+- Use only the data above. Never invent prices, figures or news. If the answer is not in the data, say the dashboard doesn't have it.
+- If marketOpenNow is false, say this is from the last session.
+- For call/put or hold/exit questions: say whether signals favour or oppose it, the 2-3 most important reasons, the stop-loss and the biggest risk.
+- Never promise an outcome. It is a probability; the final decision is the user's.
+- Return ONLY JSON: {"en": "answer in clear English, 3-7 short sentences, no markdown or emoji", "hi": "the same answer in simple spoken Hindi (Devanagari), for text-to-speech"}`;
+  const raw = await aiText(env, prompt, 1100, 'chat');
+  let en = raw.trim(), hi = '';
+  try { const j = JSON.parse(raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1)); en = String(j.en || '').trim() || en; hi = String(j.hi || '').trim(); } catch (e) { /* not JSON: show as-is */ }
+  return { answer: en, speak: hi || en };
 }
 
 /* ---------------- रूटर ---------------- */
@@ -432,23 +485,30 @@ async function route(req, env, url) {
   if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: corsHeaders(req, env) });
   if (p === '/auth/callback') return authCallback(req, env, url);
   if (p === '/auth/login') return authLogin(req, env, url);
-  if (p === '/' || p === '/health') return json({ ok: true, name: 'F&O डैशबोर्ड Worker' }, 200, req, env);
+  if (p === '/' || p === '/health') return json({ ok: true, name: 'F&O Terminal Worker' }, 200, req, env);
 
   const email = await verifyUser(req, env);
   const idx = (url.searchParams.get('index') || 'NIFTY').toUpperCase();
-  if (!['/api/status', '/api/ask', '/api/snapshot', '/api/results'].includes(p) && !INDEX[idx]) throw new HttpError(400, 'ग़लत इंडेक्स');
+  if (!['/api/status', '/api/ask', '/api/snapshot', '/api/results', '/api/feed-url'].includes(p) && !INDEX[idx]) throw new HttpError(400, 'Unknown index');
 
   switch (p) {
     case '/api/status': {
       const t = env.UPSTOX_ACCESS_TOKEN || (await env.KV.get('upstox_token'));
-      return json({ email, upstox: !!t, ai: !!env.ANTHROPIC_API_KEY, tokenMode: env.UPSTOX_ACCESS_TOKEN ? 'analytics' : 'oauth' }, 200, req, env);
+      return json({ email, upstox: !!t, ai: hasAI(env), aiVia: env.GEMINI_API_KEY ? 'Gemini' : env.AI ? 'Workers AI' : env.ANTHROPIC_API_KEY ? 'Claude' : null, tokenMode: env.UPSTOX_ACCESS_TOKEN ? 'analytics' : 'oauth' }, 200, req, env);
     }
     case '/api/snapshot': return json(await snapshot(env), 200, req, env);
     case '/api/candles': return json(await candles(env, idx), 200, req, env);
+    case '/api/feed-url': {
+      // Upstox लाइव WebSocket के लिए एक बार इस्तेमाल होने वाला URL (टोकन Worker में ही रहता है)
+      const d = await up(env, '/v3/feed/market-data-feed/authorize');
+      const url = d && (d.authorizedRedirectUri || d.authorized_redirect_uri);
+      if (!url) throw new HttpError(502, 'Upstox did not return a live-feed URL', 'FEED_URL');
+      return json({ url }, 200, req, env);
+    }
     case '/api/news': return json(await news(env, idx), 200, req, env);
     case '/api/results': return json(await results(env), 200, req, env);
     case '/api/ask': {
-      if (req.method !== 'POST') throw new HttpError(405, 'POST चाहिए');
+      if (req.method !== 'POST') throw new HttpError(405, 'POST required');
       return json(await ask(env, await req.json()), 200, req, env);
     }
     case '/api/upstox/logout': {
@@ -456,7 +516,7 @@ async function route(req, env, url) {
       return json({ ok: true }, 200, req, env);
     }
   }
-  throw new HttpError(404, 'रास्ता नहीं मिला');
+  throw new HttpError(404, 'Not found');
 }
 
 export default {
