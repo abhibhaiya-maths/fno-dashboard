@@ -455,3 +455,8 @@ footer{color:var(--dim);font-size:11.5px;text-align:center;padding:22px 20px 180
 .slv span.act{border-color:var(--put)}.slv small{font-size:11px;color:var(--muted)}
 .slv input{width:84px;background:transparent;border:0;border-bottom:1px solid var(--line2);color:var(--text);font-size:14px;padding:1px 0}
 .ptog select{background:var(--inset);border:1px solid var(--line2);color:var(--text);border-radius:6px;padding:2px 4px;font-size:12.5px}
+.hz-basis{font-size:12.5px;margin-bottom:8px;color:var(--text)}.hz-basis b{color:var(--cyan)}
+.hz-c{cursor:pointer;transition:border-color .15s,box-shadow .15s}
+.hz-c:hover{border-color:var(--line2)}
+.hz-c:focus-visible{outline:2px solid var(--cyan);outline-offset:2px}
+.hz-c.sel{border-color:var(--cyan);box-shadow:0 0 0 1px var(--cyan),0 0 18px rgba(0,229,255,.18);background:rgba(0,229,255,.05)}

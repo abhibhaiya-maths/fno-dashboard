@@ -66,7 +66,7 @@ function renderControls() {
   $('ovChips').innerHTML = Object.keys(OV).map((k) => `<button class="chip ${OV[k] ? 'on' : ''}" onclick="togOV('${k}')" aria-pressed="${OV[k]}"><span class="sw" style="background:${OVC[k]}"></span>${k === 'vwap' && !a.hasVol ? 'TWAP' : k === 'vp' && !a.hasVol ? 'TPO profile' : OVL[k]}</button>`).join('');
   $('subBtns').innerHTML = [['rsi', 'RSI'], ['macd', 'MACD'], ['adx', 'ADX']].map(([k, l]) => `<button class="btn ${k === sub ? 'on' : ''}" onclick="setSub('${k}')">${l}</button>`).join('');
   $('chartTitle').textContent = `${a.cf.label} · ${TFL[tf]} chart`;
-  $('tabs').innerHTML = [['chain', a.cf.opt ? 'Option chain' : 'Futures & volatility'], ['mood', 'Market mood'], ['sig', `All ${a.sigs.length + (a.short ? a.short.sigs.length : 0) + (a.long ? a.long.sigs.length : 0)} signals`]].map(([k, l]) => `<button class="btn ${k === tab ? 'on' : ''}" onclick="setTab('${k}')">${l}</button>`).join('');
+  $('tabs').innerHTML = [['chain', a.cf.opt ? 'Option chain' : 'Futures & volatility'], ['mood', 'Market mood'], ['sig', `All ${a.intra.sigs.length + (a.short ? a.short.sigs.length : 0) + (a.long ? a.long.sigs.length : 0)} signals`]].map(([k, l]) => `<button class="btn ${k === tab ? 'on' : ''}" onclick="setTab('${k}')">${l}</button>`).join('');
   $('newsTabs').innerHTML = [['news', a.cf.core ? 'News' : 'Company news'], ['results', 'Results'], ['official', 'Official']].map(([k, l]) => `<button class="btn ${k === newsTab ? 'on' : ''}" onclick="setNewsTab('${k}')">${l}</button>`).join('');
   const cf = a.cf;
   $('qchips').innerHTML = (cf.opt ? [`Should I buy ${cf.label} ${a.ch.atm} CE?`, `Should I buy ${cf.label} ${a.ch.atm} PE?`] : [`Is ${cf.label} bullish or bearish now?`, `Where is the stop-loss for ${cf.label}?`]).concat([`How far did ${cf.label} move today?`, 'Hold or exit my position?'])
@@ -88,17 +88,18 @@ function gaugeSVG(s) {
 }
 /* ---------- Three horizons: Short (1m) | Intraday (5m) | Long run (daily) ---------- */
 function hzCard(a, key, title, sub, h, horizon) {
-  if (!h) return `<div class="hz-c na"><div class="hz-t">${title}<small>${sub}</small></div><div class="hz-d">–</div><div class="hz-r mut">${key === 'long' ? 'Daily history loading' : 'Needs more candles'}</div></div>`;
+  const sel = HZ === key, on = `role="button" tabindex="0" aria-pressed="${sel}" onclick="setHz('${key}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();setHz('${key}')}"`;
+  if (!h) return `<div class="hz-c na${sel ? ' sel' : ''}" ${on}><div class="hz-t">${title}<small>${sub}</small></div><div class="hz-d">–</div><div class="hz-r mut">${key === 'long' ? 'Daily history loading' : 'Needs more candles'}</div></div>`;
   const d = h.dir === 'CE' ? 'ce' : h.dir === 'PE' ? 'pe' : 'wait';
   const why = h.dir ? (h.reasons[0] ? h.reasons.slice(0, 2).map((x) => x.n.replace(/\s*\(.*?\)/, '')).join(', ') : '') : (h.gate || 'Mixed signals');
-  return `<div class="hz-c ${d}" title="${esc(horizon)}"><div class="hz-t">${title}<small>${sub}</small></div>
+  return `<div class="hz-c ${d}${sel ? ' sel' : ''}" ${on} title="Use the ${title} engine for signals"><div class="hz-t">${title}<small>${sub}</small></div>
     <div class="hz-d">${dirTxt(a, d)}${h.strength === 'strong' ? '<span class="hz-s">strong</span>' : ''}</div>
     <div class="hz-bar"><i style="width:${h.score}%"></i></div>
     <div class="hz-n"><span>${h.score}</span><span>${h.dir === 'PE' ? h.dn : h.dir === 'CE' ? h.up : Math.max(h.up, h.dn)}/${h.coreN} core</span></div>
     <div class="hz-r">${esc(why)}</div><div class="hz-h">${esc(horizon)}</div></div>`;
 }
 function hzVerdict(a) {
-  const S = a.short && a.short.dir, I = a.dir, L = a.long && a.long.dir, nm = (x) => (x === 'CE' ? (a.cf.opt ? 'CALL' : 'up') : a.cf.opt ? 'PUT' : 'down');
+  const S = a.short && a.short.dir, I = a.intra.dir, L = a.long && a.long.dir, nm = (x) => (x === 'CE' ? (a.cf.opt ? 'CALL' : 'up') : a.cf.opt ? 'PUT' : 'down');
   if (S && I && L && S === I && I === L) return ['al', `All three horizons point ${nm(I)}: the highest-conviction setup.`];
   if (S && I && S === I) return ['ok', `Short and intraday agree on ${nm(I)}.${L && L !== I ? ` The daily trend is the other way: trade small and book quickly.` : ''}`];
   if (I && S && S !== I) return ['wr', `Short-term ${S === 'CE' ? 'bounce' : 'pullback'} against the intraday ${nm(I)} trend. For a fresh entry, wait for the 1-minute to turn back to ${nm(I)}. If you already hold ${nm(S === 'CE' ? 'PE' : 'CE')}, tighten the stop.`];
@@ -108,9 +109,11 @@ function hzVerdict(a) {
 }
 function renderHorizons() {
   const a = A[cur], box = $('hz'); if (!box) return;
-  const intra = { score: a.score, dir: a.dir, gate: a.gate, strength: a.dir ? signalFor(a).strength : null, up: a.coreUp, dn: a.coreDn, coreN: a.coreN, reasons: a.dir ? signalFor(a).reasons : [] };
-  const v = hzVerdict(a);
-  box.innerHTML = `<div class="hz-row">${hzCard(a, 'short', 'Short', '1-minute', a.short, 'Next 5–15 min')}${hzCard(a, 'intra', 'Intraday', '5-minute', intra, 'Next 30–90 min')}${hzCard(a, 'long', 'Long run', 'daily', a.long, 'Next 3–10 sessions')}</div><div class="hz-v ${v[0]}">${esc(v[1])}</div>`;
+  const I = a.intra, ip = I.sigs.filter((x) => x.w > 0 && x.s * (I.dir === 'CE' ? 1 : -1) > 0).sort((x, y) => y.w - x.w);
+  const intra = { score: I.score, dir: I.dir, gate: I.gate, strength: I.dir ? (a.hz === 'intra' ? signalFor(a).strength : null) : null, up: I.coreUp, dn: I.coreDn, coreN: I.coreN, reasons: I.dir ? ip.slice(0, 3) : [] };
+  const v = hzVerdict(a), info = HZ_INFO[a.hz];
+  const fb = a.hzWanted !== a.hz ? ` (${HZ_INFO[a.hzWanted].name} needs more data, so Intraday is used for now)` : '';
+  box.innerHTML = `<div class="hz-basis">Signal below is based on: <b>${info.name}</b>, ${info.tf} candles, ${info.horizon}${fb}. <span class="mut">Tap a card to switch.</span></div><div class="hz-row">${hzCard(a, 'short', 'Short', '1-minute', a.short, 'Next 5–15 min')}${hzCard(a, 'intra', 'Intraday', '5-minute', intra, 'Next 30–90 min')}${hzCard(a, 'long', 'Long run', 'daily', a.long, 'Next 3–10 sessions')}</div><div class="hz-v ${v[0]}">${esc(v[1])}</div>`;
 }
 function renderSigTab(a) {
   const lb = { 1: ['b', 'Bullish'], 0: ['n', 'Neutral'], '-1': ['s', 'Bearish'] };
@@ -118,7 +121,7 @@ function renderSigTab(a) {
   const table = (sigs) => { let g = ''; return `<div class="tbl"><table><thead><tr><th class="l">Signal</th><th>Value</th><th>Direction</th><th>Weight</th></tr></thead><tbody>` +
     sigs.map((x) => { const r = x.g !== g ? `<tr><td colspan="4" class="l mut" style="padding-top:12px">${esc(x.g)}${x.t === 'c' ? ' (context, max 25% of score)' : ''}</td></tr>` : ''; g = x.g; const l = L(x);
       return r + `<tr><td class="l">${esc(x.n)}</td><td>${esc(x.v)}</td><td><span class="pill ${l[0]}">${l[1]}</span></td><td>${x.w}</td></tr>`; }).join('') + '</tbody></table></div>'; };
-  let h = `<div class="sec">Intraday engine, 5-minute (score ${a.score}: price action ${a.paScore ?? '–'}, context ${a.cxScore ?? '–'})</div>` + table(a.sigs);
+  let h = `<div class="sec">Intraday engine, 5-minute (score ${a.intra.score}: price action ${a.intra.paScore ?? '–'}, context ${a.intra.cxScore ?? '–'})</div>` + table(a.intra.sigs);
   if (a.short) h += `<div class="sec" style="margin-top:16px">Short-term engine, 1-minute (score ${a.short.score})</div>` + table(a.short.sigs);
   if (a.long) h += `<div class="sec" style="margin-top:16px">Long-run engine, daily (score ${a.long.score}, ${a.long.days} days of history)</div>` + table(a.long.sigs);
   h += `<div class="legend">Each engine: score = 50 + 50 × (Σ weight × direction) ÷ Σ weight. A direction needs 60% of that engine's core trend tools on its side. Intraday weighs price action 75% and context 25%. IV percentile and event risk don't move scores; they downgrade setups to "mild".</div>`;
@@ -129,7 +132,7 @@ function renderScore() {
   $('gauge').innerHTML = gaugeSVG(s);
   $('score').textContent = s; $('score').className = 'score ' + (s >= 58 ? 'up' : s <= 42 ? 'down' : '');
   $('verdict').textContent = s >= 65 ? 'Most signals lean CALL' : s >= 58 ? 'Signals lean mildly CALL' : s <= 35 ? 'Most signals lean PUT' : s <= 42 ? 'Signals lean mildly PUT' : 'Mixed signals';
-  $('scoreSub').textContent = `Weighted score of ${a.active} live signals, re-checked on every tick`;
+  $('scoreSub').textContent = `${HZ_INFO[a.hz].name} engine (${HZ_INFO[a.hz].tf}): ${a.active} live signals, re-checked on every tick`;
   const act = a.sigs.filter((x) => x.w > 0), b = act.filter((x) => x.s > 0).length, n = act.filter((x) => x.s === 0).length, d = act.filter((x) => x.s < 0).length;
   $('counts').innerHTML = `<div class="up"><b>${b}</b>Bullish</div><div><b>${n}</b>Neutral</div><div class="down"><b>${d}</b>Bearish</div>`;
 }

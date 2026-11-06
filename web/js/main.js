@@ -1,5 +1,6 @@
 /* ===== शुरुआत और लूप ===== */
 let cur = Store.pref('index', 'NIFTY');
+HZ = Store.pref('hz', 'intra'); // analysis.js loads before store.js, so read the saved horizon here
 const A = {};
 const DEMO = !APP_CONFIG.WORKER_URL || new URLSearchParams(location.search).has('demo');
 const Source = DEMO ? DemoSource : LiveSource;
@@ -8,7 +9,7 @@ const MAX_WATCH = 12;
 
 function refreshAll() {
   // Nifty first: other instruments compare themselves with it
-  for (const k of KEYS) { const D = Source.get(k); A[k] = D ? analyze(D) : null; }
+  for (const k of KEYS) { const D = Source.get(k); A[k] = D ? applyHz(analyze(D)) : null; }
   if (A[cur]) Engine.scan();
   if (A[cur]) Paper.onTick();
   renderAll();
@@ -44,6 +45,7 @@ function pick(k) {
   // the selected instrument gets its extras right away
   if (!DEMO && CFG[k] && !CFG[k].core) Promise.all([LiveSource.refreshChains(k), LiveSource.refreshFut(k)]).then(refreshAll);
 }
+function setHz(h) { if (!HZ_INFO[h] || HZ === h) return; HZ = h; Store.setPref('hz', h); orderFor = null; refreshAll(); toast(`Signals now on the ${HZ_INFO[h].name} engine (${HZ_INFO[h].tf}, ${HZ_INFO[h].horizon})`); }
 function setTF(t) { tf = t; renderControls(); drawChart(); }
 function togOV(k) { OV[k] = !OV[k]; Store.setPref('overlays', OV); renderControls(); drawChart(); }
 function setSub(k) { sub = k; renderControls(); if (CI) drawSub(CI, Math.max(0, CI.k.length - VIEW[tf])); }

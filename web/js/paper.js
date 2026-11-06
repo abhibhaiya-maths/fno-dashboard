@@ -255,7 +255,7 @@ const Paper = (() => {
   function renderBanner() {
     const a = A[cur], s = signalFor(a), o = opts();
     const cls = s.state === 'CE' ? 'b' : s.state === 'PE' ? 's' : 'n';
-    let h = `<div class="sig ${cls}"><div class="sig-k">${a.cf.label} live signal, ${Source.clock().label}</div><div class="sigt">${s.title}</div><div class="sigs">${esc(s.sub)}</div>`;
+    let h = `<div class="sig ${cls}"><div class="sig-k">${a.cf.label} live signal · ${HZ_INFO[a.hz || 'intra'].name} (${HZ_INFO[a.hz || 'intra'].tf}) · ${Source.clock().label}</div><div class="sigt">${s.title}</div><div class="sigs">${esc(s.sub)}</div>`;
     if (s.reasons && s.reasons.length) h += `<div class="sigr">${s.reasons.map((x) => `<span class="pill ${x.s > 0 ? 'b' : x.s < 0 ? 's' : 'n'}">✓ ${esc(x.n)}</span>`).join('')}${(s.against || []).map((x) => `<span class="pill s">✗ ${esc(x.n)}</span>`).join('')}</div>`;
     if (s.caveats && s.caveats.length) h += `<div class="alert" style="margin-top:10px">${s.caveats.join('. ')}.</div>`;
     if (s.setup && s.noOpt) {

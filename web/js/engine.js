@@ -11,7 +11,9 @@ const Engine = (() => {
 
   // Next 30 minutes (6 five-minute candles)
   function projection(a) {
-    const atr = a.atr || a.price * 0.001, exp30 = atr * Math.sqrt(6);
+    // expected move over the selected horizon: 15 × 1-min, 6 × 5-min, or 5 daily candles
+    const hz = a.hz || 'intra', base = (a.intra && a.intra.atr) || a.atr || a.price * 0.001;
+    const exp30 = hz === 'short' && a.short ? a.short.atr * Math.sqrt(15) : hz === 'long' && a.long ? a.long.atr * Math.sqrt(5) : base * Math.sqrt(6), atr = base;
     const dir = a.dir;
     // the score is a weighted lean, not a probability: map it to a realistic 15–85% band
     const upP = Math.round(clamp(50 + (a.score - 50) * 0.7, 15, 85));
@@ -87,7 +89,7 @@ const Engine = (() => {
   function renderProjection() {
     const a = A[cur]; if (!a) return;
     const p = projection(a), dirTxt = p.dir === 'CE' ? 'Upside bias' : p.dir === 'PE' ? 'Downside bias' : 'No clear direction';
-    let h = `<div class="pj-h"><b>Next 30-minute projection</b><span>${dirTxt}</span></div>
+    let h = `<div class="pj-h"><b>${HZ_INFO[a.hz || 'intra'].proj}</b><span>${dirTxt}</span></div>
       <div class="pj-nums"><div class="u"><strong>${p.up}%</strong>Upside</div><div class="d"><strong>${p.dn}%</strong>Downside</div></div>
       <div class="pj-bar" role="img" aria-label="Upside ${p.up}%, downside ${p.dn}%"><span class="u" style="width:${p.up}%"></span><span class="d" style="width:${p.dn}%"></span></div>`;
     if (p.dir) {
@@ -98,7 +100,7 @@ const Engine = (() => {
         ${a.cf.opt ? `<div><small>Strike</small><b>${p.K} ${p.dir}</b></div>
         <div><small>Premium / SL / target</small><b>${f1(p.P)} / <span class="down">${f1(p.pSL)}</span> / <span class="up">${f1(p.pT1)}</span></b></div>` : `<div><small>Instrument</small><b>${esc(a.cf.label)}</b></div><div><small>Options</small><b>Not available</b></div>`}
         <div><small>First obstacle</small><b>${p.block ? f0(p.block[1]) : '–'}</b></div></div>
-        <div class="pj-note">${p.block ? `First obstacle: ${esc(p.block[0])} at ${f0(p.block[1])}. ` : ''}Expected 30-minute range ${f0(p.lo)} to ${f0(p.hi)} (±${f0(p.exp30)} pts). The setup stays valid until the signal changes or the stop-loss breaks.</div>`;
+        <div class="pj-note">${p.block ? `First obstacle: ${esc(p.block[0])} at ${f0(p.block[1])}. ` : ''}Expected range (${HZ_INFO[a.hz || 'intra'].horizon}) ${f0(p.lo)} to ${f0(p.hi)} (±${f0(p.exp30)} pts). The setup stays valid until the signal changes or the stop-loss breaks.</div>`;
     } else {
       h += `<div class="pj-grid">
         <div><small>Expected range</small><b>${f0(p.lo)}–${f0(p.hi)}</b></div>

@@ -295,9 +295,9 @@ function signalFor(a) {
   if (a.curMin >= SS.c - 30) return { state: 'WAIT', title: 'Wait: too late for new trades', sub: a.isMCX ? 'Last 30 minutes of the MCX session: new positions are risky.' : 'New positions after 3:00 are risky. Open positions square off at 3:20.', reasons: [], against: [] };
   const s = a.score;
   let state = a.dir || 'WAIT';
-  if (state === 'WAIT') return { state, title: a.gate ? 'Wait: price and context disagree' : 'Wait: no clear setup', sub: a.gate || `Score ${s}: signals are mixed. Waiting is a position too.`, reasons: [...pro(1).slice(0, 2), ...pro(-1).slice(0, 2)], against: [] };
+  if (state === 'WAIT') return { state, title: a.gate ? (/but price is/.test(a.gate) ? 'Wait: price and context disagree' : /Range-bound|Flat/.test(a.gate) ? 'Wait: no trend right now' : 'Wait: trend tools not aligned') : 'Wait: no clear setup', sub: a.gate || `Score ${s}: signals are mixed. Waiting is a position too.`, reasons: [...pro(1).slice(0, 2), ...pro(-1).slice(0, 2)], against: [] };
   const d = state === 'CE' ? 1 : -1, strength0 = d === 1 ? s : 100 - s, coreFor = d === 1 ? a.coreUp : a.coreDn;
-  let strength = strength0 >= 70 && coreFor >= 4 && ok(a.adx) && a.adx >= 25 ? 'strong' : 'mild';
+  let strength = a.hz && a.hz !== 'intra' ? a.hzStrength || 'mild' : strength0 >= 70 && coreFor >= 4 && ok(a.adx) && a.adx >= 25 ? 'strong' : 'mild';
   const caveats = [];
   if (ok(a.adx) && a.adx < 20) { strength = 'mild'; caveats.push('ADX below 20: weak trend'); }
   if (coreFor < 4) caveats.push(`${coreFor} of ${a.coreN} trend tools agree`);
@@ -309,7 +309,8 @@ function signalFor(a) {
   return {
     state, strength, dirScore: strength0, noOpt: !a.cf.opt,
     title: a.cf.opt ? (state === 'CE' ? `▲ ${St} CALL setup` : `▼ ${St} PUT setup`) : (state === 'CE' ? `▲ ${St} bullish setup` : `▼ ${St} bearish setup`),
-    sub: `Score ${s}/100. Price action ${a.paScore ?? '–'}, context ${a.cxScore ?? '–'}. ${coreFor} of ${a.coreN} trend tools and ${pro(d).length} of ${a.active} signals agree.`,
+    sub: a.hz === 'intra' ? `Score ${s}/100. Price action ${a.paScore ?? '–'}, context ${a.cxScore ?? '–'}. ${coreFor} of ${a.coreN} trend tools and ${pro(d).length} of ${a.active} signals agree.`
+      : `Score ${s}/100 on the ${HZ_INFO[a.hz].tf} engine. ${coreFor} of ${a.coreN} core tools and ${pro(d).length} of ${a.active} signals agree.${a.hz === 'long' ? ' Paper trades still square off at 3:20 (intraday only).' : ''}`,
     reasons: pro(d).slice(0, 3), against: con(d).slice(0, 2), caveats, setup: setupFor(a, state),
   };
 }
@@ -326,6 +327,25 @@ function signalHi(a) {
 /* ===== Three horizons: SHORT (1-minute, next 5–15 min), INTRADAY (5-minute, main engine), LONG RUN (daily, next days) =====
    Each horizon has its own tools, its own trend core and its own gate, so a short pullback inside an uptrend shows as
    "Short: PUT / Long run: CALL" instead of one blurred number. */
+// Which horizon drives the main signal, projection, setup, globe and paper trades (you pick it by tapping a card)
+const HZ_INFO = {
+  short: { name: 'Short-term', tf: '1-minute', horizon: 'next 5–15 minutes', proj: 'Next 15-minute projection', mins: 15 },
+  intra: { name: 'Intraday', tf: '5-minute', horizon: 'next 30–90 minutes', proj: 'Next 30-minute projection', mins: 30 },
+  long: { name: 'Long run', tf: 'daily', horizon: 'next 3–10 sessions', proj: 'Next 5-session projection', mins: null },
+};
+let HZ = (typeof Store !== 'undefined' && Store.pref('hz', 'intra')) || 'intra';
+function applyHz(a) {
+  if (!a) return a;
+  a.intra = { score: a.score, dir: a.dir, gate: a.gate, sigs: a.sigs, coreUp: a.coreUp, coreDn: a.coreDn, coreN: a.coreN, atr: a.atr, adx: a.adx, stD: a.stD, paScore: a.paScore, cxScore: a.cxScore, active: a.active };
+  a.hz = 'intra'; a.hzWanted = HZ;
+  const h = HZ === 'short' ? a.short : HZ === 'long' ? a.long : null;
+  if (!h) return a; // not enough data for that horizon yet: intraday stays in charge (shown on screen)
+  Object.assign(a, { hz: HZ, score: h.score, dir: h.dir, gate: h.gate, sigs: h.sigs, coreUp: h.up, coreDn: h.dn, coreN: h.coreN, active: h.sigs.filter((x) => x.w > 0).length,
+    adx: h.adx, stD: h.stD, hzStrength: h.strength,
+    // risk unit for SL/targets: scalps use the 1-minute ATR, positional uses part of the daily ATR
+    atr: HZ === 'short' ? h.atr * 1.5 : h.atr * 0.6 });
+  return a;
+}
 function hzScore(sigs) {
   const xs = sigs.filter((x) => x.w > 0), w = xs.reduce((s, x) => s + x.w, 0);
   return w ? Math.round(50 + (50 * xs.reduce((s, x) => s + x.w * x.s, 0)) / w) : 50;
@@ -428,5 +448,5 @@ function longTerm(a) {
   if (a.fut && a.fut.day) add('Futures OI since yesterday', a.fut.day[0], a.fut.day[1], 1);
   if (ok(a.D.fii) && !a.isMCX) add('FII cash (previous day)', sgn(a.D.fii) + f0(a.D.fii), a.D.fii > 0 ? 1 : -1, 0.5);
   const h = hzDecide(sigs, ['Price vs 50 DMA', '20 DMA vs 50 DMA', 'Supertrend (daily)', 'Weekly structure', 'Price vs 20 DMA'], 60, 75);
-  return { ...h, tf: '1D', horizon: 'next 3–10 sessions', atr: at, lo: price - at * 3, hi: price + at * 3, d20, d50, d200, hi52, lo52, stD: st.dir[L], days: rows.length };
+  return { ...h, tf: '1D', horizon: 'next 3–10 sessions', adx: ax.adx[L], atr: at, lo: price - at * 3, hi: price + at * 3, d20, d50, d200, hi52, lo52, stD: st.dir[L], days: rows.length };
 }
