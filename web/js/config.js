@@ -38,5 +38,6 @@ window.APP_CONFIG = {
   // STREAM: Upstox WebSocket ticks (≈ real-time). If it can't connect, the page falls back to polling.
   STREAM: true,
   // RENDER_MS: how often the screen redraws while ticks stream in (lower = snappier, higher = lighter)
-  POLL: { SNAPSHOT_MS: 5000, STREAM_SNAPSHOT_MS: 20000, CANDLES_MS: 60000, NEWS_MS: 600000, RENDER_MS: 150 },
+  // With the stream on, prices, greeks and OI arrive tick by tick, so REST refreshes are only a slow safety net (keeps you far below Upstox's rate limit)
+  POLL: { SNAPSHOT_MS: 6000, STREAM_SNAPSHOT_MS: 60000, CANDLES_MS: 60000, NEWS_MS: 600000, RENDER_MS: 150 },
 };

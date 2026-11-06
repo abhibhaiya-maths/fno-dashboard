@@ -6,11 +6,18 @@ const LiveSource = (() => {
   let snap = null, status = null, lastErr = null, lastOk = 0, resultsData = { ai: false, items: [] };
   let glob = [], cal = { items: [], sources: {} }, fii = null, off = { items: [], sources: {} }, vixDaily = null;
 
+  let rateUntil = 0;
+  const rateLimited = () => Date.now() < rateUntil;
   async function api(path, opts = {}) {
+    if (rateLimited() && /\/api\/(snapshot|chain|candles|fut|daily|global|search|inst)/.test(path)) { const e = new Error('Upstox rate limit: pausing data requests for a minute (live stream keeps running)'); e.code = 'UPSTOX_RATE'; throw e; }
     const t = await Store.idToken();
     const r = await fetch(APP_CONFIG.WORKER_URL.replace(/\/$/, '') + path, { ...opts, headers: { ...(opts.headers || {}), Authorization: 'Bearer ' + t, 'Content-Type': 'application/json' } });
     const j = await r.json().catch(() => ({ error: 'Bad response from Worker (' + r.status + ')' }));
-    if (!r.ok) { const e = new Error(j.error || 'HTTP ' + r.status); e.code = j.code; e.status = r.status; throw e; }
+    if (!r.ok) {
+      const e = new Error(j.error || 'HTTP ' + r.status); e.code = j.code; e.status = r.status;
+      if (e.code === 'UPSTOX_RATE') rateUntil = Date.now() + 90000; // Upstox blocked us: everything pauses 90 s so the block can clear
+      throw e;
+    }
     return j;
   }
   const fail = (e) => { lastErr = e; if (e.code === 'UPSTOX_LOGIN') status = { ...(status || {}), upstox: false }; };
@@ -303,7 +310,7 @@ const LiveSource = (() => {
   async function ask(question, context, history) { return api('/api/ask', { method: 'POST', body: JSON.stringify({ question, context, history: history || [] }) }); }
   function connectUrl(idToken) { return APP_CONFIG.WORKER_URL.replace(/\/$/, '') + '/auth/login?id_token=' + encodeURIComponent(idToken); }
   return { mode: 'live', init, refreshSnapshot, refreshChains, refreshCandles, refreshFut, refreshDaily, refreshNews, refreshResults, refreshGlobal, refreshCalendar, refreshFII, refreshOfficial,
-    search, instInfo, get, clock, ask, connectUrl, results: () => resultsData, stream: Stream, drop: (k) => { delete raw[k]; },
+    search, instInfo, get, clock, rateLimited, ask, connectUrl, results: () => resultsData, stream: Stream, drop: (k) => { delete raw[k]; },
     global: () => glob, calendar: () => cal, official: () => off, fiiAuto: () => fii,
     get status() { return status; }, get error() { return lastErr; }, newsAI: (k) => R(k).newsAI, newsSources: (k) => R(k).sources };
 })();

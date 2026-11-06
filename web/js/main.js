@@ -119,9 +119,9 @@ async function startLive() {
   const snapLoop = async () => { await LiveSource.refreshSnapshot(); refreshAll(); setTimeout(snapLoop, slow(LiveSource.stream.connected ? P.STREAM_SNAPSHOT_MS : P.SNAPSHOT_MS)); };
   setTimeout(snapLoop, P.SNAPSHOT_MS);
   // watchlist option chains (selected one first)
-  const chainLoop = async () => { await LiveSource.refreshChains(); refreshAll(); setTimeout(chainLoop, slow(LiveSource.stream.connected ? 30000 : 15000)); };
+  const chainLoop = async () => { await LiveSource.refreshChains(); refreshAll(); setTimeout(chainLoop, slow(LiveSource.stream.connected ? 90000 : 20000)); };
   setTimeout(chainLoop, 15000);
-  const minLoop = async () => { await Promise.all([LiveSource.refreshCandles(), LiveSource.refreshFut(), LiveSource.refreshGlobal()]); refreshAll(); setTimeout(minLoop, slow(P.CANDLES_MS)); };
+  const minLoop = async () => { await Promise.all([LiveSource.refreshCandles(), LiveSource.refreshFut(), LiveSource.refreshGlobal()]); refreshAll(); setTimeout(minLoop, slow(LiveSource.stream.connected ? Math.max(P.CANDLES_MS, 120000) : P.CANDLES_MS)); }; // stream on: the chart already updates from ticks, so REST candles every 2 min are enough
   setTimeout(minLoop, P.CANDLES_MS);
   setInterval(async () => { await Promise.all([LiveSource.refreshNews(), LiveSource.refreshResults(), LiveSource.refreshOfficial(), LiveSource.refreshFII()]); refreshAll(); }, P.NEWS_MS);
   setInterval(async () => { await Promise.all([LiveSource.refreshCalendar(), LiveSource.refreshDaily()]); refreshAll(); }, 30 * 60000);
