@@ -11,7 +11,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css?v=20261106k">
+<link rel="stylesheet" href="style.css?v=20261106l">
 </head>
 <body>
 
@@ -165,26 +165,26 @@ For analysis and practice only, not investment advice. No signal is a guarantee.
 
 <div class="speakbar" id="speakBar" role="status" aria-live="polite">
   <span class="sb-wave" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
-  <span class="sb-txt">Speaking</span>
-  <button class="sb-stop" onclick="Voice.stop()">■ Stop</button>
-  <button class="sb-mute" onclick="Voice.mute()">Mute</button>
+  <span class="sb-txt" id="sbTxt">Speaking</span>
+  <button class="sb-mute sb-pause" id="sbPause" onclick="Voice.togglePause()" aria-label="Pause speaking">⏸ Pause</button>
+  <button class="sb-stop" onclick="Voice.stop()" aria-label="Stop and close">■ Stop</button>
 </div>
 <button class="micfab" id="micFab" onclick="Voice.toggleMic()" aria-label="Ask by voice"><svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true"><path fill="currentColor" d="M12 15a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v6a3 3 0 0 0 3 3Zm5-3a1 1 0 1 1 2 0 7 7 0 0 1-6 6.93V21h3a1 1 0 1 1 0 2H8a1 1 0 1 1 0-2h3v-2.07A7 7 0 0 1 5 12a1 1 0 1 1 2 0 5 5 0 0 0 10 0Z"/></svg></button>
 
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
-<script src="js/config.js?v=20261106k"></script>
-<script src="js/indicators.js?v=20261106k"></script>
-<script src="js/analysis.js?v=20261106k"></script>
-<script src="js/store.js?v=20261106k"></script>
-<script src="js/data-demo.js?v=20261106k"></script>
-<script src="js/data-live.js?v=20261106k"></script>
-<script src="js/paper.js?v=20261106k"></script>
-<script src="js/voice.js?v=20261106k"></script>
-<script src="js/ui.js?v=20261106k"></script>
-<script src="js/engine.js?v=20261106k"></script>
-<script src="js/main.js?v=20261106k"></script>
+<script src="js/config.js?v=20261106l"></script>
+<script src="js/indicators.js?v=20261106l"></script>
+<script src="js/analysis.js?v=20261106l"></script>
+<script src="js/store.js?v=20261106l"></script>
+<script src="js/data-demo.js?v=20261106l"></script>
+<script src="js/data-live.js?v=20261106l"></script>
+<script src="js/paper.js?v=20261106l"></script>
+<script src="js/voice.js?v=20261106l"></script>
+<script src="js/ui.js?v=20261106l"></script>
+<script src="js/engine.js?v=20261106l"></script>
+<script src="js/main.js?v=20261106l"></script>
 <script>$('pLots').value = Paper.opts().lots;</script>
 </body>
 </html>

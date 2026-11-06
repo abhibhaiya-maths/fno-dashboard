@@ -6,31 +6,54 @@ const Voice = (() => {
 
   // ===== Speaking (Hindi) with stop / mute =====
   // Long answers are split into sentences, so Stop works instantly and long speech doesn't get cut by the browser.
-  let queue = [], gen = 0;
+  // Pause = hold the message and stay quiet (the bar stays, Play continues from the same sentence).
+  // Stop  = drop the message and close the bar; later alerts still speak.
+  let queue = [], gen = 0, curS = null, paused = false;
   const ttsOn = () => $('tts') && $('tts').checked && 'speechSynthesis' in window;
-  function setSpeaking(on) { const b = $('speakBar'); if (b) b.classList.toggle('show', on); }
+  function setSpeaking(on) {
+    const b = $('speakBar'); if (b) { b.classList.toggle('show', on || paused); b.classList.toggle('paused', paused); }
+    const t = $('sbTxt'); if (t) t.textContent = paused ? 'Paused' : 'Speaking';
+    const p = $('sbPause'); if (p) { p.innerHTML = paused ? '▶ Play' : '⏸ Pause'; p.setAttribute('aria-label', paused ? 'Play: continue speaking' : 'Pause speaking'); }
+  }
   function hiVoice() { try { return speechSynthesis.getVoices().find((x) => x.lang && x.lang.toLowerCase().startsWith('hi')); } catch { return null; } }
   function next(my) {
-    if (my !== gen) return;
-    if (!queue.length) { setSpeaking(false); return; }
-    const u = new SpeechSynthesisUtterance(queue.shift()); u.lang = 'hi-IN';
+    if (my !== gen || paused) return;
+    if (!queue.length) { curS = null; setSpeaking(false); return; }
+    curS = queue.shift();
+    const u = new SpeechSynthesisUtterance(curS); u.lang = 'hi-IN';
     const v = hiVoice(); if (v) u.voice = v;
-    u.onend = () => next(my);
-    u.onerror = () => { if (my === gen) { queue = []; setSpeaking(false); } };
+    u.onend = () => { if (my === gen) { curS = null; next(my); } };
+    u.onerror = () => { if (my === gen && !paused) { queue = []; curS = null; setSpeaking(false); } };
     try { speechSynthesis.speak(u); setSpeaking(true); } catch { setSpeaking(false); }
   }
   function say(t) {
-    if (!t || !ttsOn()) return;
+    if (!t || !ttsOn() || paused) return; // while paused, new alerts stay quiet (your paused message is kept)
     stop();
     queue = (String(t).match(/[^।.!?]+[।.!?]*/g) || [String(t)]).map((x) => x.trim()).filter(Boolean);
     next(gen);
   }
-  function stop() { gen++; queue = []; try { speechSynthesis.cancel(); } catch { /* not supported */ } setSpeaking(false); }
+  function stop() { gen++; queue = []; curS = null; paused = false; try { speechSynthesis.cancel(); } catch { /* not supported */ } setSpeaking(false); soundUI(); }
+  function pause() {
+    if (paused) return;
+    paused = true; gen++;
+    if (curS) queue.unshift(curS); curS = null;  // replay the interrupted sentence on Play
+    try { speechSynthesis.cancel(); } catch { /* not supported */ }
+    setSpeaking(true); soundUI();
+  }
+  function play() {
+    if (!paused) return;
+    paused = false; soundUI();
+    if (queue.length && ttsOn()) { setSpeaking(true); next(gen); } else { queue = []; setSpeaking(false); }
+  }
+  const togglePause = () => (paused ? play() : pause());
   // One-tap sound on/off (top bar 🔊). Remembered on this device.
-  function soundUI() { const on = !$('tts') || $('tts').checked, b = $('sndBtn'); if (b) { b.classList.toggle('off', !on); b.setAttribute('aria-pressed', String(on)); b.title = on ? 'Voice on: tap to mute' : 'Voice muted: tap to turn on'; b.innerHTML = on ? '🔊' : '🔇'; } }
+  function soundUI() { const on = (!$('tts') || $('tts').checked) && !paused, b = $('sndBtn'); if (b) { b.classList.toggle('off', !on); b.setAttribute('aria-pressed', String(on)); b.title = on ? 'Voice on: tap to mute' : 'Voice muted: tap to turn on'; b.innerHTML = on ? '🔊' : '🔇'; } }
   function setSound(on) { if ($('tts')) $('tts').checked = on; try { localStorage.setItem('fno_tts', on ? '1' : '0'); } catch (e) { /* private mode */ } if (!on) stop(); soundUI(); }
   function mute() { setSound(false); toast('Voice muted. Tap 🔇 in the top bar to turn it back on.'); }
-  function toggleSound() { const on = !($('tts') && $('tts').checked); setSound(on); toast(on ? 'Voice on' : 'Voice muted'); }
+  function toggleSound() {
+    if (paused) { play(); if ($('tts') && !$('tts').checked) setSound(true); toast('Voice on'); return; } // 🔇 while paused = Play
+    const on = !($('tts') && $('tts').checked); setSound(on); toast(on ? 'Voice on' : 'Voice muted');
+  }
   try { const v = localStorage.getItem('fno_tts'); if (v != null && $('tts')) $('tts').checked = v === '1'; } catch (e) { /* ignore */ }
   setTimeout(() => { if ($('tts')) $('tts').addEventListener('change', () => setSound($('tts').checked)); soundUI(); }, 0);
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') stop(); });
@@ -261,5 +284,5 @@ const Voice = (() => {
     show(html, useAI ? '' : sayTxt);
     if (useAI) { const done = await askAI(raw, a, 'aiAns'); if (!done) say(sayTxt); }
   }
-  return { say, stop, mute, toggleSound, toggleMic, ask };
+  return { say, stop, pause, play, togglePause, mute, toggleSound, toggleMic, ask };
 })();
