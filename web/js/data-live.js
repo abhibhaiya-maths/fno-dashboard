@@ -40,7 +40,12 @@ const LiveSource = (() => {
   async function refreshCandles(only) {
     await Promise.all(KEYS.filter((k) => !only || only === k).map(async (k) => {
       const cf = CFG[k], q = cf.core ? '?index=' + k : '?key=' + enc(cf.key) + sessQ(k);
-      try { const j = await api('/api/candles' + q); R(k).days = j.days; R(k).today = j.today; } catch (e) { cf.core ? fail(e) : soft(e); }
+      try {
+        const j = await api('/api/candles' + q), td = istYmd(), had = R(k).days && R(k).days.find((d) => d.date === td);
+        // a refresh that comes back without today's candles (Upstox hiccup) must not wipe the session
+        if (had && !(j.days || []).some((d) => d.date === td)) { j.days = [...(j.days || []).filter((d) => d.date < td), had].slice(-3); }
+        R(k).days = j.days; R(k).today = j.today; R(k).todayErr = j.todayErr || null;
+      } catch (e) { cf.core ? fail(e) : soft(e); }
     }));
   }
   // Futures OI buildup data (indices and F&O stocks; MCX futures carry OI in their own candles)
@@ -236,8 +241,15 @@ const LiveSource = (() => {
   function get(key) {
     const r = raw[key], cf = CFG[key];
     if (!cf || !r || !r.days || r.days.length < 2 || !snap) return null;
-    const S = cf.sess || SESS.NSE;
-    const days = r.days.slice(-3), off3 = 3 - days.length, candles = [];
+    const S = cf.sess || SESS.NSE, td = istYmd(), nowM0 = istMin();
+    const marketOpenNow = isOpenDay() && nowM0 >= S.o && nowM0 < S.c;
+    let days = r.days.slice(-3), fromTicks = false;
+    // Market is open but Upstox hasn't sent today's candles: build today from the live ticks instead of showing yesterday
+    if (marketOpenNow && days[days.length - 1].date !== td && Object.keys(r.bars).length >= 1) {
+      const c = Object.keys(r.bars).map(Number).sort((x, y) => x - y).map((m) => { const b = r.bars[m]; return [m, b.o, b.h, b.l, b.c, 0, 0]; });
+      days = [...days, { date: td, c }].slice(-3); fromTicks = true;
+    }
+    const off3 = 3 - days.length, candles = [];
     days.forEach((d, i) => d.c.forEach(([m, o, h, l, c, v, oi]) => candles.push({ d: i + off3, m, o, h, l, c, v, oi: oi || 0 })));
     const lastDay = days[days.length - 1].date, nowM = istMin();
     const sessionLive = lastDay === istYmd() && isOpenDay() && nowM >= S.o && nowM < S.c;
@@ -273,7 +285,7 @@ const LiveSource = (() => {
     const dly = r.daily && r.daily.rows || [];
     const nifty = A.NIFTY;
     return {
-      key, candles, price, prevClose: q && ok(q.prevClose) ? q.prevClose : null, sessionLive, dayLabels: labels, chain,
+      key, candles, price, prevClose: q && ok(q.prevClose) ? q.prevClose : null, sessionLive, dayLabels: labels, chain, marketOpenNow, fromTicks, todayErr: r.todayErr,
       vix: snap.vix, fii: F ? F.fii : null, dii: F ? F.dii : null, fiiSrc: auto ? (auto.stale ? 'NSE, ' + auto.date : 'NSE') : man ? 'manual' : null,
       hv: cf.core ? (snap.hv && snap.hv[key]) || [] : [], news: r.news,
       fut: r.fut, daily: r.daily, vixDaily, prevOi: dly.length ? dly[dly.length - 1][6] : null, glob, events: cal.items || [],

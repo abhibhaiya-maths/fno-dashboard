@@ -33,6 +33,9 @@ function renderStatus() {
     else if (st) h += `<span class="tag ok">${LiveSource.stream.connected ? 'Live stream' : LiveSource.stream.everConnected ? 'Reconnecting…' : 'Upstox connected'}</span>${st.ai ? `<span class="tag ai">AI on${st.aiVia ? ': ' + esc(st.aiVia) : ''}</span>` : '<span class="tag" title="Add GEMINI_API_KEY or a Workers AI binding in the Worker">AI off</span>'}`;
     if (st && st.v !== 2) h += `<span class="err" title="Deploy the new worker-index.js to Cloudflare">⚠ Old Worker code: watchlist and global cues need the new Worker</span>`;
     if (e && e.code !== 'UPSTOX_LOGIN') h += `<span class="err" title="${esc(e.message)}">⚠ ${esc(e.message.slice(0, 60))}</span>`;
+    const a0 = A[cur];
+    if (a0 && a0.D.fromTicks) h += `<span class="err" title="${esc(a0.D.todayErr || '')}">⚠ Upstox candles delayed: chart built from live ticks</span>`;
+    else if (a0 && !a0.sessionLive && a0.D.marketOpenNow) h += `<span class="err" title="${esc(a0.D.todayErr || '')}">⚠ Waiting for today's candles from Upstox</span>`;
     if (u) h += `<button class="btn-ghost" onclick="Store.signOut()" title="${esc(u.email)}">Log out</button>`;
   }
   $('statusBar').innerHTML = h;

@@ -90,7 +90,7 @@ const Paper = (() => {
     const a = A[t.key]; if (!a || t.status !== 'open') return;
     const q = optQuote(a, t.K, t.type), px = sellPx(q), ch = charges('SELL', px, t.qty, t.exch);
     acc.cash += px * t.qty - ch.total;
-    Object.assign(t, { status: 'closed', exit: px, exitCh: ch, closedTs: Date.now(), closedMin: a.curMin, exitIdx: a.price, reason,
+    Object.assign(t, { status: 'closed', exit: px, exitCh: ch, closedTs: Date.now(), closedMin: Source.mode === 'live' ? istMin() : a.curMin, exitIdx: a.price, reason,
       gross: (px - t.entry) * t.qty, net: (px - t.entry) * t.qty - t.entryCh.total - ch.total, adviceAtExit: t.advice ? t.advice.state : null });
     await Promise.all([Store.saveTrade(t), Store.saveAccount(acc)]);
     beep(t.net >= 0 ? 880 : 300);
@@ -142,6 +142,9 @@ const Paper = (() => {
     let dirty = false;
     for (const t of openTrades()) {
       const a = A[t.key]; if (!a) continue;
+      // Live: use the real clock, never the last candle's time (stale data once closed a 12:42 trade as "15:29")
+      const nowMin = Source.mode === 'live' ? istMin() : a.curMin, today = Source.mode !== 'live' || t.openedDate === dateKey();
+      if (Source.mode === 'live' && !a.sessionLive && !(today && nowMin >= sqMin && nowMin < a.SS.c + 60)) continue; // data not live: hold, don't act on stale prices
       if (!t.slMode) { t.slMode = 'both'; t.slAuto = t.sl; t.slUser = null; } // positions from older versions
       const q = optQuote(a, t.K, t.type), bid = q.bid > 0 ? q.bid : q.ltp, d = t.type === 'CE' ? 1 : -1;
       t.ltp = bid; t.high = Math.max(t.high, bid);
@@ -177,7 +180,7 @@ const Paper = (() => {
           pr ? 'स्टॉप-लॉस हिट, मुनाफ़ा लॉक' : be ? 'ब्रेकईवन पर बंद' : 'स्टॉप-लॉस हिट']);
       }
       else if (t.tgt && bid >= t.tgt && t.slMode === 'manual') toClose.push([t, 'Target hit', 'टारगेट हिट']);
-      else if (a.curMin >= sqMin) toClose.push([t, `${PC.SQUARE_OFF_TIME} auto square-off`, 'ऑटो स्क्वेयर-ऑफ़']);
+      else if (today && nowMin >= sqMin) toClose.push([t, `${PC.SQUARE_OFF_TIME} auto square-off`, 'ऑटो स्क्वेयर-ऑफ़']);
       else if (o.autoExit && t.advice && t.advice.state === 'EXIT') toClose.push([t, 'Exit signal: ' + t.advice.why[0], 'एग्जिट संकेत']);
       else if (t.openedDate !== dateKey() && Source.mode === 'live' && a.sessionLive) toClose.push([t, 'Previous-day position closed', 'पिछले दिन की पोज़िशन बंद']);
     }

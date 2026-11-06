@@ -290,6 +290,7 @@ function signalFor(a) {
   const pro = (d) => a.sigs.filter((x) => x.w > 0 && x.s * d > 0).sort((x, y) => y.w - x.w);
   const con = (d) => a.sigs.filter((x) => x.w > 0 && x.s * d < 0).sort((x, y) => y.w - x.w);
   const SS = a.SS || SESS.NSE;
+  if (!a.sessionLive && a.D.marketOpenNow) return { state: 'WAIT', title: "Waiting for today's data", sub: `Market is open, but today's candles haven't arrived from Upstox yet${a.D.todayErr ? ` (${a.D.todayErr})` : ''}. Signals pause instead of using yesterday's chart. They resume as soon as data or live ticks arrive.`, reasons: [], against: [] };
   if (!a.sessionLive) return { state: 'WAIT', title: 'Market closed', sub: `Signals resume 15 minutes after the next open (${hm(SS.o + 15)})`, reasons: [], against: [] };
   if (a.curMin < SS.o + 15) return { state: 'WAIT', title: 'Wait: opening range forming', sub: `No new signals in the first 15 minutes (till ${hm(SS.o + 15)})`, reasons: [], against: [] };
   if (a.curMin >= SS.c - 30) return { state: 'WAIT', title: 'Wait: too late for new trades', sub: a.isMCX ? 'Last 30 minutes of the MCX session: new positions are risky.' : 'New positions after 3:00 are risky. Open positions square off at 3:20.', reasons: [], against: [] };
