@@ -32,7 +32,9 @@ function renderStatus() {
     if (st && !st.upstox) h += `<button class="btn-up" onclick="connectUpstox()">Connect Upstox</button>`;
     else if (st) h += `<span class="tag ok">${LiveSource.stream.connected ? 'Live stream' : LiveSource.stream.everConnected ? 'Reconnecting…' : 'Upstox connected'}</span>${st.ai ? `<span class="tag ai">AI on${st.aiVia ? ': ' + esc(st.aiVia) : ''}</span>` : '<span class="tag" title="Add GEMINI_API_KEY or a Workers AI binding in the Worker">AI off</span>'}`;
     if (st && st.v !== 2) h += `<span class="err" title="Deploy the new worker-index.js to Cloudflare">⚠ Old Worker code: watchlist and global cues need the new Worker</span>`;
-    if (e && e.code !== 'UPSTOX_LOGIN') h += `<span class="err" title="${esc(e.message)}">⚠ ${esc(e.message.slice(0, 60))}</span>`;
+    const rw = LiveSource.rateWait ? LiveSource.rateWait() : 0;
+    if (rw) h += `<span class="err" title="${esc(e ? e.message : '')}">⚠ Upstox rate limit: data paused ${Math.floor(rw / 60)}:${String(rw % 60).padStart(2, '0')}${LiveSource.stream.connected ? ', live stream still running' : ''}</span>`;
+    else if (e && e.code !== 'UPSTOX_LOGIN' && e.code !== 'UPSTOX_RATE') h += `<span class="err" title="${esc(e.message)}">⚠ ${esc(e.message.slice(0, 60))}</span>`;
     const a0 = A[cur];
     if (a0 && a0.D.fromTicks) h += `<span class="err" title="${esc(a0.D.todayErr || '')}">⚠ Upstox candles delayed: chart built from live ticks</span>`;
     else if (a0 && !a0.sessionLive && a0.D.marketOpenNow) h += `<span class="err" title="${esc(a0.D.todayErr || '')}">⚠ Waiting for today's candles from Upstox</span>`;
@@ -103,9 +105,11 @@ async function startLive() {
   if (!CFG[cur]) cur = 'NIFTY';
   const P = APP_CONFIG.POLL;
   await Promise.all([LiveSource.refreshSnapshot(), LiveSource.refreshCandles()]);
-  await LiveSource.refreshChains();
   refreshAll();
-  Promise.all([LiveSource.refreshFut(), LiveSource.refreshDaily(), LiveSource.refreshGlobal(), LiveSource.refreshCalendar(), LiveSource.refreshFII()]).then(refreshAll);
+  // spread the start-up requests out instead of firing them all at once (gentler on Upstox's rate limit)
+  setTimeout(() => LiveSource.refreshChains().then(refreshAll), 4000);
+  setTimeout(() => Promise.all([LiveSource.refreshFut(), LiveSource.refreshGlobal()]).then(refreshAll), 9000);
+  setTimeout(() => Promise.all([LiveSource.refreshDaily(), LiveSource.refreshCalendar(), LiveSource.refreshFII()]).then(refreshAll), 15000);
   LiveSource.refreshNews().then(refreshAll);
   LiveSource.refreshResults().then(refreshAll);
   LiveSource.refreshOfficial().then(refreshAll);
@@ -116,12 +120,20 @@ async function startLive() {
   const anyOpen = () => KEYS.some((k) => A[k] && A[k].sessionLive);
   const slow = (ms) => (anyOpen() ? ms : Math.max(ms, 60000)); // market closed: poll gently (saves your free quota)
   // REST snapshot: every 5 s without the stream, every 20 s with it (OI change, ATM window, new strikes)
-  const snapLoop = async () => { await LiveSource.refreshSnapshot(); refreshAll(); setTimeout(snapLoop, slow(LiveSource.stream.connected ? P.STREAM_SNAPSHOT_MS : P.SNAPSHOT_MS)); };
+  // Stream on: full snapshot every 60 s. Stream off: prices every 6 s (1 call) and option chains every 30 s.
+  let lastFull = Date.now();
+  const snapLoop = async () => {
+    const on = LiveSource.stream.connected, full = on || Date.now() - lastFull >= 30000;
+    if (!LiveSource.rateLimited()) { await LiveSource.refreshSnapshot(!full); if (full) lastFull = Date.now(); refreshAll(); }
+    setTimeout(snapLoop, slow(on ? P.STREAM_SNAPSHOT_MS : P.SNAPSHOT_MS));
+  };
   setTimeout(snapLoop, P.SNAPSHOT_MS);
+  setInterval(renderStatus, 1000); // keeps the rate-limit countdown moving even when no data arrives
   // watchlist option chains (selected one first)
-  const chainLoop = async () => { await LiveSource.refreshChains(); refreshAll(); setTimeout(chainLoop, slow(LiveSource.stream.connected ? 90000 : 20000)); };
+  const chainLoop = async () => { if (!LiveSource.rateLimited()) await LiveSource.refreshChains(); refreshAll(); setTimeout(chainLoop, slow(LiveSource.stream.connected ? 90000 : 45000)); };
   setTimeout(chainLoop, 15000);
-  const minLoop = async () => { await Promise.all([LiveSource.refreshCandles(), LiveSource.refreshFut(), LiveSource.refreshGlobal()]); refreshAll(); setTimeout(minLoop, slow(LiveSource.stream.connected ? Math.max(P.CANDLES_MS, 120000) : P.CANDLES_MS)); }; // stream on: the chart already updates from ticks, so REST candles every 2 min are enough
+  let minN = 0;
+  const minLoop = async () => { minN++; if (!LiveSource.rateLimited()) { await Promise.all([LiveSource.refreshCandles(), minN % 2 ? LiveSource.refreshFut() : null, minN % 2 ? LiveSource.refreshGlobal() : null]); refreshAll(); } setTimeout(minLoop, slow(LiveSource.stream.connected ? Math.max(P.CANDLES_MS, 120000) : P.CANDLES_MS)); }; // stream on: the chart already updates from ticks, so REST candles every 2 min are enough
   setTimeout(minLoop, P.CANDLES_MS);
   setInterval(async () => { await Promise.all([LiveSource.refreshNews(), LiveSource.refreshResults(), LiveSource.refreshOfficial(), LiveSource.refreshFII()]); refreshAll(); }, P.NEWS_MS);
   setInterval(async () => { await Promise.all([LiveSource.refreshCalendar(), LiveSource.refreshDaily()]); refreshAll(); }, 30 * 60000);

@@ -9,13 +9,13 @@ const LiveSource = (() => {
   let rateUntil = 0;
   const rateLimited = () => Date.now() < rateUntil;
   async function api(path, opts = {}) {
-    if (rateLimited() && /\/api\/(snapshot|chain|candles|fut|daily|global|search|inst)/.test(path)) { const e = new Error('Upstox rate limit: pausing data requests for a minute (live stream keeps running)'); e.code = 'UPSTOX_RATE'; throw e; }
+    if (rateLimited() && /\/api\/(snapshot|chain|candles|fut|daily|global|search|inst)/.test(path)) { const e = new Error(`Upstox rate limit: data requests paused, retry in ${Math.ceil((rateUntil - Date.now()) / 1000)} s`); e.code = 'UPSTOX_RATE'; throw e; }
     const t = await Store.idToken();
     const r = await fetch(APP_CONFIG.WORKER_URL.replace(/\/$/, '') + path, { ...opts, headers: { ...(opts.headers || {}), Authorization: 'Bearer ' + t, 'Content-Type': 'application/json' } });
     const j = await r.json().catch(() => ({ error: 'Bad response from Worker (' + r.status + ')' }));
     if (!r.ok) {
       const e = new Error(j.error || 'HTTP ' + r.status); e.code = j.code; e.status = r.status;
-      if (e.code === 'UPSTOX_RATE') rateUntil = Date.now() + 90000; // Upstox blocked us: everything pauses 90 s so the block can clear
+      if (e.code === 'UPSTOX_RATE') rateUntil = Date.now() + 1000 * Math.max(60, j.retryAfter || 90); // Upstox blocked us: pause as long as it asks
       throw e;
     }
     return j;
@@ -27,11 +27,14 @@ const LiveSource = (() => {
   const sessQ = (k) => (CFG[k].exch === 'MCX' ? '&s=MCX' : '');
 
   async function init() { status = await api('/api/status'); return status; }
-  async function refreshSnapshot() {
+  // lite = prices only (1 Upstox call). Full adds the three index option chains (3 calls).
+  async function refreshSnapshot(lite) {
     try {
       const w = watchKeys().map((k) => CFG[k].key).filter(Boolean);
-      const s = await api('/api/snapshot' + (w.length ? '?w=' + w.map(enc).join(',') : ''));
+      const qs = [w.length ? 'w=' + w.map(enc).join(',') : '', lite && snap ? 'lite=1' : ''].filter(Boolean).join('&');
+      const s = await api('/api/snapshot' + (qs ? '?' + qs : ''));
       s.watch = s.watch || {};
+      if (s.lite) s.chains = snap ? snap.chains : {}; // keep the last chains (their near-ATM options still update from ticks)
       // keep the freshest streamed ticks: the stream is newer than a REST snapshot
       if (snap && Stream.connected) Stream.carryOver(snap, s);
       snap = s; lastOk = Date.now(); lastErr = null; Stream.syncKeys(snap);
@@ -310,7 +313,7 @@ const LiveSource = (() => {
   async function ask(question, context, history) { return api('/api/ask', { method: 'POST', body: JSON.stringify({ question, context, history: history || [] }) }); }
   function connectUrl(idToken) { return APP_CONFIG.WORKER_URL.replace(/\/$/, '') + '/auth/login?id_token=' + encodeURIComponent(idToken); }
   return { mode: 'live', init, refreshSnapshot, refreshChains, refreshCandles, refreshFut, refreshDaily, refreshNews, refreshResults, refreshGlobal, refreshCalendar, refreshFII, refreshOfficial,
-    search, instInfo, get, clock, rateLimited, ask, connectUrl, results: () => resultsData, stream: Stream, drop: (k) => { delete raw[k]; },
+    search, instInfo, get, clock, rateLimited, rateWait: () => Math.max(0, Math.ceil((rateUntil - Date.now()) / 1000)), ask, connectUrl, results: () => resultsData, stream: Stream, drop: (k) => { delete raw[k]; },
     global: () => glob, calendar: () => cal, official: () => off, fiiAuto: () => fii,
     get status() { return status; }, get error() { return lastErr; }, newsAI: (k) => R(k).newsAI, newsSources: (k) => R(k).sources };
 })();
