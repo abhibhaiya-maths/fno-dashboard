@@ -26,7 +26,13 @@ const Voice = (() => {
     next(gen);
   }
   function stop() { gen++; queue = []; try { speechSynthesis.cancel(); } catch { /* not supported */ } setSpeaking(false); }
-  function mute() { if ($('tts')) $('tts').checked = false; stop(); toast('Voice muted. Turn it back on with “Spoken answers” in the ask panel.'); }
+  // One-tap sound on/off (top bar 🔊). Remembered on this device.
+  function soundUI() { const on = !$('tts') || $('tts').checked, b = $('sndBtn'); if (b) { b.classList.toggle('off', !on); b.setAttribute('aria-pressed', String(on)); b.title = on ? 'Voice on: tap to mute' : 'Voice muted: tap to turn on'; b.innerHTML = on ? '🔊' : '🔇'; } }
+  function setSound(on) { if ($('tts')) $('tts').checked = on; try { localStorage.setItem('fno_tts', on ? '1' : '0'); } catch (e) { /* private mode */ } if (!on) stop(); soundUI(); }
+  function mute() { setSound(false); toast('Voice muted. Tap 🔇 in the top bar to turn it back on.'); }
+  function toggleSound() { const on = !($('tts') && $('tts').checked); setSound(on); toast(on ? 'Voice on' : 'Voice muted'); }
+  try { const v = localStorage.getItem('fno_tts'); if (v != null && $('tts')) $('tts').checked = v === '1'; } catch (e) { /* ignore */ }
+  setTimeout(() => { if ($('tts')) $('tts').addEventListener('change', () => setSound($('tts').checked)); soundUI(); }, 0);
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') stop(); });
 
   // ===== Listening =====
@@ -255,5 +261,5 @@ const Voice = (() => {
     show(html, useAI ? '' : sayTxt);
     if (useAI) { const done = await askAI(raw, a, 'aiAns'); if (!done) say(sayTxt); }
   }
-  return { say, stop, mute, toggleMic, ask };
+  return { say, stop, mute, toggleSound, toggleMic, ask };
 })();

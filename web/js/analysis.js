@@ -295,7 +295,7 @@ function signalFor(a) {
   if (a.curMin >= SS.c - 30) return { state: 'WAIT', title: 'Wait: too late for new trades', sub: a.isMCX ? 'Last 30 minutes of the MCX session: new positions are risky.' : 'New positions after 3:00 are risky. Open positions square off at 3:20.', reasons: [], against: [] };
   const s = a.score;
   let state = a.dir || 'WAIT';
-  if (state === 'WAIT') return { state, title: a.gate ? (/but price is/.test(a.gate) ? 'Wait: price and context disagree' : /Range-bound|Flat/.test(a.gate) ? 'Wait: no trend right now' : 'Wait: trend tools not aligned') : 'Wait: no clear setup', sub: a.gate || `Score ${s}: signals are mixed. Waiting is a position too.`, reasons: [...pro(1).slice(0, 2), ...pro(-1).slice(0, 2)], against: [] };
+  if (state === 'WAIT') return { state, title: a.gate ? (/but price is/.test(a.gate) ? 'Wait: price and context disagree' : /Range-bound|Flat/.test(a.gate) ? 'Wait: no trend right now' : /Confirming/.test(a.gate) ? 'Wait: confirming new direction' : 'Wait: trend tools not aligned') : 'Wait: no clear setup', sub: a.gate || `Score ${s}: signals are mixed. Waiting is a position too.`, reasons: [...pro(1).slice(0, 2), ...pro(-1).slice(0, 2)], against: [] };
   const d = state === 'CE' ? 1 : -1, strength0 = d === 1 ? s : 100 - s, coreFor = d === 1 ? a.coreUp : a.coreDn;
   let strength = a.hz && a.hz !== 'intra' ? a.hzStrength || 'mild' : strength0 >= 70 && coreFor >= 4 && ok(a.adx) && a.adx >= 25 ? 'strong' : 'mild';
   const caveats = [];
@@ -334,8 +334,40 @@ const HZ_INFO = {
   long: { name: 'Long run', tf: 'daily', horizon: 'next 3–10 sessions', proj: 'Next 5-session projection', mins: null },
 };
 let HZ = (typeof Store !== 'undefined' && Store.pref('hz', 'intra')) || 'intra';
+/* Anti-whipsaw, per instrument and horizon:
+   - a NEW direction must hold for a few seconds before it is shown (short 30 s, intraday 20 s, long run instant),
+     and while it confirms the old direction is dropped, so you never see a stale CALL during a fall;
+   - an EXISTING direction is kept while the score still leans its way (hysteresis) and the other side
+     doesn't own the core trend tools, so it doesn't flicker to WAIT on every small wobble. */
+const HYS = {}, HYS_CFG = { short: [54, 30], intra: [53, 20], long: [55, 0] };
+function stick(id, hz, h) {
+  const [hold, sec0] = HYS_CFG[hz], sec = typeof Source !== 'undefined' && Source.mode === 'demo' ? sec0 / 15 : sec0;
+  const S = HYS[id] || (HYS[id] = { dir: null, pend: null, since: 0 }), now = Date.now(), raw = h.dir;
+  const nm = (d) => (d === 'CE' ? 'CALL' : 'PUT');
+  if (raw && raw === S.dir) { S.pend = null; return { dir: S.dir }; }
+  if (raw && raw !== S.dir) {
+    if (S.pend !== raw) { S.pend = raw; S.since = now; }
+    S.dir = null; // the old direction is no longer valid
+    if (now - S.since >= sec * 1000) { S.dir = raw; S.pend = null; return { dir: raw }; }
+    return { dir: null, note: `Confirming a new ${nm(raw)} signal (${Math.max(1, Math.ceil(sec - (now - S.since) / 1000))} s). Avoids reacting to a single spike.` };
+  }
+  // raw WAIT: a pending direction keeps its timer while the score still leans its way
+  if (S.pend) { const pl = S.pend === 'CE' ? h.score : 100 - h.score; if (pl < hold) S.pend = null; else return { dir: null, note: `Confirming a new ${nm(S.pend)} signal. Avoids reacting to a single spike.` }; }
+  if (S.dir) {
+    const ds = S.dir === 'CE' ? h.score : 100 - h.score, opp = S.dir === 'CE' ? h.dn : h.up;
+    if (ds >= hold && opp < Math.ceil(h.coreN * 0.6)) return { dir: S.dir, held: true };
+    S.dir = null;
+  }
+  return { dir: null };
+}
 function applyHz(a) {
   if (!a) return a;
+  { const r = stick(a.key + ':intra', 'intra', { dir: a.dir, score: a.score, up: a.coreUp, dn: a.coreDn, coreN: a.coreN }); a.dir = r.dir; if (!r.dir && r.note) a.gate = r.note; a.dirHeld = !!r.held; }
+  for (const k of ['short', 'long']) {
+    const h = a[k]; if (!h) continue;
+    const r = stick(a.key + ':' + k, k, h); h.dir = r.dir; h.held = !!r.held;
+    if (!r.dir) { h.strength = null; if (r.note) h.gate = r.note; } else if (!h.strength || r.held) h.strength = 'mild';
+  }
   a.intra = { score: a.score, dir: a.dir, gate: a.gate, sigs: a.sigs, coreUp: a.coreUp, coreDn: a.coreDn, coreN: a.coreN, atr: a.atr, adx: a.adx, stD: a.stD, paScore: a.paScore, cxScore: a.cxScore, active: a.active };
   a.hz = 'intra'; a.hzWanted = HZ;
   const h = HZ === 'short' ? a.short : HZ === 'long' ? a.long : null;

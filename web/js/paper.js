@@ -16,7 +16,8 @@ const Paper = (() => {
   function speak(level, key, text) {
     const v = opts().voice;
     if (v === 'off' || (v === 'important' && level !== 'imp')) return;
-    const ck = key + '|' + text, now = Date.now();
+    // signal alerts repeat-guard by instrument+direction (their text changes with the score); others by exact sentence
+    const ck = key.startsWith('sig') ? key : key + '|' + text, now = Date.now();
     if (said[ck] && now - said[ck] < 180000) return;
     said[ck] = now; Voice.say(text);
   }
@@ -122,6 +123,11 @@ const Paper = (() => {
     if (d === -1 && a.sup && a.price - a.sup[1] < 0.4 * a.atr) warn.push(`Support close: ${a.sup[0]} ${f0(a.sup[1])}`);
     if (ok(a.adx) && a.adx < 18) warn.push(`ADX ${f1(a.adx)}: weak trend`);
     if (R >= 1 && t.sl < t.entry) warn.push('Profit above 1R: move SL to entry');
+    // Signal exits wait a few minutes after entry (your SL protects meanwhile), unless the loss is already 0.5R+
+    const held = a.curMin - t.openedMin, minHold = { short: 3, intra: 5, long: 10 }[a.hz || 'intra'];
+    if (exit.length && held < minHold && R > -0.5 && !(a.curMin >= a.SS.c - 30)) {
+      warn.unshift(...exit.map((x) => `${x} (signal exits start ${minHold} min after entry; SL protects until then)`)); exit.length = 0;
+    }
     const mk = (state, why) => ({ state, title: ADV[state][0], hi: ADV[state][1], why, ds, R });
     if (exit.length) return mk('EXIT', exit);
     if (book.length) return mk('BOOK', book);
@@ -197,37 +203,48 @@ const Paper = (() => {
   }
 
   // ===== Signal record: was it right 15 and 30 minutes later? =====
+  // Records every Short (1-min) and Intraday (5-min) signal separately, whichever card you are viewing, and checks
+  // where price went afterwards: Short after 5 and 15 min, Intraday after 15 and 30 min. The long run is judged over
+  // days, so it isn't scored here.
+  const HZC = { short: { chk: [5, 15], tol: 0.5, gap: 10 }, intra: { chk: [15, 30], tol: 0.25, gap: 30 } };
+  const lastHz = {};
   function trackSignals() {
     const dk = dateKey();
     for (const k of KEYS) {
       const a = A[k]; if (!a) continue;
       const s = signalFor(a), prev = lastState[k];
       lastState[k] = s.state;
-      if (s.state === 'CE' || s.state === 'PE') {
-        const lastSig = signals.find((x) => x.key === k && x.date === dk);
-        const fresh = prev !== s.state || !lastSig || a.curMin - lastSig.min >= 30;
-        if (prev !== undefined && fresh && (!lastSig || lastSig.min !== a.curMin)) {
-          const x = { id: uid(), key: k, dir: s.state, strength: s.strength, score: a.score, date: dk, min: a.curMin, price: a.price, atr: a.atr, ts: Date.now() };
-          signals.unshift(x); Store.saveSignal(x);
-          if (k === cur && prev !== s.state) { beep(740); speak('imp', 'sig' + k, signalHi(a)); }
-        }
+      if ((s.state === 'CE' || s.state === 'PE') && k === cur && prev !== undefined && prev !== s.state) { beep(740); speak('imp', 'sig' + k + s.state, signalHi(a)); }
+      for (const hz of ['intra', 'short']) {
+        const h = hz === 'intra' ? a.intra : a.short; if (!h || !a.sessionLive) continue;
+        const st = h.dir || 'WAIT', pk = k + hz, pv = lastHz[pk]; lastHz[pk] = st;
+        if (st === 'WAIT' || pv === undefined) continue;
+        const lastSig = signals.find((x) => x.key === k && x.date === dk && (x.hz || 'intra') === hz);
+        if (!(pv !== st || !lastSig || a.curMin - lastSig.min >= HZC[hz].gap) || (lastSig && lastSig.min === a.curMin)) continue;
+        const ds = st === 'CE' ? h.score : 100 - h.score;
+        const strength = hz === 'short' ? h.strength || 'mild'
+          : ds >= 70 && (st === 'CE' ? h.coreUp : h.coreDn) >= 4 && ok(h.adx) && h.adx >= 25 && !(a.events && a.events.length) ? 'strong' : 'mild';
+        const x = { id: uid(), key: k, hz, dir: st, strength, score: h.score, date: dk, min: a.curMin, price: a.price, atr: h.atr, chk: HZC[hz].chk, ts: Date.now() };
+        signals.unshift(x); Store.saveSignal(x);
       }
       const today = a.D.candles.filter((c) => c.d === 2);
       for (const x of signals) {
         if (x.key !== k || x.date !== dk || x.r30) continue;
+        const chk = x.chk || [15, 30], tol = (HZC[x.hz || 'intra'] || HZC.intra).tol;
         let ch = false;
-        for (const [f, n] of [['r15', 15], ['r30', 30]]) {
-          if (x[f]) continue;
+        [['r15', chk[0]], ['r30', chk[1]]].forEach(([f, n]) => {
+          if (x[f]) return;
           const c = today.find((y) => y.m === x.min + n);
-          if (!c) continue;
+          if (!c) return;
           const mv = (c.c - x.price) * (x.dir === 'CE' ? 1 : -1);
-          x[f] = mv > 0.25 * x.atr ? 'right' : mv < -0.25 * x.atr ? 'wrong' : 'flat';
+          x[f] = mv > tol * x.atr ? 'right' : mv < -tol * x.atr ? 'wrong' : 'flat';
           x[f + 'mv'] = mv; ch = true;
-        }
+        });
         if (ch) Store.saveSignal(x);
       }
     }
   }
+
   function sigStats(list) {
     const dec = list.filter((x) => ['right', 'wrong'].includes(outc(x.r30))), win = dec.filter((x) => outc(x.r30) === 'right').length;
     return { n: list.length, dec: dec.length, win, pct: dec.length ? Math.round((win / dec.length) * 100) : null };
@@ -267,8 +284,8 @@ const Paper = (() => {
       h += `<div class="lv"><div><small>Strike</small><b>${st.K} ${st.dir}</b></div><div><small>Buy price</small><b>${rs(e.px)}</b></div><div><small>SL / target</small><b><span class="down">${f1(st.pSL)}</span> / <span class="up">${f1(st.pT1)}</span></b></div></div>
         <button class="big ${cls}" onclick="Paper.takeSignal()">Take paper trade: ${o.lots} lot (${e.qty}), total ${rs(e.cost)}</button>`;
     }
-    const ss = sigStats(signals.filter((x) => x.key === cur));
-    h += `<div class="sig-foot">${ss.n} ${a.cf.label} signals so far. ${ss.pct == null ? 'No 30-minute results yet.' : `${ss.pct}% were right after 30 minutes (${ss.win} of ${ss.dec}).`}</div></div>`;
+    const hzR = a.hz === 'short' ? 'short' : 'intra', ss = sigStats(signals.filter((x) => x.key === cur && (x.hz || 'intra') === hzR)), aft = hzR === 'short' ? 15 : 30;
+    h += `<div class="sig-foot">${ss.n} ${a.cf.label} ${hzR === 'short' ? 'Short (1-min)' : 'Intraday'} signals so far. ${ss.pct == null ? `No ${aft}-minute results yet.` : `${ss.pct}% were right after ${aft} minutes (${ss.win} of ${ss.dec}).`}</div></div>`;
     $('pBanner').innerHTML = h;
   }
   function renderAccount() {
@@ -315,14 +332,19 @@ const Paper = (() => {
     $('oEst').innerHTML = `Buy price ${rs(e.px)} × ${e.qty} = ${rs(e.px * e.qty)} + charges ${rs(e.ch.total)} = <b>${rs(e.cost)}</b><br><span class="mut">Brokerage ${rs(e.ch.brk)}, transaction ${rs(e.ch.txn)}, stamp ${rs(e.ch.stamp)}, GST ${rs(e.ch.gst)}. STT of 0.15% applies when you sell.</span>`;
   }
   function renderRecord() {
-    const mine = signals.filter((x) => x.key === cur).slice(0, 10), all = sigStats(signals), st = tradeStats();
+    const mine = signals.filter((x) => x.key === cur).slice(0, 12), all = sigStats(signals), st = tradeStats();
     const by = (f) => sigStats(signals.filter(f));
     const strong = by(isStrong), weak = by(isMild);
-    let h = `<div class="stats" style="margin-top:0"><div><small>Total signals (all indices)</small><b>${all.n}</b></div><div><small>Right after 30 min</small><b>${all.pct == null ? '–' : all.pct + '%'}</b></div>
+    const pc = (o) => (o.pct == null ? '–' : `${o.pct}%`) + `<br><small>${o.win || 0} of ${o.dec || 0}</small>`;
+    const iS = by((x) => (x.hz || 'intra') === 'intra'), sS = by((x) => x.hz === 'short'), iSt = by((x) => (x.hz || 'intra') === 'intra' && isStrong(x)), sSt = by((x) => x.hz === 'short' && isStrong(x));
+    let h = `<div class="sec">Which engine is more accurate? (all instruments)</div><div class="stats" style="margin:6px 0 12px">
+      <div><small>Intraday (5-min) right after 30 min</small><b>${pc(iS)}</b></div><div><small>Intraday strong only</small><b>${pc(iSt)}</b></div>
+      <div><small>Short (1-min) right after 15 min</small><b>${pc(sS)}</b></div><div><small>Short strong only</small><b>${pc(sSt)}</b></div></div>
+      <div class="stats" style="margin-top:0"><div><small>Total signals (all indices)</small><b>${all.n}</b></div><div><small>Right after 30 min</small><b>${all.pct == null ? '–' : all.pct + '%'}</b></div>
       <div><small>Strong signals right</small><b>${strong.pct == null ? '–' : strong.pct + '%'}</b></div><div><small>Mild signals right</small><b>${weak.pct == null ? '–' : weak.pct + '%'}</b></div>
       <div><small>Exit signals ignored</small><b>${st.sigFollowN}</b></div><div><small>Difference if followed</small><b class="${st.better >= 0 ? 'up' : 'down'}">${st.sigFollowN ? sgn(st.better) + rs(st.better) : '–'}</b></div></div>`;
-    h += `<div class="tbl" style="margin-top:10px"><table><thead><tr><th>Time</th><th>Direction</th><th>Score</th><th>Price</th><th>15 min</th><th>30 min</th></tr></thead><tbody>` +
-      (mine.length ? mine.map((x) => `<tr><td>${hm(x.min)}</td><td><span class="pill ${x.dir === 'CE' ? 'b' : 's'}">${x.dir} ${isStrong(x) ? 'strong' : isMild(x) ? 'mild' : ''}</span></td><td>${x.score}</td><td>${f1(x.price)}</td><td>${res(x.r15, x.r15mv)}</td><td>${res(x.r30, x.r30mv)}</td></tr>`).join('') : '<tr><td colspan="6" class="mut">No signals yet</td></tr>') + '</tbody></table></div>';
+    h += `<div class="tbl" style="margin-top:10px"><table><thead><tr><th>Time</th><th>Engine</th><th>Direction</th><th>Score</th><th>Price</th><th>1st check</th><th>Final</th></tr></thead><tbody>` +
+      (mine.length ? mine.map((x) => `<tr><td>${hm(x.min)}</td><td>${x.hz === 'short' ? '1-min<br><small class="mut">5 / 15 min</small>' : '5-min<br><small class="mut">15 / 30 min</small>'}</td><td><span class="pill ${x.dir === 'CE' ? 'b' : 's'}">${x.dir} ${isStrong(x) ? 'strong' : isMild(x) ? 'mild' : ''}</span></td><td>${x.score}</td><td>${f1(x.price)}</td><td>${res(x.r15, x.r15mv)}</td><td>${res(x.r30, x.r30mv)}</td></tr>`).join('') : '<tr><td colspan="7" class="mut">No signals yet</td></tr>') + '</tbody></table></div>';
     $('pRec').innerHTML = h;
   }
   const res = (r, mv) => { if (!r) return '<span class="mut">Pending</span>'; const o = outc(r); return `<span class="pill ${o === 'right' ? 'b' : o === 'wrong' ? 's' : 'n'}">${o === 'right' ? 'Right' : o === 'wrong' ? 'Wrong' : 'Flat'} ${sgn(mv)}${f1(mv)}</span>`; };
