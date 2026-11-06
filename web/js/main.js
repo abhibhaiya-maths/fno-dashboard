@@ -19,7 +19,7 @@ function renderAll() {
   $('main').style.display = a ? '' : 'none';
   $('orb').style.display = a ? '' : 'none';
   if (!a) return;
-  renderControls(); renderScore(); renderSetup(); renderLevels(); renderTab(); renderNews(); renderGlobal(); renderOrb(); Engine.renderProjection(); Engine.renderFeed(); Engine.renderTicker(); Engine.renderStatus(); drawChart(); Paper.render();
+  renderControls(); renderHorizons(); renderScore(); renderSetup(); renderLevels(); renderTab(); renderNews(); renderGlobal(); renderOrb(); Engine.renderProjection(); Engine.renderFeed(); Engine.renderTicker(); Engine.renderStatus(); drawChart(); Paper.render();
   $('orderDrawer').style.display = a.cf.opt ? '' : 'none';
   if (orderFor !== cur || !$('oStrike').value) { orderFor = cur; Paper.renderOrderForm(); } else Paper.updateEstimate();
 }

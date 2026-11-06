@@ -12,8 +12,10 @@ const Engine = (() => {
   // Next 30 minutes (6 five-minute candles)
   function projection(a) {
     const atr = a.atr || a.price * 0.001, exp30 = atr * Math.sqrt(6);
-    const dir = a.score >= 58 ? 'CE' : a.score <= 42 ? 'PE' : null;
-    const p = { up: a.score, dn: 100 - a.score, dir, exp30, lo: a.price - exp30, hi: a.price + exp30, perCandle: atr };
+    const dir = a.dir;
+    // the score is a weighted lean, not a probability: map it to a realistic 15–85% band
+    const upP = Math.round(clamp(50 + (a.score - 50) * 0.7, 15, 85));
+    const p = { up: upP, dn: 100 - upP, dir, exp30, lo: a.price - exp30, hi: a.price + exp30, perCandle: atr };
     if (dir) {
       const st = setupFor(a, dir), d = dir === 'CE' ? 1 : -1;
       Object.assign(p, { entryLo: a.price - (d === 1 ? 0.25 : 0.1) * atr, entryHi: a.price + (d === 1 ? 0.1 : 0.25) * atr, sl: st.sl, t1: st.t1, t2: st.t2, K: st.K, P: st.P, pSL: st.pSL, pT1: st.pT1, block: d === 1 ? a.res : a.sup });
@@ -33,6 +35,7 @@ const Engine = (() => {
         pcr: !ok(a.ch.pcr) ? 0 : a.ch.pcr > 1.25 ? 1 : a.ch.pcr < 0.75 ? -1 : prev[k] && Math.abs(a.ch.pcr - 1) > 0.15 ? prev[k].pcr : 0,
         gz: a.price <= Math.max(g1, g2) && a.price >= Math.min(g1, g2) ? 1 : 0,
         cpr: a.price > a.tc ? 1 : a.price < a.bc ? -1 : 0,
+        sh: a.short ? a.short.dir || 'WAIT' : null, lg: a.long ? a.long.dir || 'WAIT' : null,
       };
       const p = prev[k], m = a.curMin;
       // Don't repeat the same kind of event: 10-minute cooldown per type (3 minutes for setup changes)
@@ -51,6 +54,13 @@ const Engine = (() => {
         if (now.cpr !== p.cpr && now.cpr) fire('cpr', now.cpr > 0 ? 'call' : 'put', `Price moved ${now.cpr > 0 ? 'above' : 'below'} the CPR.`);
         if (now.rsi !== p.rsi && now.rsi) fire('rsi', 'warn', `RSI ${f1(a.rsi)}: ${now.rsi > 0 ? 'overbought, the rally may tire' : 'oversold, the fall may pause'}.`);
         if (now.pcr !== p.pcr && now.pcr) fire('pcr', now.pcr > 0 ? 'call' : 'put', `PCR ${f2(a.ch.pcr)}: ${now.pcr > 0 ? 'heavy put writing, support is firm' : 'heavy call writing, pressure overhead'}.`);
+        // 1-minute engine: the earliest warning (3-minute cooldown)
+        if (now.sh && p.sh && now.sh !== p.sh) {
+          const sh = a.short, nm = (x) => (x === 'CE' ? (a.cf.opt ? 'CALL' : 'up') : a.cf.opt ? 'PUT' : 'down');
+          if (now.sh !== 'WAIT') fire('sh', now.sh === 'CE' ? 'call' : 'put', `1-minute turned ${nm(now.sh)} (short score ${sh.score}${sh.reasons[0] ? ', ' + SHORT(sh.reasons[0].n) : ''}).${s.state !== 'WAIT' && s.state !== now.sh ? ` Against the intraday ${nm(s.state)} setup: likely a ${now.sh === 'CE' ? 'bounce' : 'pullback'}.` : ''}`, 3);
+          else fire('sh', 'warn', `1-minute momentum faded (short score ${sh.score}).`, 3);
+        }
+        if (now.lg && p.lg && now.lg !== p.lg && now.lg !== 'WAIT') fire('lg', now.lg === 'CE' ? 'call' : 'put', `Daily trend now ${now.lg === 'CE' ? 'bullish' : 'bearish'} (long-run score ${a.long.score}).`, 60);
         if (now.gz && !p.gz) fire('gz', 'info', `Price entered the Fibonacci golden zone (${f0(Math.min(g1, g2))}–${f0(Math.max(g1, g2))}). Watch for a bounce or a break.`);
       }
       prev[k] = now;

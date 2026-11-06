@@ -8,7 +8,25 @@ const Paper = (() => {
   const sqMin = (() => { const [h, m] = (PC.SQUARE_OFF_TIME || '15:20').split(':').map(Number); return h * 60 + m - 555; })();
   const dateKey = () => { const c = Source.clock(); return c.date === 'DEMO' ? 'DEMO-' + runId : c.date; };
   const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-  const opts = () => Store.pref('paper_opts', { trail: true, autoExit: false, lots: 1 });
+  const opts = () => ({ trail: true, autoExit: false, lots: 1, slMode: 'both', voice: 'important', ...Store.pref('paper_opts', {}) });
+  /* ---- Calm voice: an alert is spoken only after it has held for a while, positions on the same instrument are
+     grouped into one sentence, HOLD is never spoken, and the same alert can't repeat for 3 minutes. ---- */
+  const HOLD_MS = { EXIT: 20000, BOOK: 30000, WARN: 45000, HOLD: 45000 };
+  const said = {};
+  function speak(level, key, text) {
+    const v = opts().voice;
+    if (v === 'off' || (v === 'important' && level !== 'imp')) return;
+    const ck = key + '|' + text, now = Date.now();
+    if (said[ck] && now - said[ck] < 180000) return;
+    said[ck] = now; Voice.say(text);
+  }
+  // Effective stop-loss. Options are only bought here, so a higher SL is the safer one.
+  //  both:   the tighter of your SL and the auto SL (your SL = the most you accept to lose; auto protects profit)
+  //  auto:   the system's SL only      manual: your SL only, never moved by the system
+  function effSL(t) {
+    const m = t.slMode || 'both', u = ok(t.slUser) ? t.slUser : null, au = ok(t.slAuto) ? t.slAuto : t.sl0;
+    return m === 'manual' ? (u ?? t.sl0) : m === 'auto' ? au : Math.max(au, u ?? -Infinity);
+  }
   const hiType = (t) => (t === 'CE' ? 'कॉल' : 'पुट');
   const vname = (t) => (CFG[t.key] ? CFG[t.key].voice : t.label);
   // पुराने (हिंदी) रिकॉर्ड भी पढ़ सकें
@@ -58,14 +76,16 @@ const Paper = (() => {
     acc.cash -= e.cost;
     const t = { id: uid(), key, label: a.cf.label, K, type, lots, lot: a.lot, qty: e.qty, exch: a.cf.exch, entry: e.px, entryCh: e.ch, sl: slv, sl0: slv, tgt: tgv,
       risk0: e.px - slv, high: e.px, ltp: e.px, status: 'open', openedTs: Date.now(), openedDate: dateKey(), openedMin: a.curMin, openIdx: a.price,
-      score: a.score, st0: a.stD, src: src || 'manual', advice: null, exitSigPx: null, log: [] };
+      score: a.score, st0: a.stD, src: src || 'manual', advice: null, exitSigPx: null, log: [],
+      slMode: opts().slMode, slUser: ok(sl) && sl > 0 && sl < e.px ? slv : null, slAuto: tick05(Math.max(0.05, e.px - dl * st.risk)) };
+    t.sl = effSL(t);
     trades.unshift(t);
     await Promise.all([Store.saveTrade(t), Store.saveAccount(acc)]);
     beep(660); toast(`Paper buy: ${t.label} ${K} ${type}, ${lots} lot at ${rs(e.px)}`);
-    Voice.say(`${a.cf.voice} ${K} ${hiType(type)} ${lots} लॉट ${Math.round(e.px)} रुपये पर ख़रीदा। स्टॉप-लॉस ${Math.round(slv)}।`);
+    speak('imp', key, `${a.cf.voice} ${K} ${hiType(type)} ${lots} लॉट ${Math.round(e.px)} रुपये पर ख़रीदा। स्टॉप-लॉस ${Math.round(t.sl)}।`);
     render();
   }
-  async function close(t, reason, reasonHi) {
+  async function close(t, reason, reasonHi, quiet) {
     const a = A[t.key]; if (!a || t.status !== 'open') return;
     const q = optQuote(a, t.K, t.type), px = sellPx(q), ch = charges('SELL', px, t.qty, t.exch);
     acc.cash += px * t.qty - ch.total;
@@ -74,7 +94,7 @@ const Paper = (() => {
     await Promise.all([Store.saveTrade(t), Store.saveAccount(acc)]);
     beep(t.net >= 0 ? 880 : 300);
     toast(`Closed: ${t.label} ${t.K} ${t.type}. ${reason}. Net ${t.net >= 0 ? '+' : ''}${rs(t.net)}`);
-    Voice.say(`${vname(t)} ${t.K} ${hiType(t.type)} बंद। ${reasonHi || ''}। नेट ${t.net >= 0 ? 'मुनाफ़ा' : 'नुक़सान'} ${Math.abs(Math.round(t.net))} रुपये।`);
+    if (!quiet) speak('imp', t.key + t.id, `${vname(t)} ${t.K} ${hiType(t.type)} बंद। ${reasonHi || ''}। नेट ${t.net >= 0 ? 'मुनाफ़ा' : 'नुक़सान'} ${Math.abs(Math.round(t.net))} रुपये।`);
     render();
   }
 
@@ -92,6 +112,12 @@ const Paper = (() => {
     if (t.tgt && t.ltp >= t.tgt * 0.97) book.push('Right at the target');
     if (R > 0.5 && ((d === 1 && a.rsi > 72) || (d === -1 && a.rsi < 28))) book.push(`RSI ${f1(a.rsi)}: the move may be tiring`);
     if (ds < 55) warn.push(`Signals weakening (${ds}/100)`);
+    // 1-minute engine against the position: earliest warning; strong + losing money = exit
+    if (a.short && a.short.dir === (d === 1 ? 'PE' : 'CE')) {
+      if (a.short.strength === 'strong' && R < 0.3) exit.push(`1-minute trend has turned hard against you (short score ${a.short.score})`);
+      else if (R > 0.8) book.push(`1-minute turning against you with ${R.toFixed(1)}R profit: lock it in`);
+      else warn.push(`1-minute momentum turning against you (short score ${a.short.score})`);
+    }
     if (d === 1 && a.res && a.res[1] - a.price < 0.4 * a.atr) warn.push(`Resistance close: ${a.res[0]} ${f0(a.res[1])}`);
     if (d === -1 && a.sup && a.price - a.sup[1] < 0.4 * a.atr) warn.push(`Support close: ${a.sup[0]} ${f0(a.sup[1])}`);
     if (ok(a.adx) && a.adx < 18) warn.push(`ADX ${f1(a.adx)}: weak trend`);
@@ -106,34 +132,65 @@ const Paper = (() => {
 
   function onTick() {
     if (!ready) return;
-    const o = opts();
+    const o = opts(), now = Date.now(), ann = {}, toClose = [];
     let dirty = false;
     for (const t of openTrades()) {
       const a = A[t.key]; if (!a) continue;
-      const q = optQuote(a, t.K, t.type), bid = q.bid > 0 ? q.bid : q.ltp;
+      if (!t.slMode) { t.slMode = 'both'; t.slAuto = t.sl; t.slUser = null; } // positions from older versions
+      const q = optQuote(a, t.K, t.type), bid = q.bid > 0 ? q.bid : q.ltp, d = t.type === 'CE' ? 1 : -1;
       t.ltp = bid; t.high = Math.max(t.high, bid);
-      if (o.trail && t.high - t.entry >= t.risk0) {
-        const ns = Math.max(t.sl, t.entry, tick05(t.high - t.risk0));
-        if (ns > t.sl) { t.sl = ns; t.log.push(`${hm(a.curMin)} SL trailed up to ${f2(ns)}`); dirty = true; }
-      }
+      // ---- Auto SL: only ever moves up ----
+      let na = t.slAuto;
+      if (t.high - t.entry >= t.risk0) na = Math.max(na, t.entry, tick05(t.high - t.risk0));           // +1R: breakeven, then trail 1R behind the high
+      if (t.tgtHit) na = Math.max(na, tick05(t.tgt - 0.5 * t.risk0));                                    // target touched: lock most of it
+      if (a.short && a.short.dir === (d === 1 ? 'PE' : 'CE') && a.short.strength === 'strong' && bid > t.entry)
+        na = Math.max(na, tick05(t.entry + (bid - t.entry) * 0.5));                                       // 1-minute turned hard against: protect half the open profit
+      na = Math.min(na, tick05(bid - 0.05));
+      if (na > t.slAuto + 0.04) { t.slAuto = na; t.log.push(`${hm(a.curMin)} Auto SL raised to ${f2(na)}`); dirty = true; }
+      const es = effSL(t); if (Math.abs(es - t.sl) > 0.001) { t.sl = es; dirty = true; }
+      // ---- Advice: change only after it holds (no flip-flopping) ----
       const adv = advise(a, t);
-      if (!t.advice || t.advice.state !== adv.state) {
-        if (t.advice) { beep(adv.state === 'EXIT' ? 330 : 520); Voice.say(`${vname(t)} ${t.K} ${hiType(t.type)}: ${adv.hi}।`); }
+      if (!t.advice || t.advice.state === adv.state) { t.advice = adv; t.advPend = null; }
+      else if (!t.advPend || t.advPend.state !== adv.state) t.advPend = { state: adv.state, since: now };
+      else if (now - t.advPend.since >= HOLD_MS[adv.state]) {
         t.log.push(`${hm(a.curMin)} ${adv.title}`); dirty = true;
         if (adv.state === 'EXIT' && t.exitSigPx == null) t.exitSigPx = bid;
+        if (adv.state !== 'HOLD') { const g = (ann[t.key + adv.state] = ann[t.key + adv.state] || { t, adv, n: 0 }); g.n++; }
+        t.advice = adv; t.advPend = null;
       }
-      t.advice = adv;
-      if (o.trail && t.tgt && bid >= t.tgt && !t.tgtHit) {
-        // trailing on: instead of selling at target, lock profit and let it run
-        t.tgtHit = true; t.sl = Math.max(t.sl, tick05(t.tgt - 0.5 * t.risk0));
-        t.log.push(`${hm(a.curMin)} Target touched, SL locked at ${f2(t.sl)}`); dirty = true; beep(880);
-        Voice.say(`${vname(t)} ${t.K} ने टारगेट छुआ। मुनाफ़ा लॉक करके स्टॉप-लॉस ${Math.round(t.sl)} पर किया।`);
+      if (t.slMode !== 'manual' && t.tgt && bid >= t.tgt && !t.tgtHit) {
+        // auto SL on: at the target, lock profit and let it run instead of selling
+        t.tgtHit = true; t.slAuto = Math.max(t.slAuto, tick05(t.tgt - 0.5 * t.risk0)); t.sl = effSL(t);
+        t.log.push(`${hm(a.curMin)} Target touched, auto SL locked at ${f2(t.slAuto)}`); dirty = true; beep(880);
+        speak('imp', t.key + 'tgt', `${vname(t)} ने टारगेट छुआ। मुनाफ़ा लॉक, स्टॉप-लॉस ${Math.round(t.sl)}।`);
       }
-      if (bid <= t.sl) t.sl >= t.entry ? close(t, 'Trailing SL hit (profit locked)', 'ट्रेलिंग स्टॉप-लॉस हिट, मुनाफ़ा लॉक') : close(t, 'Stop-loss hit', 'स्टॉप-लॉस हिट');
-      else if (t.tgt && bid >= t.tgt && !o.trail) close(t, 'Target hit', 'टारगेट हिट');
-      else if (a.curMin >= sqMin) close(t, `${PC.SQUARE_OFF_TIME} auto square-off`, 'ऑटो स्क्वेयर-ऑफ़');
-      else if (o.autoExit && adv.state === 'EXIT') close(t, 'Exit signal: ' + adv.why[0], 'एग्जिट संकेत');
-      else if (t.openedDate !== dateKey() && Source.mode === 'live' && a.sessionLive) close(t, 'Previous-day position closed', 'पिछले दिन की पोज़िशन बंद');
+      const mine = t.slMode !== 'auto' && ok(t.slUser) && t.sl === t.slUser;
+      if (bid <= t.sl) {
+        const be = t.sl >= t.entry && t.sl < t.entry + 0.15 * t.risk0, pr = t.sl >= t.entry + 0.15 * t.risk0;
+        toClose.push([t, pr ? (mine ? 'Your SL hit (in profit)' : 'Auto SL hit (profit locked)') : be ? 'Breakeven SL hit' : mine ? 'Your stop-loss hit' : 'Stop-loss hit',
+          pr ? 'स्टॉप-लॉस हिट, मुनाफ़ा लॉक' : be ? 'ब्रेकईवन पर बंद' : 'स्टॉप-लॉस हिट']);
+      }
+      else if (t.tgt && bid >= t.tgt && t.slMode === 'manual') toClose.push([t, 'Target hit', 'टारगेट हिट']);
+      else if (a.curMin >= sqMin) toClose.push([t, `${PC.SQUARE_OFF_TIME} auto square-off`, 'ऑटो स्क्वेयर-ऑफ़']);
+      else if (o.autoExit && t.advice && t.advice.state === 'EXIT') toClose.push([t, 'Exit signal: ' + t.advice.why[0], 'एग्जिट संकेत']);
+      else if (t.openedDate !== dateKey() && Source.mode === 'live' && a.sessionLive) toClose.push([t, 'Previous-day position closed', 'पिछले दिन की पोज़िशन बंद']);
+    }
+    // one sentence per instrument and alert, however many lots or positions
+    for (const g of Object.values(ann)) {
+      const many = openTrades().filter((x) => x.key === g.t.key && x.advice && x.advice.state === g.adv.state).length;
+      beep(g.adv.state === 'EXIT' ? 330 : 520);
+      speak(g.adv.state === 'WARN' ? 'all' : 'imp', g.t.key + g.adv.state, `${vname(g.t)}${many > 1 ? ` की ${many} पोज़िशन` : ` ${g.t.K} ${hiType(g.t.type)}`}: ${g.adv.hi}।`);
+    }
+    if (toClose.length) {
+      const byKey = {};
+      toClose.forEach(([t, r, rh]) => { (byKey[t.key] = byKey[t.key] || []).push([t, r, rh]); close(t, r, rh, true); });
+      for (const k in byKey) {
+        const L = byKey[k], t0 = L[0][0];
+        setTimeout(() => {
+          const net = L.reduce((x, [t]) => x + (t.net || 0), 0);
+          speak('imp', k + 'close' + L.map(([t]) => t.id).join(), `${vname(t0)}${L.length > 1 ? ` की ${L.length} पोज़िशन` : ` ${t0.K} ${hiType(t0.type)}`} बंद, ${L[0][2]}। नेट ${net >= 0 ? 'मुनाफ़ा' : 'नुक़सान'} ${Math.abs(Math.round(net))} रुपये।`);
+        }, 400);
+      }
     }
     if (dirty || Date.now() - lastSave > 60000) { lastSave = Date.now(); openTrades().forEach((t) => Store.saveTrade(t)); }
     trackSignals();
@@ -152,7 +209,7 @@ const Paper = (() => {
         if (prev !== undefined && fresh && (!lastSig || lastSig.min !== a.curMin)) {
           const x = { id: uid(), key: k, dir: s.state, strength: s.strength, score: a.score, date: dk, min: a.curMin, price: a.price, atr: a.atr, ts: Date.now() };
           signals.unshift(x); Store.saveSignal(x);
-          if (k === cur && prev !== s.state) { beep(740); Voice.say(signalHi(a)); }
+          if (k === cur && prev !== s.state) { beep(740); speak('imp', 'sig' + k, signalHi(a)); }
         }
       }
       const today = a.D.candles.filter((c) => c.d === 2);
@@ -220,8 +277,11 @@ const Paper = (() => {
       <div><small>Today's net P&L</small><b class="${st.today >= 0 ? 'up' : 'down'}">${sgn(st.today)}${rs(st.today)}</b></div><div><small>Win rate</small><b>${st.pct == null ? '–' : st.pct + '%'} <span class="mut" style="font-size:11px">(${st.n} trades)</span></b></div>`;
   }
   function renderPositions() {
+    // don't redraw while you are typing a stop-loss or target (ticks would wipe the input)
+    const ae = document.activeElement; if (ae && ae.closest && ae.closest('#pPos') && /INPUT|SELECT/.test(ae.tagName)) return;
     const op = openTrades(), o = opts();
-    let h = `<div class="ptog"><label><input type="checkbox" ${o.trail ? 'checked' : ''} onchange="Paper.setOpt('trail',this.checked)"> Auto trailing SL</label>
+    let h = `<div class="ptog"><label>New trades' SL <select onchange="Paper.setOpt('slMode',this.value)">${Object.entries(SLM).map(([k, l]) => `<option value="${k}" ${o.slMode === k ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+      <label>Voice <select onchange="Paper.setOpt('voice',this.value)"><option value="important" ${o.voice === 'important' ? 'selected' : ''}>Important only</option><option value="all" ${o.voice === 'all' ? 'selected' : ''}>All alerts</option><option value="off" ${o.voice === 'off' ? 'selected' : ''}>Off</option></select></label>
       <label><input type="checkbox" ${o.autoExit ? 'checked' : ''} onchange="Paper.setOpt('autoExit',this.checked)"> Auto-sell on exit signal</label></div>`;
     if (!op.length) h += '<div class="mut" style="padding:8px 0">No open positions. Take a trade from the live signal or place one manually below.</div>';
     for (const t of op) {
@@ -230,7 +290,11 @@ const Paper = (() => {
       h += `<div class="pos"><div class="posh"><b>${t.label} ${t.K} ${t.type}</b><span class="mut">${t.lots} lot (${t.qty}), opened ${hm(t.openedMin)}</span></div>
         <div class="adv ${ac}"><b>${ADV[adv.state][0]}</b><div>${adv.why.map(esc).join('. ')}</div></div>
         <div class="lv"><div><small>Bought at</small><b>${f2(t.entry)}</b></div><div><small>Now (bid)</small><b>${f2(t.ltp)}</b></div><div><small>P&L</small><b class="${pnl >= 0 ? 'up' : 'down'}">${sgn(pnl)}${rs(pnl)}<br><small>${sgn(pct)}${f1(pct)}%</small></b></div></div>
-        <div class="posf"><label>SL <input type="number" step="0.05" value="${t.sl.toFixed(2)}" onchange="Paper.setSL('${t.id}',this.value)"></label>
+        <div class="slbox"><div class="slm" role="group" aria-label="Stop-loss mode">${Object.entries({ both: 'Both', auto: 'Auto', manual: 'Mine' }).map(([k, l]) => `<button class="${(t.slMode || 'both') === k ? 'on' : ''}" onclick="Paper.setSLMode('${t.id}','${k}')">${l}</button>`).join('')}</div>
+          <div class="slv"><span class="${t.slMode !== 'manual' && t.sl === t.slAuto ? 'act' : ''}"><small>Auto SL</small><b>${ok(t.slAuto) ? f2(t.slAuto) : '–'}</b></span>
+          <span class="${t.slMode !== 'auto' && ok(t.slUser) && t.sl === t.slUser ? 'act' : ''}"><small>My SL</small><input type="number" step="0.05" placeholder="not set" value="${ok(t.slUser) ? t.slUser.toFixed(2) : ''}" onchange="Paper.setSL('${t.id}',this.value)"></span>
+          <span><small>Active SL</small><b class="down">${f2(t.sl)}</b></span></div></div>
+        <div class="posf">
         <label>Target <input type="number" step="0.05" value="${t.tgt ? t.tgt.toFixed(2) : ''}" onchange="Paper.setTgt('${t.id}',this.value)"></label>
         <button class="sell" onclick="Paper.closeId('${t.id}')">Sell now</button></div>
         ${t.log.length ? `<details><summary class="mut">Events (${t.log.length})</summary><div class="mut" style="font-size:12px">${t.log.slice(-8).map(esc).join('<br>')}</div></details>` : ''}</div>`;
@@ -281,7 +345,14 @@ const Paper = (() => {
   }
   function openFromAsk(K, type) { open({ key: cur, K, type, lots: opts().lots, src: 'ask' }); }
   function closeId(id) { const t = trades.find((x) => x.id === id); if (t) close(t, 'Sold manually', 'हाथ से बेचा'); }
-  function setSL(id, v) { const t = trades.find((x) => x.id === id); v = +v; if (t && v > 0) { t.sl = tick05(v); t.log.push(`SL changed to ${f2(t.sl)}`); Store.saveTrade(t); } }
+  function setSL(id, v) {
+    const t = trades.find((x) => x.id === id); if (!t) return;
+    v = +v; t.slUser = v > 0 ? tick05(v) : null;
+    if (t.slUser && t.slMode === 'auto') t.slMode = 'both';
+    t.sl = effSL(t); t.log.push(t.slUser ? `Your SL set to ${f2(t.slUser)}` : 'Your SL removed'); Store.saveTrade(t); renderPositions();
+  }
+  function setSLMode(id, m) { const t = trades.find((x) => x.id === id); if (!t) return; t.slMode = m; if (m === 'manual' && !ok(t.slUser)) t.slUser = t.sl; t.sl = effSL(t); t.log.push(`SL mode: ${SLM[m]}`); Store.saveTrade(t); renderPositions(); }
+  const SLM = { both: 'Both (tighter wins)', auto: 'Auto only', manual: 'Mine only' };
   function setTgt(id, v) { const t = trades.find((x) => x.id === id); v = +v; if (t) { t.tgt = v > 0 ? tick05(v) : null; Store.saveTrade(t); } }
   function setOpt(k, v) { const o = opts(); o[k] = v; Store.setPref('paper_opts', o); renderPositions(); }
   function setLots(v) { const o = opts(); o.lots = Math.max(1, Math.floor(+v || 1)); Store.setPref('paper_opts', o); renderBanner(); }
@@ -292,7 +363,7 @@ const Paper = (() => {
     await Store.resetAll(); acc = { cash: c, start: c, created: Date.now() }; trades = []; signals = [];
     await Store.saveAccount(acc); toast('Account reset'); render();
   }
-  return { load, onTick, render, renderOrderForm, updateEstimate, takeSignal, placeManual, closeId, openFromAsk, setSL, setTgt, setOpt, setLots, reset, opts, charges,
+  return { load, onTick, render, renderOrderForm, updateEstimate, takeSignal, placeManual, closeId, openFromAsk, setSL, setSLMode, setTgt, setOpt, setLots, reset, opts, charges,
     get ready() { return ready; }, openTrades };
 })();
 

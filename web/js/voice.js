@@ -99,7 +99,7 @@ const Voice = (() => {
       score: x.score, signal: signalFor(x).title };
   }
   function fullCtx(a) {
-    const s = signalFor(a), st = a.score >= 58 ? setupFor(a, 'CE') : a.score <= 42 ? setupFor(a, 'PE') : null;
+    const s = signalFor(a), st = a.dir ? setupFor(a, a.dir) : null;
     const near = a.ch.view.map((r) => ({ K: r.K, ceLtp: r0(r.ce.ltp), ceOI: r.ce.oi, ceOIchg: r.ce.oi - (r.ce.poi || r.ce.oi), ceIV: r0(r.ce.iv * 100), ceDelta: r0(r.ce.de),
       peLtp: r0(r.pe.ltp), peOI: r.pe.oi, peOIchg: r.pe.oi - (r.pe.poi || r.pe.oi), peIV: r0(r.pe.iv * 100), peDelta: r0(r.pe.de) }));
     const k5 = a.I5.k.filter((c) => c.d === 2).slice(-12).map((c) => [hm(c.m), r0(c.o), r0(c.h), r0(c.l), r0(c.c)]);
