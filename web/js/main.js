@@ -21,7 +21,7 @@ function renderAll() {
   $('orb').style.display = a ? '' : 'none';
   $('below').style.display = a ? '' : 'none';
   if (!a) return;
-  renderControls(); renderHorizons(); renderScore(); renderSetup(); renderLevels(); renderTab(); renderNews(); renderGlobal(); renderOrb(); Engine.renderProjection(); Engine.renderFeed(); Engine.renderTicker(); Engine.renderStatus(); drawChart(); Paper.render();
+  renderControls(); renderHorizons(); renderStx(); renderCues(); renderScore(); renderSetup(); renderLevels(); renderTab(); renderNews(); renderGlobal(); renderOrb(); Engine.renderProjection(); Engine.renderFeed(); Engine.renderTicker(); Engine.renderStatus(); drawChart(); Paper.render();
   $('orderDrawer').style.display = a.cf.opt ? '' : 'none';
   if (orderFor !== cur || !$('oStrike').value) { orderFor = cur; Paper.renderOrderForm(); } else Paper.updateEstimate();
 }
@@ -112,6 +112,11 @@ async function startLive() {
   setTimeout(() => Promise.all([LiveSource.refreshFut(), LiveSource.refreshGlobal()]).then(refreshAll), 9000);
   setTimeout(() => Promise.all([LiveSource.refreshDaily(), LiveSource.refreshCalendar(), LiveSource.refreshFII()]).then(refreshAll), 15000);
   setTimeout(() => LiveSource.refreshGeo().then(refreshAll), 20000);
+  // world markets: every minute before the open and in the first hour (when they matter most), every 3 minutes after
+  setTimeout(() => Promise.all([LiveSource.refreshWorld(), LiveSource.refreshParticipant()]).then(refreshAll), 3000);
+  const worldLoop = () => { const m = istMin(); LiveSource.refreshWorld().then(refreshAll); setTimeout(worldLoop, m < 60 ? 60000 : 180000); };
+  setTimeout(worldLoop, 63000);
+  setInterval(() => LiveSource.refreshParticipant().then(refreshAll), 60 * 60000);
   setInterval(() => LiveSource.refreshGeo().then(refreshAll), 30 * 60000);
   LiveSource.refreshNews().then(refreshAll);
   LiveSource.refreshResults().then(refreshAll);

@@ -66,7 +66,7 @@ function renderControls() {
   $('ovChips').innerHTML = Object.keys(OV).map((k) => `<button class="chip ${OV[k] ? 'on' : ''}" onclick="togOV('${k}')" aria-pressed="${OV[k]}"><span class="sw" style="background:${OVC[k]}"></span>${k === 'vwap' && !a.hasVol ? 'TWAP' : k === 'vp' && !a.hasVol ? 'TPO profile' : OVL[k]}</button>`).join('');
   $('subBtns').innerHTML = [['rsi', 'RSI'], ['macd', 'MACD'], ['adx', 'ADX']].map(([k, l]) => `<button class="btn ${k === sub ? 'on' : ''}" onclick="setSub('${k}')">${l}</button>`).join('');
   $('chartTitle').textContent = `${a.cf.label} · ${TFL[tf]} chart`;
-  $('tabs').innerHTML = [['chain', a.cf.opt ? 'Option chain' : 'Futures & volatility'], ['mood', 'Market mood'], ['sig', `All ${a.intra.sigs.length + (a.short ? a.short.sigs.length : 0) + (a.long ? a.long.sigs.length : 0)} signals`]].map(([k, l]) => `<button class="btn ${k === tab ? 'on' : ''}" onclick="setTab('${k}')">${l}</button>`).join('');
+  $('tabs').innerHTML = [['chain', a.cf.opt ? 'Option chain' : 'Futures & volatility'], ['mood', 'Market mood'], ['struct', 'Structure & OI'], ['sig', `All ${a.intra.sigs.length + (a.short ? a.short.sigs.length : 0) + (a.long ? a.long.sigs.length : 0)} signals`]].map(([k, l]) => `<button class="btn ${k === tab ? 'on' : ''}" onclick="setTab('${k}')">${l}</button>`).join('');
   $('newsTabs').innerHTML = [['all', 'All'], ['official', 'Official'], ['market', a.cf.core ? 'Market' : a.cf.label], ['results', 'Results'], ['watch', 'Watchlist']].map(([k, l]) => `<button class="${k === newsTab ? 'on' : ''}" onclick="setNewsTab('${k}')" aria-pressed="${k === newsTab}">${esc(l)}</button>`).join('');
   const cf = a.cf;
   $('qchips').innerHTML = (cf.opt ? [`Should I buy ${cf.label} ${a.ch.atm} CE?`, `Should I buy ${cf.label} ${a.ch.atm} PE?`] : [`Is ${cf.label} bullish or bearish now?`, `Where is the stop-loss for ${cf.label}?`]).concat([`How far did ${cf.label} move today?`, 'Hold or exit my position?'])
@@ -102,6 +102,8 @@ function hzVerdict(a) {
   const S = a.short && a.short.dir, I = a.intra.dir, L = a.long && a.long.dir, nm = (x) => (x === 'CE' ? (a.cf.opt ? 'CALL' : 'up') : a.cf.opt ? 'PUT' : 'down');
   if (S && I && L && S === I && I === L) return ['al', `All three horizons point ${nm(I)}: the highest-conviction setup.`];
   if (S && I && S === I) return ['ok', `Short and intraday agree on ${nm(I)}.${L && L !== I ? ` The daily trend is the other way: trade small and book quickly.` : ''}`];
+  if (I && S && S !== I && a.stx && a.stx.state === 'pullback' && a.stx.trend === (I === 'CE' ? 1 : -1)) return ['wr', `Short-term ${S === 'CE' ? 'bounce' : 'pullback'} against the intraday ${nm(I)} trend, but the 5-minute structure calls it a pullback (nothing broken). Not a reversal unless ${f0(a.stx.prot)} breaks on a 5-minute close.`];
+  if (I && S && S !== I && a.stx && a.stx.state === 'noise' && a.stx.trend === (I === 'CE' ? 1 : -1)) return ['n', `The 1-minute leans ${nm(S)}, but on the 5-minute this is only noise (${f0(a.stx.pull)} pts, no swing broken). The intraday ${nm(I)} trend stands.`];
   if (I && S && S !== I) return ['wr', `Short-term ${S === 'CE' ? 'bounce' : 'pullback'} against the intraday ${nm(I)} trend. For a fresh entry, wait for the 1-minute to turn back to ${nm(I)}. If you already hold ${nm(S === 'CE' ? 'PE' : 'CE')}, tighten the stop.`];
   if (!I && S) return ['wr', `Only the 1-minute shows ${nm(S)} so far. It is the earliest warning, not yet a trend; watch whether intraday follows.`];
   if (I && !S) return ['n', `Intraday ${nm(I)}, but the last few minutes are flat. Better entries come when the 1-minute confirms.`];
@@ -188,6 +190,7 @@ function futVolHTML(a) {
 function renderTab() {
   const a = A[cur], ch = a.ch; let h = '';
   if (tab === 'sig') return renderSigTab(a);
+  if (tab === 'struct') return renderStructTab(a);
   if (tab === 'chain') {
     if (!a.cf.opt) { $('tabBody').innerHTML = `<div class="mut">${esc(a.cf.label)} ${a.isMCX ? 'is an MCX futures contract. Upstox does not provide an MCX option chain' : 'has no options on NSE/BSE'}, so this tab shows futures and volatility tools instead.</div>` + futVolHTML(a); return; }
     if (!ch.rows.length) { $('tabBody').innerHTML = '<div class="mut">No option chain data yet. It refreshes every 15–30 seconds.</div>' + futVolHTML(a); return; }
@@ -348,18 +351,19 @@ function renderNews() {
 const GNAME = [[/gift|sgx/i, 'GIFT Nifty'], [/dow|\^dji|us 30/i, 'Dow'], [/s&p|gspc/i, 'S&P 500'], [/us tech|ndx|nasdaq/i, 'Nasdaq 100'], [/nikkei/i, 'Nikkei'], [/hang seng/i, 'Hang Seng'], [/dax/i, 'DAX'], [/ftse/i, 'FTSE'], [/cac/i, 'CAC 40'], [/brent|bzusd/i, 'Brent'], [/wti/i, 'WTI'], [/usd ?inr/i, 'USD/INR']];
 function shortG(n) { const m = GNAME.find(([re]) => re.test(n)); return m ? m[1] : n; }
 function renderGlobal() {
-  const G = Source.global ? Source.global() : [], C = Source.calendar ? Source.calendar() : { items: [] }, a = A[cur];
-  let h = '<div class="g-a">';
-  const gift = G.find((g) => /gift|sgx/i.test(g.name + g.sym)), N = A.NIFTY;
-  if (gift && N && ok(gift.price)) {
-    const gap = gift.price - N.PC, pre = !N.sessionLive && istMin() < 0;
-    h += `<div class="gift ${gap >= 0 ? 'up' : 'down'}"><div><small>GIFT Nifty</small><b>${f1(gift.price)}</b><span>${sgn(gift.chg)}${f2(gift.chg)}%</span></div><p>${pre ? `Points to a ${Math.abs(gap) < 30 ? 'flat' : gap > 0 ? 'gap-up' : 'gap-down'} open: ${sgn(gap)}${f0(gap)} pts vs Nifty's last close.` : `${sgn(gap)}${f0(gap)} pts vs Nifty's previous close. Most useful before 9:15.`}</p></div>`;
-  }
-  h += '</div><div class="g-b">';
-  const rest = G.filter((g) => g !== gift);
-  h += rest.length ? `<div class="gl-grid">${rest.map((g) => `<div class="gl"><small>${esc(shortG(g.name))}</small><b>${g.price >= 1000 ? f0(g.price) : f2(g.price)}</b><span class="${g.chg >= 0 ? 'up' : 'down'}">${sgn(g.chg)}${f2(g.chg)}%</span></div>`).join('')}</div>`
-    : '<div class="mut">Global markets load from Upstox (deploy the new Worker if this stays empty).</div>';
-  h += `<div class="legend">US indices show their last close during Indian hours; Asia trades live. ${G.some((g) => /15|delay/i.test(g.latency || '')) ? 'Some quotes are delayed by Upstox.' : ''}</div>`;
+  const C = Source.calendar ? Source.calendar() : { items: [] };
+  const CK = premarketChecklist(), W = CK.W;
+  let h = `<div class="g-a"><div class="sec" style="margin-top:0">Before you trade: ${CK.good} supportive, ${CK.bad} against</div>` +
+    CK.items.map((x) => `<div class="ck ${x.st}"><div><b>${esc(x.t)}</b><span>${esc(x.v)}</span></div><small>${esc(x.m)}</small></div>`).join('') +
+    '<div class="legend">Green = supportive for Nifty, red = against, grey = neutral. A professional checks these before the first trade; none of them decides the day alone.</div>';
+  h += '</div><div class="g-b"><div class="sec" style="margin-top:0">World markets and what they mean for India</div>';
+  if (W) {
+    const groups = [...new Set(W.rows.map((x) => x.cue.grp))];
+    h += `<div class="tbl wtbl"><table><thead><tr><th class="l">Market</th><th>Last</th><th>Change</th><th class="l">For Nifty</th><th class="l">Why it matters</th></tr></thead><tbody>` +
+      groups.map((g) => `<tr><td colspan="5" class="l mut" style="padding-top:12px">${esc(g)}</td></tr>` + W.rows.filter((x) => x.cue.grp === g).map((x) => `<tr><td class="l"><b>${esc(x.name)}</b>${x.note ? `<br><small class="mut">${esc(x.note)}</small>` : ''}</td><td>${pxFmt(x)}</td><td class="${x.chg >= 0 ? 'up' : 'down'}">${ok(x.chg) ? sgn(x.chg) + f2(x.chg) + '%' : '–'}</td><td class="l"><span class="pill ${x.imp > 0 ? 'b' : x.imp < 0 ? 's' : 'n'}">${x.imp > 0 ? 'Positive' : x.imp < 0 ? 'Negative' : 'Neutral'}</span></td><td class="l why">${esc(x.cue.why)}</td></tr>`).join('')).join('') + '</tbody></table></div>';
+    const wi = worldItems();
+    h += `<div class="legend">Inverse markets: crude, the dollar index, US yields, USD/INR and US VIX are bad for Nifty when they rise. "Neutral" means the move is too small to matter. Sources: Yahoo Finance (world, 1–15 min delayed), NSE (GIFT Nifty), Upstox.${wi.stale ? ' Showing the last saved values; live fetch failed.' : ''}${wi.missing.length ? ` Not available now: ${esc(wi.missing.slice(0, 6).join(', '))}${wi.missing.length > 6 ? '…' : ''}.` : ''}</div>`;
+  } else h += `<div class="mut">World markets load from the Worker (/api/world). If this stays empty, deploy the latest Worker code.</div>`;
   // calendar
   const today = istYmd(), tom = new Date(Date.now() + 5.5 * 3600e3 + 864e5).toISOString().slice(0, 10);
   const exp = KEYS.filter((k) => A[k] && A[k].cf.opt && A[k].ch.expiry && A[k].ch.expiry !== 'Demo' && A[k].ch.dte <= 7).map((k) => ({ date: A[k].ch.expiry, time: '15:30', t: `${A[k].cf.label} options expiry`, imp: A[k].cf.core ? 'high' : 'medium', src: 'Exchange' }));
@@ -503,3 +507,125 @@ function onSearch(v) {
   }, 280);
 }
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && $('srch') && $('srch').classList.contains('open')) closeSearch(); });
+
+/* ---------- Structure and pre-alerts (signal panel card + Structure tab) ---------- */
+const TONE = { call: 'up', put: 'dn', warn: 'wr', info: 'n' };
+function stxRows(a) {
+  const X = a.stx, rows = [];
+  if (a.open && a.sessionLive && a.curMin < a.SS.o + 120) rows.push(['Opening', a.open.trap ? 'wr' : a.open.dir > 0 ? 'up' : a.open.dir < 0 ? 'dn' : 'n', a.open.trap ? 'Possible opening fake-out' : a.open.name, a.open.trap || a.open.note]);
+  if (X) rows.push(['5-min structure', TONE[X.tone] || 'n', X.label, X.detail + (X.sweepTxt ? ' ' + X.sweepTxt : '')]);
+  if (X && X.micro) rows.push(['1-min', X.microTrend > 0 ? 'up' : X.microTrend < 0 ? 'dn' : 'n', `1-minute trend ${X.microTrend > 0 ? 'up' : X.microTrend < 0 ? 'down' : 'flat'}`, `Last: ${evName(X.micro).toLowerCase()} ${X.micro.dir > 0 ? 'up' : 'down'} through ${f0(X.micro.lvl)} at ${evTime(X.micro)}.${X.state === 'noise' && X.micro.dir === -X.trend ? ' The 5-minute calls it noise.' : ''}`]);
+  const near = a.lvw ? [a.lvw.above, a.lvw.below].filter((l) => l && l.near) : [];
+  near.forEach((l) => rows.push(['Pre-alert', l.verdict === 'break' ? (l.R ? 'up' : 'dn') : l.verdict === 'hold' ? 'wr' : 'n', `${l.kind} ${f0(l.v)} is ${f0(l.dist)} pts away: ${l.vTxt.toLowerCase()}`, `${l.name}. ${l.act} Breaks if: ${l.confirmBreak}. Holds if: ${l.confirmHold}.`]));
+  if (!near.length && a.lvw) { const u = a.lvw.above, d = a.lvw.below; rows.push(['Next levels', 'n', `${u ? `R ${f0(u.v)} (+${f0(u.dist)})` : 'No resistance found'} · ${d ? `S ${f0(d.v)} (−${f0(d.dist)})` : 'No support found'}`, `Pre-alerts start when price is within 0.6 ATR (${f0(0.6 * a.atr)} pts) of a level.`]); }
+  if (a.cf.opt) {
+    const F = a.oif;
+    if (F && F.ready) rows.push(['OI flow', F.bias >= 0.3 ? 'up' : F.bias <= -0.3 ? 'dn' : 'n', F.read, F.notes.length ? F.notes[0][2] : `Call OI near the money ${sgn(F.ce15)}${f1(F.ce15 / 1e5)}L, put OI ${sgn(F.pe15)}${f1(F.pe15 / 1e5)}L in 15 minutes.`]);
+    else if (a.sessionLive) rows.push(['OI flow', 'n', 'Building live OI history', `${F ? F.mins : 0} of 15 minutes recorded. OI-switch alerts start after that; keep the tab open.`]);
+  }
+  const G = a.gap && a.gap.today;
+  if (G && G.side !== 'flat' && G.base && G.base.n >= 5) {
+    const b = G.base, up = G.side === 'up';
+    rows.push(['Gap', up ? 'up' : 'dn', `${a.sessionLive ? 'Today' : 'Last session'}: gap-${up ? 'up' : 'down'} ${sgn(G.pts)}${f0(G.pts)} pts (${sgn(G.pct)}${f2(G.pct)}%), ${G.filled ? 'gap filled' : `${Math.round(G.fillPct * 100)}% filled`}`, `Past year, similar gaps: ${Math.round((b.same / b.n) * 100)}% closed ${up ? 'green' : 'red'}, ${Math.round((b.fill / b.n) * 100)}% filled the gap (${b.n} days). ${a.gap.driver && a.gap.driver.verdict ? a.gap.driver.verdict + '.' : ''}`]);
+  }
+  return rows;
+}
+function renderStx() {
+  const a = A[cur], box = $('stx'); if (!box || !a) return;
+  const rows = stxRows(a);
+  const open = box.dataset.open === '1';
+  box.innerHTML = rows.length ? `<div class="stx${open ? ' open' : ''}" onclick="if(event.target.closest('button'))return;const b=$('stx');b.dataset.open=b.dataset.open==='1'?'':'1';renderStx()" title="Tap to show or hide the explanations"><div class="stx-h"><span>Structure and pre-alerts</span><button class="lnk" onclick="setTab('struct');document.querySelector('.p-tabs').scrollIntoView({behavior:'smooth'})">Details</button></div>` +
+    rows.map((r) => `<div class="stx-r ${r[1]}"><span class="stx-k">${r[0]}</span><div><b>${esc(r[2])}</b><small>${esc(r[3])}</small></div></div>`).join('') + `<div class="stx-more">${open ? 'Tap to hide the explanations' : 'Tap for the full explanation and confirmations'}</div></div>` : '';
+}
+function renderStructTab(a) {
+  const X = a.stx, L = (v) => f1(v / 1e5) + 'L';
+  let h = '<div class="sec">Market structure, 5-minute (breaks count only on candle closes)</div>';
+  if (X) {
+    h += `<div class="alert ${X.tone === 'warn' ? '' : 'i'}"><b>${esc(X.label)}</b><br>${esc(X.detail)}</div>${X.sweepTxt ? `<div class="alert">${esc(X.sweepTxt)}</div>` : ''}`;
+    if (ok(X.prot)) h += `<div class="row"><span>${X.trend > 0 ? 'Protected low (must hold for the uptrend)' : 'Protected high (must hold for the downtrend)'}</span><b>${f1(X.prot)}</b></div>`;
+    if (ok(X.ext)) h += `<div class="row"><span>${X.trend > 0 ? 'Trend high' : 'Trend low'}</span><b>${f1(X.ext)}</b></div>`;
+    if (X.events.length) h += `<div class="tbl"><table><thead><tr><th class="l">Time</th><th class="l">Event</th><th>Direction</th><th>Level</th></tr></thead><tbody>${X.events.slice().reverse().map((e) => `<tr><td class="l">${evTime(e)}</td><td class="l">${evName(e)}</td><td><span class="pill ${e.dir > 0 ? 'b' : 's'}">${e.dir > 0 ? 'Up' : 'Down'}</span></td><td>${f1(e.lvl)}</td></tr>`).join('')}</tbody></table></div>`;
+  } else h += '<div class="mut">Not enough candles yet.</div>';
+  h += `<div class="legend">Noise: under 0.6 ATR, no swing broken. Pullback: price retraces but the protected swing holds. Break of structure (BOS): a close beyond the last swing in the trend's direction, so the trend continues. Change of character (CHoCH): the first close beyond the opposite swing, the earliest sign a trend may be turning; it is confirmed when the next swing fails. Liquidity sweep: a wick through a swing that closes back inside, typically stop-loss hunting.</div>`;
+  if (a.lvw) {
+    h += '<div class="sec" style="margin-top:16px">Level pre-alerts: will the next level hold or break?</div>';
+    [a.lvw.above, a.lvw.below].forEach((l) => {
+      if (!l) return;
+      h += `<div class="lvw ${l.verdict}"><div class="lvw-h"><b>${l.kind} ${f1(l.v)}</b><span>${esc(l.name)} · ${f0(l.dist)} pts (${f1(l.distATR)} ATR) away</span><span class="pill ${l.verdict === 'hold' ? 'n' : l.R ? 'b' : 's'}">${l.vTxt}</span></div>
+        <div class="lvw-c"><div><small>Points to ${l.R ? 'a rejection' : 'a bounce'} (${f1(l.hs)})</small>${l.hold.map((x) => `<p>${esc(x[1])}</p>`).join('') || '<p class="mut">None</p>'}</div><div><small>Points to a break (${f1(l.bs)})</small>${l.brk.map((x) => `<p>${esc(x[1])}</p>`).join('') || '<p class="mut">None</p>'}</div></div>
+        <div class="lvw-f"><span><b>Break confirmed:</b> ${esc(l.confirmBreak)}</span><span><b>Hold confirmed:</b> ${esc(l.confirmHold)}</span><span>${esc(l.act)}</span></div></div>`;
+    });
+    h += '<div class="legend">These are odds from price behaviour and option writers, not certainties. Wait for the confirmation line before acting.</div>';
+  }
+  if (a.cf.opt) {
+    const F = a.oif;
+    h += '<div class="sec" style="margin-top:16px">Option OI flow, near the money (live, last 15 minutes)</div>';
+    if (F && F.ready) {
+      h += `<div class="alert i"><b>${esc(F.read)}</b>${ok(F.prevBias) ? `<br>15 minutes earlier: ${F.prevBias >= 0.3 ? 'put writers dominated' : F.prevBias <= -0.3 ? 'call writers dominated' : 'balanced'}.` : ''}</div>` + F.notes.map((n) => `<div class="alert ${n[0] === 'put' ? '' : 'i'}">${esc(n[2])}</div>`).join('');
+      h += `<div class="row"><span>Call OI wall (resistance)</span><b>${F.cw ? F.cw[0] : '–'}${F.cw0 && F.cw && F.cw0[0] !== F.cw[0] ? ` (was ${F.cw0[0]})` : ''}</b></div><div class="row"><span>Put OI wall (support)</span><b>${F.pw ? F.pw[0] : '–'}${F.pw0 && F.pw && F.pw0[0] !== F.pw[0] ? ` (was ${F.pw0[0]})` : ''}</b></div>`;
+      h += `<div class="tbl"><table><thead><tr><th>CE OI</th><th>CE Δ 15m</th><th class="k">Strike</th><th class="l">PE Δ 15m</th><th class="l">PE OI</th></tr></thead><tbody>${F.per.map((r) => `<tr class="${r.K === a.ch.atm ? 'atm' : ''}"><td>${L(r.ce)}</td><td class="${r.dce >= 0 ? 'down' : 'up'}">${sgn(r.dce)}${L(r.dce)}</td><td class="k">${r.K}</td><td class="l ${r.dpe >= 0 ? 'up' : 'down'}">${sgn(r.dpe)}${L(r.dpe)}</td><td class="l">${L(r.pe)}</td></tr>`).join('')}</tbody></table></div>`;
+      h += '<div class="legend">Option buyers in India are mostly retail; writers (sellers) are mostly institutions. Writers adding calls above price = they expect a cap (bearish). Writers adding puts below = they expect support (bullish). When the side that was adding starts cutting, the character is switching.</div>';
+    } else h += `<div class="mut">Recording live OI: ${F ? F.mins : 0} of 15 minutes so far. The browser keeps a minute-by-minute OI history while the dashboard is open.</div>`;
+  }
+  // opening type and gap
+  h += '<div class="sec" style="margin-top:16px">Opening type and gap</div>';
+  if (a.open) h += `<div class="alert ${a.open.trap ? '' : 'i'}"><b>${esc(a.open.name)}</b><br>${esc(a.open.note)}${a.open.trap ? `<br><b>${esc(a.open.trap)}</b>` : ''}</div>`;
+  const GS = a.gap;
+  if (GS) {
+    const T = GS.today;
+    if (T) h += `<div class="row"><span>${a.sessionLive ? "Today's" : 'Last session'} open vs previous close</span><b class="${T.pts >= 0 ? 'up' : 'down'}">${sgn(T.pts)}${f1(T.pts)} pts (${sgn(T.pct)}${f2(T.pct)}%, ${f1(Math.abs(T.g))} daily ATR)</b></div>` + (T.side !== 'flat' ? `<div class="row"><span>Gap filled so far</span><b>${T.filled ? 'Yes, fully' : Math.round(T.fillPct * 100) + '%'}</b></div>` : '');
+    if (GS.driver && GS.driver.items.length) h += `<div class="sec">What is behind the gap</div>` + GS.driver.items.map((x) => `<div class="ck ${x[0]}">${esc(x[1])}</div>`).join('') + `<div class="alert i"><b>${esc(GS.driver.verdict)}</b></div>`;
+    const pct = (b, x) => (b.n ? Math.round((b[x] / b.n) * 100) + '%' : '–'), row = (lab, b) => `<tr><td class="l">${lab}</td><td>${b.n}</td><td>${pct(b, 'same')}</td><td>${pct(b, 'go')}</td><td>${pct(b, 'fill')}</td></tr>`;
+    h += `<div class="sec">How gaps behaved, last ${GS.days} sessions of ${esc(a.cf.label)}</div><div class="tbl"><table><thead><tr><th class="l">Gap</th><th>Days</th><th>Closed in gap direction</th><th>Kept going after open</th><th>Gap filled</th></tr></thead><tbody>
+      ${row('Small gap-up (0.15–0.5 ATR)', GS.st.up.small)}${row('Big gap-up (over 0.5 ATR)', GS.st.up.big)}${row('Small gap-down', GS.st.dn.small)}${row('Big gap-down', GS.st.dn.big)}</tbody></table></div>
+      <div class="legend">"Closed in gap direction": a gap-up day closed above the previous close (or a gap-down below it). "Kept going": closed beyond the open in the gap's direction (gap-and-go). "Gap filled": price touched the previous close during the day. A gap does not decide the close by itself; the cause and the first 30 minutes do.</div>`;
+  } else h += '<div class="mut">Gap statistics need about 40 days of daily candles (they load a few seconds after start).</div>';
+  $('tabBody').innerHTML = h;
+}
+
+/* ---------- World cues: compact strip on top + full pre-market checklist ---------- */
+const CUE_SHORT = { gift: 'GIFT Nifty', indicative: 'Pre-open', dowF: 'Dow fut', nasF: 'Nasdaq fut', spxF: 'S&P fut', dow: 'Dow', nas: 'Nasdaq', spx: 'S&P 500', usvix: 'US VIX', nikkei: 'Nikkei', hsi: 'Hang Seng', kospi: 'Kospi', sse: 'Shanghai', dax: 'DAX', ftse: 'FTSE', brent: 'Brent', wti: 'WTI', gold: 'Gold', silver: 'Silver', natgas: 'Nat gas', dxy: 'Dollar idx', us10y: 'US 10Y', usdinr: 'USD/INR', infy: 'INFY ADR', wit: 'WIT ADR', hdb: 'HDB ADR', ibn: 'IBN ADR' };
+const pxFmt = (x) => (x.id === 'us10y' ? f2(x.price) + '%' : x.price >= 1000 ? f0(x.price) : f2(x.price));
+function renderCues() {
+  const box = $('cues'); if (!box) return;
+  const W = worldRead(A[cur]);
+  if (!W) { box.innerHTML = `<div class="cu-lead n"><b>World cues</b><span>${Source.mode === 'live' ? 'Loading GIFT Nifty, US futures, Asia, crude, dollar…' : 'Not available'}</span></div>`; return; }
+  const order = ['gift', 'indicative', 'dowF', 'nasF', 'spxF', 'nikkei', 'hsi', 'brent', 'dxy', 'us10y', 'usdinr', 'usvix', 'gold', 'infy', 'hdb'];
+  const tiles = order.map((id) => W.rows.find((x) => x.id === id)).filter(Boolean);
+  const cls = W.score >= 15 ? 'up' : W.score <= -15 ? 'dn' : 'n';
+  const g = W.gift, gTxt = g && ok(W.base) ? `GIFT Nifty ${sgn(g.price - W.base)}${f0(g.price - W.base)} pts ${W.beforeOpen ? '→ expected open ' + (Math.abs(g.price - W.base) < Math.max(30, W.base * 0.0015) ? 'flat' : g.price > W.base ? 'gap-up' : 'gap-down') : 'vs prev. close'}` : '';
+  box.innerHTML = `<button class="cu-lead ${cls}" onclick="document.getElementById('below').scrollIntoView({behavior:'smooth'})"><b>World cues for Nifty: ${W.lean}</b><span>${gTxt || 'Score ' + W.score} · Full checklist ↓</span></button>` +
+    `<div class="cu-row">${tiles.map((x) => `<div class="cu ${x.imp > 0 ? 'up' : x.imp < 0 ? 'dn' : 'n'}" title="${esc(x.cue.why)}"><small>${CUE_SHORT[x.id] || esc(x.name)}</small><b>${pxFmt(x)}</b><span>${ok(x.chg) ? sgn(x.chg) + f2(x.chg) + '%' : ''}</span><i>${x.imp > 0 ? '▲ good for Nifty' : x.imp < 0 ? '▼ bad for Nifty' : 'neutral'}</i></div>`).join('')}</div>`;
+}
+function premarketChecklist() {
+  const N = A.NIFTY, W = worldRead(N), out = [], add = (st, t, v, m) => out.push({ st, t, v, m });
+  const grp = (ids) => (W ? W.rows.filter((x) => ids.includes(x.id)) : []);
+  const sum = (rows) => rows.reduce((s, x) => s + x.imp, 0), txt = (rows) => rows.map((x) => `${CUE_SHORT[x.id]} ${sgn(x.chg)}${f2(x.chg)}%`).join(', ');
+  if (W && W.gift && ok(W.base)) { const gp = W.gift.price - W.base, flat = Math.abs(gp) < Math.max(30, W.base * 0.0015); add(flat ? 'n' : gp > 0 ? 'ok' : 'bad', 'GIFT Nifty', `${f0(W.gift.price)} (${sgn(gp)}${f0(gp)} pts)`, flat ? 'Points to a flat open. GIFT carries a small futures premium, so gaps under ~30 pts are basically flat.' : `Points to a gap-${gp > 0 ? 'up' : 'down'} open of about ${f0(Math.abs(gp))} pts. Check "Gap" below for how such gaps usually behave.`); }
+  else add('n', 'GIFT Nifty', 'Not available', 'NSE sometimes blocks cloud servers; the Upstox global list is used when it has it.');
+  [['US futures', ['dowF', 'nasF', 'spxF'], 'Live overnight: the latest read on US mood.'], ['US close', ['dow', 'nas', 'spx'], 'Last US session; mostly priced into GIFT already.'], ['Asia', ['nikkei', 'hsi', 'kospi'], 'Trades alongside India in the morning.']].forEach(([t, ids, m]) => { const r = grp(ids); if (r.length) { const s = sum(r); add(s > 0 ? 'ok' : s < 0 ? 'bad' : 'n', t, txt(r), m); } });
+  const cr = grp(['brent']);
+  if (cr.length) add(cr[0].imp > 0 ? 'ok' : cr[0].imp < 0 ? 'bad' : 'n', 'Crude oil (Brent)', `${f2(cr[0].price)} (${sgn(cr[0].chg)}${f2(cr[0].chg)}%)`, cr[0].chg > 0 ? 'Rising crude hurts India (importer): watch OMCs, paints, airlines. ONGC gains.' : 'Softer crude helps India: OMCs, paints, airlines benefit.');
+  const fx = grp(['dxy', 'us10y', 'usdinr']);
+  if (fx.length) { const s = sum(fx); add(s > 0 ? 'ok' : s < 0 ? 'bad' : 'n', 'Dollar, US yields, rupee', txt(fx), 'A stronger dollar, higher US yields or a weaker rupee push FIIs to sell Indian stocks.'); }
+  if (N && N.vix) add(N.vix.v > 18 ? 'bad' : N.vix.v < 13 ? 'ok' : 'n', 'India VIX', `${f2(N.vix.v)} (${N.vix.v >= N.vix.prev ? 'rising' : 'falling'})`, N.vix.v > 18 ? 'High fear: big swings, expensive premiums. Trade smaller.' : N.vix.v < 13 ? 'Calm market: cheaper premiums, smaller ranges.' : 'Normal volatility.');
+  if (N && ok(N.fii)) add(N.fii > 0 ? 'ok' : 'bad', 'FII / DII cash, previous day', `FII ${sgn(N.fii)}${f0(N.fii)} cr${ok(N.dii) ? `, DII ${sgn(N.dii)}${f0(N.dii)} cr` : ''}`, N.fii > 0 ? 'Foreign funds were buyers.' : `Foreign funds were sellers${ok(N.dii) && N.dii > -N.fii ? ', but domestic funds absorbed it' : ''}.`);
+  const FP = fiiPositions();
+  if (FP) add(FP.longPct >= 50 ? 'ok' : FP.longPct < 35 ? 'bad' : 'n', 'FII index futures position', `${f0(FP.longPct)}% long${ok(FP.dL) ? ` (longs ${sgn(FP.dL)}${f0(FP.dL)}, shorts ${sgn(FP.dS)}${f0(FP.dS)} contracts)` : ''}`, `FIIs are ${FP.read}. As of ${FP.date}.`);
+  if (N && N.ch.rows.length) add(N.ch.pcr > 1.2 ? 'ok' : N.ch.pcr < 0.8 ? 'bad' : 'n', 'Nifty option chain', `PCR ${f2(N.ch.pcr)}, max pain ${N.ch.mp}, walls ${N.ch.maxPE}–${N.ch.maxCE}`, `Writers expect ${N.ch.maxPE} to hold as support and ${N.ch.maxCE} as resistance. ${N.ch.dte <= 1 ? 'Expiry day: decay is fast, moves pin towards max pain.' : ''}`);
+  if (N) {
+    // before the open, "previous day" is the session that just ended, and its CPR is built from that session
+    const pre = !N.sessionLive, H = pre ? N.DH : N.PH, Lo = pre ? N.DL : N.PL, Cl = pre ? N.price : N.PC, P = (H + Lo + Cl) / 3, bc0 = (H + Lo) / 2, tc0 = 2 * P - bc0, tc = Math.max(tc0, bc0), bc = Math.min(tc0, bc0);
+    const w = Math.abs(tc - bc) / N.price * 100; add(w < 0.1 ? 'ok' : 'n', pre ? 'Last session and next CPR' : 'Previous day and CPR', `High ${f0(H)}, low ${f0(Lo)}, CPR ${f0(bc)}–${f0(tc)}`, w < 0.1 ? 'Very narrow CPR: trending-day odds are higher.' : w > 0.35 ? 'Wide CPR: sideways-day odds are higher.' : 'Normal CPR. Above TC = bullish, below BC = bearish.'); }
+  const ev = N ? N.events : [];
+  add(ev.length ? 'bad' : 'ok', 'Event risk', ev.length ? ev.map((e) => `${e.t} ${e.time}`).join('; ') : 'No high-impact event today', ev.length ? 'Volatility spikes around the event; IV drops right after. Avoid holding options into it.' : 'Nothing scheduled to jolt the market.');
+  if (N) { const fresh = (N.news || []).filter((n) => { const t = ok(n.ts) ? n.ts : agoMs(n.ago); return t && Date.now() - t < 20 * 3600e3 && (n.imp === 'high' || Math.abs(n.s) >= 0.5); }); const s = fresh.reduce((x, n) => x + Math.sign(n.s), 0); add(s > 0 ? 'ok' : s < 0 ? 'bad' : 'n', 'Overnight news', fresh.length ? `${fresh.length} high-impact (${fresh.filter((n) => n.s > 0).length} positive, ${fresh.filter((n) => n.s < 0).length} negative)` : 'Nothing high-impact', fresh[0] ? `Top: ${fresh[0].t}` : 'A gap without news tends to fade.'); }
+  const geo = N && N.D.geo; if (geo) add(/High|Elevated/.test(geo.level) ? 'bad' : 'ok', 'Geopolitical risk', geo.level, /High|Elevated/.test(geo.level) ? 'Expect sudden swings; keep size small.' : 'Calm.');
+  const GS = N && N.gap;
+  if (GS && W && W.gift && ok(W.base) && W.beforeOpen) {
+    const gA = (W.gift.price - W.base) / (GS.A || 1);
+    if (Math.abs(gA) >= 0.15) { const b = GS.st[gA > 0 ? 'up' : 'dn'][Math.abs(gA) >= 0.5 ? 'big' : 'small']; if (b.n >= 5) add('n', 'If it opens with this gap', `${b.n} similar days last year`, `${Math.round((b.same / b.n) * 100)}% closed ${gA > 0 ? 'green' : 'red'}, ${Math.round((b.fill / b.n) * 100)}% filled the gap. Watch the first 30 minutes (opening type) before trusting the gap.`); }
+  }
+  const good = out.filter((x) => x.st === 'ok').length, bad = out.filter((x) => x.st === 'bad').length;
+  return { items: out, good, bad, W };
+}

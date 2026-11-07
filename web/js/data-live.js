@@ -89,6 +89,9 @@ const LiveSource = (() => {
   async function refreshGlobal() { try { glob = (await api('/api/global')).items || []; } catch (e) { soft(e); } }
   async function refreshCalendar() { try { cal = await api('/api/calendar'); } catch (e) { soft(e); } }
   async function refreshFII() { try { const j = await api('/api/fiidii'); fii = j.none ? null : j; } catch (e) { soft(e); } }
+  let world = { items: [] }, part = null;
+  async function refreshWorld() { try { world = await api('/api/world'); } catch (e) { soft(e); } }
+  async function refreshParticipant() { try { const j = await api('/api/participant'); part = j.none ? null : j; } catch (e) { soft(e); } }
   async function refreshGeo() { try { const j = await api('/api/geo'); geo = { ...j, items: (j.items || []).map((n) => ({ ...n, ago: agoText(n.ts) })) }; } catch (e) { soft(e); } }
   async function refreshOfficial() { try { const j = await api('/api/official'); off = { items: (j.items || []).map((n) => ({ ...n, ago: agoText(n.ts) })), sources: j.sources || {} }; } catch (e) { soft(e); } }
   async function search(q) { return api('/api/search?q=' + enc(q)); }
@@ -316,6 +319,6 @@ const LiveSource = (() => {
   function connectUrl(idToken) { return APP_CONFIG.WORKER_URL.replace(/\/$/, '') + '/auth/login?id_token=' + encodeURIComponent(idToken); }
   return { mode: 'live', init, refreshSnapshot, refreshChains, refreshCandles, refreshFut, refreshDaily, refreshNews, refreshResults, refreshGlobal, refreshCalendar, refreshFII, refreshOfficial,
     search, instInfo, get, clock, rateLimited, rateWait: () => Math.max(0, Math.ceil((rateUntil - Date.now()) / 1000)), ask, connectUrl, results: () => resultsData, stream: Stream, drop: (k) => { delete raw[k]; },
-    global: () => glob, calendar: () => cal, official: () => off, fiiAuto: () => fii, geo: () => geo, refreshGeo,
+    global: () => glob, calendar: () => cal, official: () => off, fiiAuto: () => fii, geo: () => geo, refreshGeo, world: () => world, participant: () => part, refreshWorld, refreshParticipant,
     get status() { return status; }, get error() { return lastErr; }, newsAI: (k) => R(k).newsAI, newsSources: (k) => R(k).sources };
 })();

@@ -445,7 +445,7 @@ const Paper = (() => {
     await Store.resetAll(); acc = { cash: c, start: c, created: Date.now() }; trades = []; signals = [];
     await Store.saveAccount(acc); toast('Account reset'); render();
   }
-  return { load, onTick, render, renderOrderForm, updateEstimate, takeSignal, placeManual, closeId, openFromAsk, setSL, setSLMode, setTgt, setOpt, setLots, reset, opts, charges, addFunds, withdraw, resetTo, openFunds, renderFunds, fset,
+  return { speak, load, onTick, render, renderOrderForm, updateEstimate, takeSignal, placeManual, closeId, openFromAsk, setSL, setSLMode, setTgt, setOpt, setLots, reset, opts, charges, addFunds, withdraw, resetTo, openFunds, renderFunds, fset,
     get ready() { return ready; }, openTrades };
 })();
 

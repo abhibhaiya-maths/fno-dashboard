@@ -238,10 +238,11 @@ function analyze(D) {
 
   const A0 = { key: D.key, cf, D, price, chg, PC, curMin, sessionLive: D.sessionLive, dayLabels: D.dayLabels, hasVol, I5, piv, tc, bc, p, ORH, ORL, DH, DL, fib, upSwing, VP, ch, hv, hvW, news, newsAvg, vix, fii: D.fii, dii: D.dii,
     adxV: ax, sigs, score, active, paScore: ok(paN) ? Math.round(50 + 50 * paN) : null, cxScore: ok(cxN) ? Math.round(50 + 50 * cxN) : null, dir, gate, coreUp, coreDn, coreN: core.length, struct, mvA, atr: at, rsi: rsv, adx: ax, res, sup, stV, stD, vw, lot: C.lot || cf.lot || APP_CONFIG.LOT_FALLBACK[D.key] || null, fut, vol: vlt, glob, events, isIdx, isMCX, SS };
-  Object.assign(A0, { e20, e50, mtf });
+  Object.assign(A0, { e20, e50, mtf, lv, PH, PL });
   try { A0.short = shortTerm(A0); } catch (e) { A0.short = null; }
   try { A0.long = longTerm(A0); } catch (e) { A0.long = null; }
   try { refine(A0); } catch (e) { A0.pb = null; }
+  try { studyAll(A0); } catch (e) { console.warn('structure', e); }
   return A0;
 }
 
@@ -372,6 +373,16 @@ function signalFor(a) {
   if (coreFor < 4) caveats.push(`${coreFor} of ${a.coreN} trend tools agree`);
   if (a.stD === -d) { strength = 'mild'; caveats.push('Supertrend still points the other way; better to wait for it to flip'); }
   if (a.vix && a.vix.v > 18 && !a.isMCX) caveats.push('High VIX: expensive premiums');
+  // market structure: a fresh change of character against the setup, a level about to hold against it, a two-sided open
+  const X = a.stx;
+  if (X && X.state === 'choch' && X.dir === -d) { strength = 'mild'; caveats.push(`5-minute change of character against this setup at ${f0(X.last.lvl)}`); }
+  if (X && X.state === 'testing' && X.trend === d) caveats.push(X.label);
+  else if (X && X.trend === -d && X.state !== 'choch') { strength = 'mild'; caveats.push(`5-minute swing structure points the other way (${X.trend > 0 ? 'up' : 'down'})`); }
+  const lvA = a.lvw && (d === 1 ? a.lvw.above : a.lvw.below);
+  if (lvA && lvA.near && lvA.verdict === 'hold') { strength = 'mild'; caveats.push(`${lvA.kind} ${f0(lvA.v)} is close and more likely to ${d === 1 ? 'reject' : 'bounce'}`); }
+  if (a.oif && a.oif.ready && a.oif.bias * d <= -0.5) caveats.push('Option writers near the money lean the other way');
+  if (a.open && a.open.type === 'OA' && a.curMin < a.SS.o + 60) { strength = 'mild'; caveats.push('Two-sided open: range-day odds'); }
+  if (a.open && (a.open.type === 'OD' || a.open.type === 'OTD') && a.open.dir === -d) { strength = 'mild'; caveats.push(`Against today's ${a.open.name}`); }
   if (a.vol && a.vol.ivp >= 80) caveats.push(`IV percentile ${a.vol.ivp}: rich premiums`);
   if (a.events && a.events.length) { strength = 'mild'; caveats.push('Event risk: ' + a.events[0].t); }
   if (a.D.geo && /High|Elevated/.test(a.D.geo.level || '')) { strength = 'mild'; caveats.push(`Geopolitical news ${a.D.geo.level.toLowerCase()} (${f1(a.D.geo.ratio)}× normal)`); }

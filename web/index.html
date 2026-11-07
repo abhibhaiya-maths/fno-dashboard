@@ -11,7 +11,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css?v=20261107f">
+<link rel="stylesheet" href="style.css?v=20261108a">
 </head>
 <body>
 
@@ -47,6 +47,8 @@
   <div class="nt-label">NEWS</div>
   <div class="nt-view"><div class="nt-track" id="ntTrack"></div></div>
 </div>
+
+<div class="cues" id="cues" aria-label="World cues"></div>
 
 <main id="main" style="display:none">
   <div class="col col-main">
@@ -101,6 +103,7 @@
     <section class="panel p-signal" id="signalPanel">
       <div id="hz" aria-live="off"></div>
       <div id="pBanner"></div>
+      <div id="stx" aria-live="off"></div>
       <div class="proj" id="proj"></div>
       <div class="gauge-wrap">
         <div id="gauge"></div>
@@ -134,7 +137,7 @@
 
 <div class="below" id="below" style="display:none">
   <section class="panel p-global">
-      <div class="ph"><h2>Global cues and events</h2><span class="ph-note">GIFT Nifty, world markets, calendar</span></div>
+      <div class="ph"><h2>Pre-market checklist and world cues</h2><span class="ph-note">GIFT Nifty, US futures, Asia, crude, dollar, yields, FII positions, events</span></div>
       <div id="globalBody"></div>
     </section>
 </div>
@@ -178,17 +181,18 @@ For analysis and practice only, not investment advice. No signal is a guarantee.
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
-<script src="js/config.js?v=20261107f"></script>
-<script src="js/indicators.js?v=20261107f"></script>
-<script src="js/analysis.js?v=20261107f"></script>
-<script src="js/store.js?v=20261107f"></script>
-<script src="js/data-demo.js?v=20261107f"></script>
-<script src="js/data-live.js?v=20261107f"></script>
-<script src="js/paper.js?v=20261107f"></script>
-<script src="js/voice.js?v=20261107f"></script>
-<script src="js/ui.js?v=20261107f"></script>
-<script src="js/engine.js?v=20261107f"></script>
-<script src="js/main.js?v=20261107f"></script>
+<script src="js/config.js?v=20261108a"></script>
+<script src="js/indicators.js?v=20261108a"></script>
+<script src="js/analysis.js?v=20261108a"></script>
+<script src="js/structure.js?v=20261108a"></script>
+<script src="js/store.js?v=20261108a"></script>
+<script src="js/data-demo.js?v=20261108a"></script>
+<script src="js/data-live.js?v=20261108a"></script>
+<script src="js/paper.js?v=20261108a"></script>
+<script src="js/voice.js?v=20261108a"></script>
+<script src="js/ui.js?v=20261108a"></script>
+<script src="js/engine.js?v=20261108a"></script>
+<script src="js/main.js?v=20261108a"></script>
 <script>$('pLots').value = Paper.opts().lots;</script>
 </body>
 </html>

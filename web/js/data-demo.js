@@ -77,6 +77,16 @@ const DemoSource = (() => {
     return { expiry: 'Demo', dte, lot: cf.lot || APP_CONFIG.LOT_FALLBACK[key], rows };
   }
   // Synthetic extras so every panel can be tried in demo mode
+  const WORLD_DEMO = { ts: Date.now(), items: [['gift', 'GIFT Nifty', 'india', 25540, 0.35], ['dowF', 'Dow futures', 'us', 44380, 0.31], ['nasF', 'Nasdaq 100 futures', 'us', 22040, 0.52], ['spxF', 'S&P 500 futures', 'us', 6135, 0.38],
+    ['dow', 'Dow Jones', 'us', 44210, 0.42], ['nas', 'Nasdaq Composite', 'us', 19980, 0.74], ['spx', 'S&P 500', 'us', 6120, 0.51], ['usvix', 'US VIX (fear gauge)', 'us', 15.2, -3.1],
+    ['nikkei', 'Nikkei 225 (Japan)', 'asia', 39880, -0.21], ['hsi', 'Hang Seng (Hong Kong)', 'asia', 26050, 0.18], ['kospi', 'Kospi (Korea)', 'asia', 2890, 0.44], ['sse', 'Shanghai Composite', 'asia', 3420, -0.12],
+    ['dax', 'DAX (Germany)', 'eu', 23410, 0.22], ['ftse', 'FTSE 100 (UK)', 'eu', 8810, 0.05],
+    ['brent', 'Brent crude', 'cmd', 74.2, -0.6], ['wti', 'WTI crude', 'cmd', 70.9, -0.7], ['gold', 'Gold', 'cmd', 3390, 0.3], ['silver', 'Silver', 'cmd', 38.6, 0.5], ['natgas', 'Natural gas', 'cmd', 3.4, 1.1],
+    ['dxy', 'Dollar index (DXY)', 'fx', 98.6, -0.25], ['us10y', 'US 10-year yield', 'fx', 4.21, -0.6], ['usdinr', 'USD / INR', 'fx', 87.9, 0.05],
+    ['infy', 'Infosys ADR', 'adr', 19.4, 1.2], ['hdb', 'HDFC Bank ADR', 'adr', 76.1, 0.6], ['ibn', 'ICICI Bank ADR', 'adr', 34.2, 0.4], ['wit', 'Wipro ADR', 'adr', 3.05, 0.9]]
+    .map(([id, name, grp, price, chg]) => ({ id, name, grp, price, chg, prevClose: price / (1 + chg / 100), src: 'demo', ts: Date.now() - 6e5 })) };
+  const PART_DEMO = { latest: { date: 'demo', asOf: 'demo', p: { FII: { futL: 118000, futS: 196000, callL: 410000, putL: 520000, callS: 380000, putS: 455000 }, CLIENT: { futL: 260000, futS: 150000 }, PRO: { futL: 90000, futS: 95000 }, DII: { futL: 70000, futS: 31000 } } },
+    prev: { date: 'demo', p: { FII: { futL: 112000, futS: 204000 }, CLIENT: { futL: 266000, futS: 146000 }, PRO: { futL: 88000, futS: 92000 }, DII: { futL: 70000, futS: 31000 } } }, src: 'demo' };
   const GLOB = [['GIFT NIFTY', 'SGX NIFTY', 0.35, 25540], ['Dow Jones', '^DJI', 0.42, 44210], ['S&P 500', '^GSPC', 0.51, 6120], ['US Tech 100', 'NDX', 0.74, 21980], ['Nikkei 225', '^N225', -0.21, 39880], ['Hang Seng', '^HSI', 0.18, 26050], ['Oil (Brent)', 'BZUSD', -0.6, 74.2], ['USD INR', 'USDINR', 0.05, 87.9]]
     .map(([name, sym, chg, price]) => ({ name, sym, chg, price, prevClose: price / (1 + chg / 100), latency: 'demo' }));
   const dPlus = (n) => new Date(Date.now() + 5.5 * 3600e3 + n * 864e5).toISOString().slice(0, 10);
@@ -117,5 +127,6 @@ const DemoSource = (() => {
     ['Reliance', 'Q2 FY27', 'Retail and Jio strong, O2C weak (demo)', 0.1, '3 days ago'],
   ].map(([co, q, t, s, ago]) => ({ co, q, t, s, ago }));
   return { mode: 'demo', init, tick, get, clock, search, TICK_MS: 2000, results: () => ({ ai: false, items: RES }), drop: (k) => { delete S[k]; },
+    world: () => { const N = typeof A !== 'undefined' && A.NIFTY, g = WORLD_DEMO.items[0]; if (N) { g.price = Math.round((N.sessionLive ? N.PC : N.price) * 1.0035 * 2) / 2; } return WORLD_DEMO; }, participant: () => PART_DEMO,
     global: () => GLOB, calendar: () => CAL, geo: () => GEO, official: () => OFF, fiiAuto: () => ({ fii: 1184, dii: 926, src: 'demo', date: 'demo' }) };
 })();

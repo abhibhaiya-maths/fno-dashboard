@@ -38,6 +38,9 @@ const Engine = (() => {
         gz: a.price <= Math.max(g1, g2) && a.price >= Math.min(g1, g2) ? 1 : 0,
         cpr: a.price > a.tc ? 1 : a.price < a.bc ? -1 : 0,
         sh: a.short ? a.short.dir || 'WAIT' : null, lg: a.long ? a.long.dir || 'WAIT' : null,
+        stx: a.stx ? a.stx.state + (a.stx.last ? a.stx.last.d + ':' + a.stx.last.m : '') : null, sweep: a.stx && a.stx.sweep ? a.stx.sweep.d + ':' + a.stx.sweep.m : null,
+        lvabove: a.lvw && a.lvw.above && a.lvw.above.near ? Math.round(a.lvw.above.v) : null, lvbelow: a.lvw && a.lvw.below && a.lvw.below.near ? Math.round(a.lvw.below.v) : null,
+        oiN: a.oif && a.oif.notes ? a.oif.notes.map((x) => x[1]) : [], openT: a.open && a.open.final ? a.open.type : null, trap: a.open && a.open.trap ? 1 : 0,
       };
       const p = prev[k], m = a.curMin;
       // Don't repeat the same kind of event: 10-minute cooldown per type (3 minutes for setup changes)
@@ -63,6 +66,29 @@ const Engine = (() => {
           else fire('sh', 'warn', `1-minute momentum faded (short score ${sh.score}).`, 3);
         }
         if (now.lg && p.lg && now.lg !== p.lg && now.lg !== 'WAIT') fire('lg', now.lg === 'CE' ? 'call' : 'put', `Daily trend now ${now.lg === 'CE' ? 'bullish' : 'bearish'} (long-run score ${a.long.score}).`, 60);
+        // market structure, level pre-alerts, OI character switch, opening type (spoken only for the instrument on screen)
+        const say = (lvl, key, hi) => { if (k === cur && typeof Paper !== 'undefined' && Paper.speak) Paper.speak(lvl, 'stx' + k + key, `${a.cf.voice}: ${hi}`); };
+        const X = a.stx;
+        if (X && now.stx !== p.stx) {
+          if (X.state === 'choch') { fire('choch', X.tone, `${X.label}. ${X.detail}`, 5); say('imp', 'choch' + X.dir, X.dir < 0 ? 'पाँच मिनट पर चेंज ऑफ़ कैरेक्टर, अपट्रेंड टूटा। रिवर्सल की पहली चेतावनी, कॉल में सावधान।' : 'पाँच मिनट पर चेंज ऑफ़ कैरेक्टर, डाउनट्रेंड टूटा। रिवर्सल की पहली चेतावनी, पुट में सावधान।'); }
+          else if (X.state === 'bos') fire('bos', X.tone, X.label + '.', 10);
+          else if (X.state === 'testing') { fire('test', 'warn', `${X.label}. ${X.detail}`, 10); say('all', 'test', `ज़रूरी स्विंग ${Math.round(X.pend ? X.pend.lvl : X.prot)} पर टेस्ट हो रहा है।`); }
+        }
+        if (X && X.sweep && now.sweep !== p.sweep) fire('sweep', 'warn', X.sweepTxt, 10);
+        for (const side of ['above', 'below']) {
+          const L = a.lvw && a.lvw[side], key = 'lv' + side;
+          if (L && L.near && L.verdict !== 'either' && now[key] !== p[key]) {
+            fire(key + Math.round(L.v), L.verdict === 'break' ? (L.R ? 'call' : 'put') : 'warn', `Pre-alert: ${L.kind.toLowerCase()} ${f0(L.v)} (${L.name}) is ${f0(L.dist)} pts away. ${L.vTxt}. ${L.act}`, 20);
+            say('all', key + Math.round(L.v), `${Math.round(L.v)} का ${L.R ? 'रेज़िस्टेंस' : 'सपोर्ट'} पास है, ${L.verdict === 'break' ? 'टूटने के चांस ज़्यादा' : L.verdict === 'hold' ? (L.R ? 'यहाँ से रिजेक्शन के चांस ज़्यादा' : 'यहाँ से उछाल के चांस ज़्यादा') : 'दोनों तरफ़ जा सकता है, कन्फ़र्मेशन का इंतज़ार करें'}।`);
+          }
+        }
+        (a.oif && a.oif.notes || []).forEach(([tone, nk, text]) => {
+          if ((p.oiN || []).includes(nk)) return;
+          fire('oi' + nk, tone, text, 15);
+          if (/^switch/.test(nk)) say('imp', nk, nk === 'switch-' ? 'ओआई का कैरेक्टर बदला: अब कॉल राइटर हावी, ऊपर से बिकवाली का दबाव।' : 'ओआई का कैरेक्टर बदला: अब पुट राइटर हावी, नीचे सपोर्ट बन रहा है।');
+        });
+        if (a.open && a.open.final && now.openT !== p.openT) { fire('open', a.open.dir > 0 ? 'call' : a.open.dir < 0 ? 'put' : 'info', `Opening type: ${a.open.name}. ${a.open.note}`, 600); say('all', 'open' + a.open.type, `ओपनिंग टाइप: ${{ OD: 'ओपन ड्राइव', OTD: 'ओपन टेस्ट ड्राइव', ORR: 'ओपन रिजेक्शन रिवर्स', OA: 'दोनों तरफ़ की ओपनिंग, रेंज डे के चांस', OX: 'मिली-जुली ओपनिंग' }[a.open.type]}${a.open.dir ? (a.open.dir > 0 ? ', ऊपर की तरफ़' : ', नीचे की तरफ़') : ''}।`); }
+        if (a.open && a.open.trap && now.trap !== p.trap) { fire('trap', 'warn', a.open.trap, 15); say('imp', 'trap', 'ओपनिंग फ़ेक-आउट हो सकता है। पहले मूव का पीछा न करें, VWAP का कन्फ़र्मेशन देखें।'); }
         if (now.gz && !p.gz) fire('gz', 'info', `Price entered the Fibonacci golden zone (${f0(Math.min(g1, g2))}–${f0(Math.max(g1, g2))}). Watch for a bounce or a break.`);
       }
       prev[k] = now;

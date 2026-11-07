@@ -153,6 +153,13 @@ const Voice = (() => {
       officialAnnouncements: (Source.official ? Source.official().items : []).slice(0, 8).map((n) => ({ source: n.src, company: n.co, text: n.t, ago: n.ago })),
       tradeSetup: st ? { direction: st.dir, strike: st.K, indexEntry: r0(st.e), indexSL: r0(st.sl), indexT1: r0(st.t1), indexT2: r0(st.t2), premium: r0(st.P), premiumSL: st.pSL, premiumT1: st.pT1 } : 'no clear setup',
       alerts: alertsFor(a, st ? st.dir : null).map((x) => x[1]),
+      marketStructure: a.stx ? { state: a.stx.state, label: a.stx.label, detail: a.stx.detail, protectedLevel: r0(a.stx.prot), sweep: a.stx.sweepTxt || null, oneMinTrend: a.stx.microTrend } : null,
+      levelPreAlerts: a.lvw ? [a.lvw.above, a.lvw.below].filter(Boolean).map((l) => ({ type: l.kind, level: r0(l.v), names: l.z.names, distancePts: r0(l.dist), verdict: l.vTxt, forHold: l.hold.map((x) => x[1]), forBreak: l.brk.map((x) => x[1]), breakConfirm: l.confirmBreak, holdConfirm: l.confirmHold })) : null,
+      optionOIFlow15m: a.oif && a.oif.ready ? { read: a.oif.read, callOIchg: a.oif.ce15, putOIchg: a.oif.pe15, callWall: a.oif.cw && a.oif.cw[0], putWall: a.oif.pw && a.oif.pw[0], notes: a.oif.notes.map((x) => x[2]) } : 'not enough live history yet',
+      openingType: a.open ? { type: a.open.name, note: a.open.note, trap: a.open.trap || null } : null,
+      gap: a.gap && a.gap.today ? { pts: r0(a.gap.today.pts), pct: r0(a.gap.today.pct), filled: a.gap.today.filled, fillPct: r0((a.gap.today.fillPct || 0) * 100), pastYearSimilar: a.gap.today.base || null, cause: a.gap.driver && { verdict: a.gap.driver.verdict, items: a.gap.driver.items.map((x) => x[1]) } } : null,
+      worldCues: (() => { const W = worldRead(a); return W ? { leanForNifty: W.lean, score: W.score, markets: W.rows.map((x) => ({ name: x.name, price: r0(x.price), chgPct: r0(x.chg), effectOnNifty: x.imp > 0 ? 'positive' : x.imp < 0 ? 'negative' : 'neutral' })) } : null; })(),
+      fiiIndexFutures: fiiPositions(),
       news: a.news.slice(0, 8).map((n) => ({ headline: n.t, sentiment: r0(n.s), ago: n.ago })),
       quarterlyResults: (Source.results ? Source.results().items : []).slice(0, 8).map((n) => ({ company: n.co, quarter: n.q, summary: n.t, sentiment: r0(n.s) })),
       paperTrading: { openPositions: Paper.openTrades().map((t) => ({ index: t.label, strike: t.K, type: t.type, lots: t.lots, entry: t.entry, now: t.ltp, sl: t.sl, target: t.tgt, pnl: r0((t.ltp - t.entry) * t.qty), advice: t.advice ? t.advice.title : null })) },
@@ -284,5 +291,5 @@ const Voice = (() => {
     show(html, useAI ? '' : sayTxt);
     if (useAI) { const done = await askAI(raw, a, 'aiAns'); if (!done) say(sayTxt); }
   }
-  return { say, stop, pause, play, togglePause, mute, toggleSound, toggleMic, ask };
+  return { say, stop, pause, play, togglePause, mute, toggleSound, toggleMic, ask, ctx: (a) => fullCtx(a) };
 })();
