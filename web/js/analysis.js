@@ -238,9 +238,73 @@ function analyze(D) {
 
   const A0 = { key: D.key, cf, D, price, chg, PC, curMin, sessionLive: D.sessionLive, dayLabels: D.dayLabels, hasVol, I5, piv, tc, bc, p, ORH, ORL, DH, DL, fib, upSwing, VP, ch, hv, hvW, news, newsAvg, vix, fii: D.fii, dii: D.dii,
     adxV: ax, sigs, score, active, paScore: ok(paN) ? Math.round(50 + 50 * paN) : null, cxScore: ok(cxN) ? Math.round(50 + 50 * cxN) : null, dir, gate, coreUp, coreDn, coreN: core.length, struct, mvA, atr: at, rsi: rsv, adx: ax, res, sup, stV, stD, vw, lot: C.lot || cf.lot || APP_CONFIG.LOT_FALLBACK[D.key] || null, fut, vol: vlt, glob, events, isIdx, isMCX, SS };
+  Object.assign(A0, { e20, e50, mtf });
   try { A0.short = shortTerm(A0); } catch (e) { A0.short = null; }
   try { A0.long = longTerm(A0); } catch (e) { A0.long = null; }
+  try { refine(A0); } catch (e) { A0.pb = null; }
   return A0;
+}
+
+/* ===== Trade quality: how professionals avoid the three classic option-buyer losses =====
+   1. Mistaking a pullback inside a trend for a reversal (buying puts on the dip of an uptrend).
+   2. Chasing: buying after the move is already stretched far from its average.
+   3. Costs: wide bid-ask spreads and targets too small to beat brokerage + taxes. */
+// Last impulse leg on 5-minute candles and how much of it has been retraced (Fibonacci)
+function pullbackOf(a) {
+  const k = a.I5.k.slice(-48), at = a.atr, price = a.price;
+  const up = ok(a.e50) && a.e20 > a.e50 && a.mtf >= 1, dn = ok(a.e50) && a.e20 < a.e50 && a.mtf <= -1;
+  if ((!up && !dn) || k.length < 8 || !at) return null;
+  const d = up ? 1 : -1;
+  let ix = 0; k.forEach((x, i) => { if (up ? x.h >= k[ix].h : x.l <= k[ix].l) ix = i; });
+  const ext = up ? k[ix].h : k[ix].l, before = k.slice(0, ix + 1), after = k.slice(ix);
+  const base = up ? Math.min(...before.map((x) => x.l)) : Math.max(...before.map((x) => x.h));
+  const leg = Math.abs(ext - base);
+  if (leg < 2 * at) return null; // no real impulse to pull back from
+  const retr = (up ? ext - price : price - ext) / leg;
+  const pullX = up ? Math.min(...after.map((x) => x.l)) : Math.max(...after.map((x) => x.h)); // deepest point of the pullback
+  const lvl = (r) => ext - d * leg * r;
+  const barsSince = k.length - 1 - ix;
+  let state = 'trend';
+  if (barsSince >= 2 && retr >= 0.236) state = retr > 0.786 || (up ? pullX < base : pullX > base) ? 'failed' : 'pullback';
+  const inZone = state === 'pullback' && retr >= 0.33 && retr <= 0.68;
+  // resumption trigger: the 1-minute engine leans back to the trend
+  const sh = a.short, shLean = sh ? (up ? sh.score : 100 - sh.score) : 50;
+  const trigger = state === 'pullback' && (sh && sh.dir === (up ? 'CE' : 'PE') || shLean >= 57);
+  return { trend: up ? 'CE' : 'PE', d, ext, base, leg, retr, pullX, state, inZone, trigger, z382: lvl(0.382), z50: lvl(0.5), z618: lvl(0.618), z786: lvl(0.786), barsSince };
+}
+function refine(a) {
+  const pb = pullbackOf(a), nm = (x) => (x === 'CE' ? (a.cf.opt ? 'CALL' : 'long') : a.cf.opt ? 'PUT' : 'short');
+  a.pb = pb; a.setupType = 'trend';
+  if (pb) {
+    const pct = Math.round(pb.retr * 100), word = pb.trend === 'CE' ? 'uptrend' : 'downtrend';
+    pb.label = pb.state === 'pullback' ? `Pullback in ${word}: ${pct}% retracement of the last move (${f0(pb.base)} → ${f0(pb.ext)})` : pb.state === 'failed' ? `Pullback failed: ${pct}% retracement, the ${word} may be over` : `Trend leg running (${f0(pb.base)} → ${f0(pb.ext)})`;
+    // 1. a healthy pullback is not a reversal: no counter-trend signal until 78.6% breaks
+    if (pb.state === 'pullback' && a.dir && a.dir !== pb.trend) {
+      a.dir = null;
+      a.gate = `${pb.label}. That is a normal dip inside the ${word}, not a reversal yet. A reversal is confirmed only beyond ${f0(pb.z786)} (78.6%).`;
+    }
+    // trend days have shallow dips: a touch of the 20-EMA in the last 30 minutes counts as a pullback too
+    const k6 = a.I5.k.slice(-6), up = pb.trend === 'CE';
+    pb.emaTouch = ok(a.e20) && k6.some((x) => (up ? x.l <= a.e20 + 0.3 * a.atr : x.h >= a.e20 - 0.3 * a.atr)) && (up ? a.price > a.e20 : a.price < a.e20);
+    if (pb.emaTouch && pb.state === 'trend') { pb.state = 'pullback'; pb.ema = true; pb.inZone = true; pb.pullX = up ? Math.min(...k6.map((x) => x.l)) : Math.max(...k6.map((x) => x.h)); const sh = a.short; pb.trigger = !!(sh && (sh.dir === pb.trend || (up ? sh.score : 100 - sh.score) >= 57)); }
+    // 2. buy the dip / sell the rally: trend + golden zone (or 20-EMA) + 1-minute turning back
+    if (pb.state === 'pullback' && pb.inZone && pb.trigger && a.dir !== pb.trend && a.sessionLive) {
+      const lean = pb.trend === 'CE' ? a.score : 100 - a.score;
+      if (lean >= 42) { a.dir = pb.trend; a.gate = null; a.setupType = 'pullback'; a.pbNote = pb.ema ? `${pb.trend === 'CE' ? 'Buy the dip' : 'Sell the rally'}: ${word} pulled back to its 20-EMA and the 1-minute is turning back.` : `${pb.trend === 'CE' ? 'Buy the dip' : 'Sell the rally'}: ${word} pulled back ${pct}% into the 38.2–61.8% zone and the 1-minute is turning back.`; }
+    }
+  }
+  // 3. don't chase: entry too far from its 20-EMA
+  if (a.dir && a.setupType !== 'pullback' && ok(a.e20) && a.atr) {
+    const sd = a.dir === 'CE' ? 1 : -1, ext = ((a.price - a.e20) * sd) / a.atr;
+    a.extATR = ext;
+    // only a stretched AND still-accelerating move counts as chasing (strong trend days stay tradable)
+    const burst = ok(a.mvA) ? a.mvA * sd : 0;
+    if ((ext > 3 && burst > 2) || ext > 4) {
+      const back = a.e20 + sd * a.atr * 0.8;
+      a.gate = `Extended: price is ${f1(ext)} ATR ${sd > 0 ? 'above' : 'below'} its 20-EMA. Late entries after a stretched move are where most option buyers lose; wait for a pullback towards ${f0(back)} or a pause.`;
+      a.dir = null; a.chase = true;
+    }
+  }
 }
 
 // किसी भी स्ट्राइक का अभी का भाव (चेन से, न मिले तो Black-Scholes)
@@ -254,7 +318,10 @@ function optQuote(a, K, type) {
 }
 
 function setupFor(a, dir) {
-  const risk = 1.5 * a.atr, e = a.price, sd = dir === 'CE' ? 1 : -1;
+  const e = a.price, sd = dir === 'CE' ? 1 : -1;
+  let risk = 1.5 * a.atr;
+  // pullback entries: the stop goes just beyond the pullback's extreme (structure), not a fixed ATR distance
+  if (a.setupType === 'pullback' && a.pb && a.pb.trend === dir) risk = clamp(Math.abs(e - a.pb.pullX) + 0.25 * a.atr, 0.8 * a.atr, 2 * a.atr);
   const q = optQuote(a, a.ch.atm, dir), dl = Math.abs(q.delta || 0.5), P = q.ltp;
   return { dir, e, sl: e - sd * risk, t1: e + sd * risk * 1.5, t2: e + sd * risk * 2.5, risk, K: a.ch.atm, P,
     pSL: tick05(Math.max(0.05, P - dl * risk)), pT1: tick05(P + dl * risk * 1.5), delta: q.delta, theta: q.theta };
@@ -279,6 +346,7 @@ function alertsFor(a, dir) {
     if (a.vol.ivhv > 1.4) out.push(['w', `ATM IV is ${f1(a.vol.ivhv)}× the 20-day realised volatility: premiums are rich (results or news priced in?).`]);
     else if (a.vol.ivhv < 0.8) out.push(['i', `ATM IV is below realised volatility (${f2(a.vol.ivhv)}×): premiums look cheap.`]);
   }
+  if (a.D.geo && /High|Elevated/.test(a.D.geo.level || '')) out.push(['w', `Geopolitical news is ${a.D.geo.level.toLowerCase()} (${ok(a.D.geo.ratio) ? f1(a.D.geo.ratio) + '× its 3-day average' : 'many headlines'}). Expect gaps and sudden swings; keep size small.`]);
   if (a.isMCX && !a.cf.opt) out.push(['i', 'MCX: Upstox gives no commodity option chain, so levels are for the futures contract.']);
   if (!a.hasVol) out.push(['i', 'Indices carry no volume, so TWAP replaces VWAP and a TPO profile replaces the volume profile.']);
   out.push(['i', 'Risk no more than 1–2% of capital on one trade. Set the stop-loss before you enter.']);
@@ -296,7 +364,7 @@ function signalFor(a) {
   if (a.curMin >= SS.c - 30) return { state: 'WAIT', title: 'Wait: too late for new trades', sub: a.isMCX ? 'Last 30 minutes of the MCX session: new positions are risky.' : 'New positions after 3:00 are risky. Open positions square off at 3:20.', reasons: [], against: [] };
   const s = a.score;
   let state = a.dir || 'WAIT';
-  if (state === 'WAIT') return { state, title: a.gate ? (/but price is/.test(a.gate) ? 'Wait: price and context disagree' : /Range-bound|Flat/.test(a.gate) ? 'Wait: no trend right now' : /Confirming/.test(a.gate) ? 'Wait: confirming new direction' : 'Wait: trend tools not aligned') : 'Wait: no clear setup', sub: a.gate || `Score ${s}: signals are mixed. Waiting is a position too.`, reasons: [...pro(1).slice(0, 2), ...pro(-1).slice(0, 2)], against: [] };
+  if (state === 'WAIT') return { state, title: a.gate ? (/but price is/.test(a.gate) ? 'Wait: price and context disagree' : /Range-bound|Flat/.test(a.gate) ? 'Wait: no trend right now' : /Confirming/.test(a.gate) ? 'Wait: confirming new direction' : /^Extended/.test(a.gate) ? "Wait: don't chase" : /^Pullback in/.test(a.gate) ? 'Wait: pullback, not a reversal' : 'Wait: trend tools not aligned') : 'Wait: no clear setup', sub: a.gate || `Score ${s}: signals are mixed. Waiting is a position too.`, reasons: [...pro(1).slice(0, 2), ...pro(-1).slice(0, 2)], against: [] };
   const d = state === 'CE' ? 1 : -1, strength0 = d === 1 ? s : 100 - s, coreFor = d === 1 ? a.coreUp : a.coreDn;
   let strength = a.hz && a.hz !== 'intra' ? a.hzStrength || 'mild' : strength0 >= 70 && coreFor >= 4 && ok(a.adx) && a.adx >= 25 ? 'strong' : 'mild';
   const caveats = [];
@@ -306,11 +374,21 @@ function signalFor(a) {
   if (a.vix && a.vix.v > 18 && !a.isMCX) caveats.push('High VIX: expensive premiums');
   if (a.vol && a.vol.ivp >= 80) caveats.push(`IV percentile ${a.vol.ivp}: rich premiums`);
   if (a.events && a.events.length) { strength = 'mild'; caveats.push('Event risk: ' + a.events[0].t); }
+  if (a.D.geo && /High|Elevated/.test(a.D.geo.level || '')) { strength = 'mild'; caveats.push(`Geopolitical news ${a.D.geo.level.toLowerCase()} (${f1(a.D.geo.ratio)}× normal)`); }
+  // costs: wide spreads and targets too small to beat charges
+  if (a.cf.opt && a.ch.rows.length) {
+    const st0 = setupFor(a, state), q = optQuote(a, st0.K, state), lot = a.lot || 1;
+    const spread = q.ask > 0 && q.bid > 0 && q.ltp > 0 ? (q.ask - q.bid) / q.ltp : null;
+    if (ok(spread) && spread > 0.04) { strength = 'mild'; caveats.push(`Wide bid-ask spread (${f1(spread * 100)}% of premium)`); }
+    const gain = (st0.pT1 - st0.P) * lot, cost = 47.2 + st0.P * lot * 0.00236;
+    if (gain > 0 && gain < 3 * cost) { strength = 'mild'; caveats.push(`Target only ₹${f0(gain)}/lot vs ~₹${f0(cost)} charges`); }
+  }
   const St = strength === 'strong' ? 'Strong' : 'Mild';
   return {
     state, strength, dirScore: strength0, noOpt: !a.cf.opt,
-    title: a.cf.opt ? (state === 'CE' ? `▲ ${St} CALL setup` : `▼ ${St} PUT setup`) : (state === 'CE' ? `▲ ${St} bullish setup` : `▼ ${St} bearish setup`),
-    sub: a.hz === 'intra' ? `Score ${s}/100. Price action ${a.paScore ?? '–'}, context ${a.cxScore ?? '–'}. ${coreFor} of ${a.coreN} trend tools and ${pro(d).length} of ${a.active} signals agree.`
+    title: a.setupType === 'pullback' ? (state === 'CE' ? `▲ Buy the dip: ${St} ${a.cf.opt ? 'CALL' : 'long'}` : `▼ Sell the rally: ${St} ${a.cf.opt ? 'PUT' : 'short'}`)
+      : a.cf.opt ? (state === 'CE' ? `▲ ${St} CALL setup` : `▼ ${St} PUT setup`) : (state === 'CE' ? `▲ ${St} bullish setup` : `▼ ${St} bearish setup`),
+    sub: (a.hz || 'intra') === 'intra' ? `${a.setupType === 'pullback' && a.pbNote ? a.pbNote + ' ' : ''}Score ${s}/100. Price action ${a.paScore ?? '–'}, context ${a.cxScore ?? '–'}. ${coreFor} of ${a.coreN} trend tools and ${pro(d).length} of ${a.active} signals agree.`
       : `Score ${s}/100 on the ${HZ_INFO[a.hz].tf} engine. ${coreFor} of ${a.coreN} core tools and ${pro(d).length} of ${a.active} signals agree.${a.hz === 'long' ? ' Paper trades still square off at 3:20 (intraday only).' : ''}`,
     reasons: pro(d).slice(0, 3), against: con(d).slice(0, 2), caveats, setup: setupFor(a, state),
   };

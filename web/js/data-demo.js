@@ -83,6 +83,7 @@ const DemoSource = (() => {
   const CAL = { items: [{ date: dPlus(0), time: '19:00', t: 'USD: ISM Services PMI (demo)', imp: 'high', src: 'ForexFactory' }, { date: dPlus(1), time: '19:00', t: 'USD: Non-Farm Payrolls (demo)', imp: 'high', src: 'ForexFactory' }, { date: dPlus(6), time: '16:00', t: 'India CPI inflation (MoSPI, usual date)', imp: 'medium', src: 'MoSPI' }], sources: { demo: 3 } };
   const OFF = { items: [['Outcome of Board Meeting: Financial Results for quarter ended September 2026', 'HDFC Bank Limited', 'NSE announcements', 40], ['RBI announces Variable Rate Repo auction', '', 'RBI press releases', 95], ['Circular on enhancing trading-system resilience for brokers', '', 'SEBI', 180], ['Board Meeting Intimation: fund raising via QIP', 'Wipro Limited', 'NSE announcements', 300]]
     .map(([t, co, src, m]) => ({ t, co, src, ago: m < 60 ? m + ' min ago' : Math.round(m / 60) + ' h ago' })), sources: { 'NSE announcements': 2, 'RBI press releases': 1, SEBI: 1 } };
+  const GEO = { level: 'Elevated', ratio: 1.6, items: [['US and Iran trade warnings as oil tankers reroute around Hormuz (demo)', 'reuters.com', 35], ['EU agrees new sanctions package; energy curbs widened (demo)', 'bbc.co.uk', 120], ['India, China hold border talks; troops to pull back (demo)', 'thehindu.com', 240]].map(([t, src, m]) => ({ t, src, ts: Date.now() - m * 60e3, ago: m < 60 ? m + ' min ago' : Math.round(m / 60) + ' h ago' })) };
   function get(key) {
     ensure(key); if (!S[key]) return null;
     const pc = P[key], st = S[key], s1 = st.series, prev = s1.filter((x) => x.d === 1), last = s1[s1.length - 1], cf = CFG[key];
@@ -103,7 +104,7 @@ const DemoSource = (() => {
       chain: chainFor(key, price, Math.min(374, last.m), chg), vix: { v: vix, prev: vixPrev }, fii: 1184, dii: 926, fiiSrc: 'demo',
       hv: (pc.hv || []).map(([n2, w], i) => ({ n: n2, w, c: chg * (0.8 + 0.5 * hrand(i, pc.seed)) + (hrand(i, pc.seed + 1) - 0.5) * 1.2 })),
       news: pc.news.map(([t, s2, imp, ago]) => ({ t, s: s2, imp, ago })),
-      fut, daily, vixDaily, prevOi: st.prevOi ? Math.round(st.prevOi) : null, glob: GLOB, events: CAL.items, mkt: key !== 'NIFTY' && n ? { chg: n.chg, score: n.score } : null,
+      fut, daily, vixDaily, geo: GEO, prevOi: st.prevOi ? Math.round(st.prevOi) : null, glob: GLOB, events: CAL.items, mkt: key !== 'NIFTY' && n ? { chg: n.chg, score: n.score } : null,
     };
   }
   function clock() { const m = S.NIFTY.series[S.NIFTY.series.length - 1].m; return { min: m, date: 'DEMO', label: m >= 374 ? 'Market closed (demo)' : `Demo time ${hm(m)} (fast)` }; }
@@ -116,5 +117,5 @@ const DemoSource = (() => {
     ['Reliance', 'Q2 FY27', 'Retail and Jio strong, O2C weak (demo)', 0.1, '3 days ago'],
   ].map(([co, q, t, s, ago]) => ({ co, q, t, s, ago }));
   return { mode: 'demo', init, tick, get, clock, search, TICK_MS: 2000, results: () => ({ ai: false, items: RES }), drop: (k) => { delete S[k]; },
-    global: () => GLOB, calendar: () => CAL, official: () => OFF, fiiAuto: () => ({ fii: 1184, dii: 926, src: 'demo', date: 'demo' }) };
+    global: () => GLOB, calendar: () => CAL, geo: () => GEO, official: () => OFF, fiiAuto: () => ({ fii: 1184, dii: 926, src: 'demo', date: 'demo' }) };
 })();

@@ -111,6 +111,8 @@ async function startLive() {
   setTimeout(() => LiveSource.refreshChains().then(refreshAll), 4000);
   setTimeout(() => Promise.all([LiveSource.refreshFut(), LiveSource.refreshGlobal()]).then(refreshAll), 9000);
   setTimeout(() => Promise.all([LiveSource.refreshDaily(), LiveSource.refreshCalendar(), LiveSource.refreshFII()]).then(refreshAll), 15000);
+  setTimeout(() => LiveSource.refreshGeo().then(refreshAll), 20000);
+  setInterval(() => LiveSource.refreshGeo().then(refreshAll), 30 * 60000);
   LiveSource.refreshNews().then(refreshAll);
   LiveSource.refreshResults().then(refreshAll);
   LiveSource.refreshOfficial().then(refreshAll);

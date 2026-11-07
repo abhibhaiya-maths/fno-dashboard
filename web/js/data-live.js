@@ -4,7 +4,7 @@ const LiveSource = (() => {
   const raw = {};
   const R = (k) => raw[k] || (raw[k] = { days: null, news: [], newsAI: false, bars: {}, fut: null, daily: null, chain: null });
   let snap = null, status = null, lastErr = null, lastOk = 0, resultsData = { ai: false, items: [] };
-  let glob = [], cal = { items: [], sources: {} }, fii = null, off = { items: [], sources: {} }, vixDaily = null;
+  let glob = [], cal = { items: [], sources: {} }, fii = null, off = { items: [], sources: {} }, vixDaily = null, geo = null;
 
   let rateUntil = 0;
   const rateLimited = () => Date.now() < rateUntil;
@@ -89,6 +89,7 @@ const LiveSource = (() => {
   async function refreshGlobal() { try { glob = (await api('/api/global')).items || []; } catch (e) { soft(e); } }
   async function refreshCalendar() { try { cal = await api('/api/calendar'); } catch (e) { soft(e); } }
   async function refreshFII() { try { const j = await api('/api/fiidii'); fii = j.none ? null : j; } catch (e) { soft(e); } }
+  async function refreshGeo() { try { const j = await api('/api/geo'); geo = { ...j, items: (j.items || []).map((n) => ({ ...n, ago: agoText(n.ts) })) }; } catch (e) { soft(e); } }
   async function refreshOfficial() { try { const j = await api('/api/official'); off = { items: (j.items || []).map((n) => ({ ...n, ago: agoText(n.ts) })), sources: j.sources || {} }; } catch (e) { soft(e); } }
   async function search(q) { return api('/api/search?q=' + enc(q)); }
   async function instInfo(ukey) { return api('/api/inst?u=' + enc(ukey)); }
@@ -283,6 +284,7 @@ const LiveSource = (() => {
     }
     const labels = days.map((d) => (d.date === istYmd() ? 'Today' : HDAY[new Date(d.date + 'T00:00:00Z').getUTCDay()]));
     while (labels.length < 3) labels.unshift('');
+    const dayDates = days.map((d) => d.date); while (dayDates.length < 3) dayDates.unshift('');
     const ch = cf.core ? snap.chains && snap.chains[key] : r.chain;
     let chain = { rows: [] };
     if (ch && !ch.error && ch.rows) {
@@ -295,10 +297,10 @@ const LiveSource = (() => {
     const dly = r.daily && r.daily.rows || [];
     const nifty = A.NIFTY;
     return {
-      key, candles, price, prevClose: q && ok(q.prevClose) ? q.prevClose : null, sessionLive, dayLabels: labels, chain, marketOpenNow, fromTicks, todayErr: r.todayErr,
+      key, candles, price, prevClose: q && ok(q.prevClose) ? q.prevClose : null, sessionLive, dayLabels: labels, dayDates, chain, marketOpenNow, fromTicks, todayErr: r.todayErr,
       vix: snap.vix, fii: F ? F.fii : null, dii: F ? F.dii : null, fiiSrc: auto ? (auto.stale ? 'NSE, ' + auto.date : 'NSE') : man ? 'manual' : null,
       hv: cf.core ? (snap.hv && snap.hv[key]) || [] : [], news: r.news,
-      fut: r.fut, daily: r.daily, vixDaily, prevOi: dly.length ? dly[dly.length - 1][6] : null, glob, events: cal.items || [],
+      fut: r.fut, daily: r.daily, vixDaily, geo, prevOi: dly.length ? dly[dly.length - 1][6] : null, glob, events: cal.items || [],
       mkt: key !== 'NIFTY' && nifty ? { chg: nifty.chg, score: nifty.score } : null,
     };
   }
@@ -314,6 +316,6 @@ const LiveSource = (() => {
   function connectUrl(idToken) { return APP_CONFIG.WORKER_URL.replace(/\/$/, '') + '/auth/login?id_token=' + encodeURIComponent(idToken); }
   return { mode: 'live', init, refreshSnapshot, refreshChains, refreshCandles, refreshFut, refreshDaily, refreshNews, refreshResults, refreshGlobal, refreshCalendar, refreshFII, refreshOfficial,
     search, instInfo, get, clock, rateLimited, rateWait: () => Math.max(0, Math.ceil((rateUntil - Date.now()) / 1000)), ask, connectUrl, results: () => resultsData, stream: Stream, drop: (k) => { delete raw[k]; },
-    global: () => glob, calendar: () => cal, official: () => off, fiiAuto: () => fii,
+    global: () => glob, calendar: () => cal, official: () => off, fiiAuto: () => fii, geo: () => geo, refreshGeo,
     get status() { return status; }, get error() { return lastErr; }, newsAI: (k) => R(k).newsAI, newsSources: (k) => R(k).sources };
 })();

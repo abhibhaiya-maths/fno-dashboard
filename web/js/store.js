@@ -53,15 +53,17 @@ const Store = (() => {
     if (i >= 0) s.signals[i] = x; else s.signals.unshift(x);
     s.signals = s.signals.slice(0, 500); ls.set(lsKey, s);
   }
-  async function resetAll() {
+  // what: { trades: bool, signals: bool } (default both)
+  async function resetAll(what) {
+    const W = what || { trades: true, signals: true }, cols = ['trades', 'signals'].filter((c) => W[c]);
     if (cloud) {
-      for (const col of ['trades', 'signals']) {
+      for (const col of cols) {
         const snap = await base().collection(col).limit(500).get();
         const b = db.batch(); snap.docs.forEach((d) => b.delete(d.ref)); await b.commit();
       }
       return base().set({ account: null }, { merge: true });
     }
-    localCache = { account: null, trades: [], signals: [] }; ls.set(lsKey, localCache);
+    const L = local(); localCache = { account: null, trades: W.trades ? [] : L.trades || [], signals: W.signals ? [] : L.signals || [] }; ls.set(lsKey, localCache);
   }
   // FII/DII (हाथ से डाला गया, आज की तारीख़ के लिए)
   const getFII = () => ls.get('fno_fii_' + istYmd(), null);

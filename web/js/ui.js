@@ -153,6 +153,11 @@ function lrow(n, v, a, key) { const near = Math.abs(v - a.price) < a.atr * 0.5; 
 function renderLevels() {
   const a = A[cur];
   let h = `<div class="row"><span>Current price</span><b class="cur">${f1(a.price)}</b></div><div class="row"><span>ATR (14, 5m)</span><b>${f1(a.atr)}</b></div>`;
+  if (a.pb && a.pb.state !== 'trend') {
+    const pb = a.pb, up = pb.trend === 'CE';
+    h += `<div class="sec">${pb.state === 'failed' ? 'Pullback failed' : `Pullback in ${up ? 'uptrend' : 'downtrend'}`}: ${Math.round(pb.retr * 100)}% retraced</div>` +
+      lrow(`Last ${up ? 'high' : 'low'} (100%)`, pb.ext, a) + lrow('Buy-the-dip zone top (38.2%)'.replace('Buy-the-dip', up ? 'Buy-the-dip' : 'Sell-the-rally'), pb.z382, a) + lrow('Golden zone (61.8%)', pb.z618, a) + lrow('Reversal line (78.6%)', pb.z786, a) + lrow(`Leg start (${up ? 'low' : 'high'})`, pb.base, a);
+  }
   if (a.vol && ok(a.vol.hi52)) h += '<div class="sec">Bigger picture, daily candles</div>' + lrow('52-week high', a.vol.hi52, a) + (ok(a.vol.pwH) ? lrow('Previous week high', a.vol.pwH, a) + lrow('Previous week low', a.vol.pwL, a) : '') + lrow('52-week low', a.vol.lo52, a);
   h += '<div class="sec">Pivots and CPR, from previous session</div>';
   ['R3', 'R2', 'R1'].forEach((k) => (h += lrow(k, a.piv[k], a)));
@@ -283,6 +288,41 @@ function newsPool(a) {
   const rank = (x) => (x.imp === 'high' && now - x.ts < 4 * 3600e3 ? 1e13 : 0) + x.ts;
   return out.sort((x, y) => rank(y) - rank(x));
 }
+/* What the market actually did after a headline: index (or the watchlist stock) 15 and 30 minutes later */
+function reactionFor(n) {
+  const wk = KEYS.find((k) => !CFG[k].core && n.tags.includes(CFG[k].label));
+  const key = wk || (n.tags.includes('Bank Nifty') && !n.tags.includes('Nifty') ? 'BANKNIFTY' : n.tags.includes('Sensex') && !n.tags.includes('Nifty') ? 'SENSEX' : 'NIFTY');
+  const a = A[key]; if (!a || !n.ts) return null;
+  const C = a.D.candles, S = a.cf.sess || SESS.NSE; if (!C || !C.length) return null;
+  let d, m;
+  if (Source.mode === 'demo') {
+    // demo clock runs fast: place the headline by "minutes ago" relative to the demo session
+    let back = Math.round((Date.now() - n.ts) / 60000); d = 2; m = a.curMin - back;
+    while (m < S.o && d > 0) { d--; m += S.c - S.o; }
+    if (m < S.o) return null;
+  } else {
+    const t = new Date(n.ts + 5.5 * 3600e3), date = t.toISOString().slice(0, 10);
+    d = (a.D.dayDates || []).indexOf(date); m = t.getUTCHours() * 60 + t.getUTCMinutes() - 555;
+    if (d < 0) return null;
+  }
+  const day = C.filter((x) => x.d === d); if (!day.length) return null;
+  if (m >= S.c) return { key, closed: true };
+  const pre = m < day[0].m, base = pre ? day[0].o : (day.filter((x) => x.m <= m).pop() || day[0]).c;
+  const t0 = pre ? day[0].m : m, at = (k) => day.find((x) => x.m >= t0 + k && x.m <= t0 + k + 2);
+  const last = day[day.length - 1], pc = (v) => ((v - base) / base) * 100;
+  const c15 = at(15), c30 = at(30);
+  return { key, pre, p15: c15 ? pc(c15.c) : null, p30: c30 ? pc(c30.c) : null, sofar: !c30 ? pc(last.c) : null, mins: last.m - t0 };
+}
+function rxHTML(n) {
+  const r = reactionFor(n); if (!r) return '';
+  const nm = { NIFTY: 'Nifty', BANKNIFTY: 'Bank Nifty', SENSEX: 'Sensex' }[r.key] || (CFG[r.key] ? CFG[r.key].label : r.key);
+  if (r.closed) return '';
+  const v = (x) => `<b class="${x >= 0 ? 'up' : 'down'}">${x >= 0 ? '+' : ''}${f2(x)}%</b>`;
+  const big = [r.p30, r.p15, r.sofar].find(ok), moved = ok(big) && Math.abs(big) >= (CFG[r.key].kind === 'EQ' ? 1.5 : 0.4);
+  const txt = ok(r.p30) ? `15m ${ok(r.p15) ? v(r.p15) : '–'} · 30m ${v(r.p30)}` : ok(r.sofar) && r.mins > 0 ? `${r.mins}m so far ${v(r.sofar)}` : '';
+  if (!txt) return '';
+  return `<div class="nt-rx${moved ? ' big' : ''}" title="How ${nm} moved after this headline${r.pre ? ' (published before the open, measured from the open)' : ''}">${nm} after${r.pre ? ' open' : ''}: ${txt}${moved ? ' <span class="nt-mv">moved the market</span>' : ''}</div>`;
+}
 function newsTile(n) {
   const [tc, tl] = srcTier(n.src), d = n.s > 0.15 ? ['b', '▲ Bullish'] : n.s < -0.15 ? ['s', '▼ Bearish'] : ['n', 'Neutral'];
   const title = n.link ? `<a href="${esc(n.link)}" target="_blank" rel="noopener">${esc(n.t)}</a>` : esc(n.t);
@@ -290,7 +330,7 @@ function newsTile(n) {
   return `<article class="nt ${d[0]}${n.imp === 'high' ? ' hi' : ''}">
     <div class="nt-top"><span class="nt-src">${esc(srcShort(n.src))}${tl === 'Demo' ? '' : `<span class="nt-tier ${tc}">${tl}</span>`}</span><span>${esc(n.ago || '')}</span></div>
     ${n.co ? `<div class="nt-co">${esc(n.co)}</div>` : ''}<h4>${title}</h4>
-    <div class="nt-foot"><span class="nt-imp ${d[0]}">${d[1]}</span>${more}${n.tags.map((x) => `<span class="nt-tag">${esc(x)}</span>`).join('')}</div></article>`;
+    ${rxHTML(n)}<div class="nt-foot"><span class="nt-imp ${d[0]}">${d[1]}</span>${more}${n.tags.map((x) => `<span class="nt-tag">${esc(x)}</span>`).join('')}</div></article>`;
 }
 function renderNews() {
   const a = A[cur], pool = newsPool(a), f = newsTab === 'all' ? pool : pool.filter((x) => x.cats.has(newsTab));
@@ -327,6 +367,12 @@ function renderGlobal() {
   const dl = (d) => (d === today ? 'Today' : d === tom ? 'Tomorrow' : new Date(d + 'T00:00:00Z').toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' }));
   h += '</div><div class="g-c"><div class="sec">Event calendar, next 10 days (IST)</div>' + (ev.length ? ev.map((e) => `<div class="ev ${e.imp}"><span class="ev-d">${dl(e.date)}<br><small>${esc(e.time)}</small></span><span>${esc(e.t)}${e.fc ? `<br><small class="mut">Forecast ${esc(e.fc)}, previous ${esc(e.pv)}</small>` : ''}</span></div>`).join('') : '<div class="mut">No high-impact events found.</div>');
   if (C.sources) h += `<div class="srcline">Calendar: ${Object.entries(C.sources).map(([n, c]) => `${esc(n)} ${c}`).join(', ')}</div>`;
+  const Gx = Source.geo ? Source.geo() : null;
+  if (Gx) {
+    const lc = { High: 'down', Elevated: 'warn', Normal: '', Low: 'up', Unknown: 'mut' }[Gx.level] || '';
+    h += `</div><div class="g-d"><div class="geo-h"><span class="sec" style="margin:0">Geopolitical risk (GDELT, world news)</span><span class="geo-lv ${lc}">${esc(Gx.level || '–')}${ok(Gx.ratio) ? ` · ${f1(Gx.ratio)}× 3-day avg` : ''}</span></div>
+      <div class="geo-list">${(Gx.items || []).slice(0, 4).map((n) => `<div class="geo-i"><span class="mut">${esc(String(n.src || '').replace(/^www\./, ''))} · ${esc(n.ago || '')}</span>${n.link ? `<a href="${esc(n.link)}" target="_blank" rel="noopener">${esc(n.t)}</a>` : esc(n.t)}</div>`).join('') || '<span class="mut">No major headlines from trusted outlets in the last 12 hours.</span>'}</div>`;
+  }
   $('globalBody').innerHTML = h + '</div>';
 }
 function setNewsTab(k) { newsTab = k; newsMore = false; renderControls(); renderNews(); }

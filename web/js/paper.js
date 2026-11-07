@@ -271,6 +271,7 @@ const Paper = (() => {
     const box = $('pPos');
     if (!box.contains(document.activeElement)) renderPositions();
     renderRecord(); renderHistory();
+    if ($('fundsDrawer') && $('fundsDrawer').open) renderFunds();
   }
   function renderBanner() {
     const a = A[cur], s = signalFor(a), o = opts();
@@ -291,9 +292,12 @@ const Paper = (() => {
     h += `<div class="sig-foot">${ss.n} ${a.cf.label} ${hzR === 'short' ? 'Short (1-min)' : 'Intraday'} signals so far. ${ss.pct == null ? `No ${aft}-minute results yet.` : `${ss.pct}% were right after ${aft} minutes (${ss.win} of ${ss.dec}).`}</div></div>`;
     $('pBanner').innerHTML = h;
   }
+  // money you put in = starting capital + added − withdrawn. Added money is never counted as profit.
+  const invested = () => acc.start + (acc.deposits || 0) - (acc.withdrawals || 0);
   function renderAccount() {
-    const st = tradeStats(), eq = equity(), tot = eq - acc.start;
-    $('pAcc').innerHTML = `<div><small>Cash (dummy)</small><b>${rs(acc.cash)}</b></div><div><small>Total value</small><b class="${tot >= 0 ? 'up' : 'down'}">${rs(eq)}</b></div>
+    const st = tradeStats(), eq = equity(), inv = invested(), tot = eq - inv, pct = inv > 0 ? (tot / inv) * 100 : 0;
+    $('pAcc').innerHTML = `<div><small>Cash (dummy)</small><b>${rs(acc.cash)}</b></div><div><small>Total value</small><b>${rs(eq)}</b></div>
+      <div><small>Overall P&L (vs ₹ put in)</small><b class="${tot >= 0 ? 'up' : 'down'}">${sgn(tot)}${rs(tot)} <span style="font-size:12px">(${sgn(pct)}${f1(pct)}%)</span></b></div>
       <div><small>Today's net P&L</small><b class="${st.today >= 0 ? 'up' : 'down'}">${sgn(st.today)}${rs(st.today)}</b></div><div><small>Win rate</small><b>${st.pct == null ? '–' : st.pct + '%'} <span class="mut" style="font-size:11px">(${st.n} trades)</span></b></div>`;
   }
   function renderPositions() {
@@ -358,7 +362,7 @@ const Paper = (() => {
     h += `<div class="tbl" style="margin-top:10px"><table><thead><tr><th class="l">Trade</th><th>Buy → sell</th><th>Net P&L</th><th class="l">Reason</th></tr></thead><tbody>` +
       (cl.length ? cl.map((t) => `<tr><td class="l">${t.label} ${t.K} ${t.type}<br><span class="mut">${t.lots} lot, ${hm(t.openedMin)}–${hm(t.closedMin)}</span></td><td>${f2(t.entry)} → ${f2(t.exit)}</td>
         <td class="${t.net >= 0 ? 'up' : 'down'}">${sgn(t.net)}${rs(t.net)}<br><span class="mut">charges ${rs(t.entryCh.total + t.exitCh.total)}</span></td><td class="l" style="white-space:normal">${esc(t.reason)}</td></tr>`).join('') : '<tr><td colspan="4" class="mut">No closed trades yet</td></tr>') + '</tbody></table></div>';
-    h += `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px"><button class="btn-ghost" onclick="Paper.reset()">Reset account</button><span class="mut" style="font-size:12px;align-self:center">Starting capital ${rs(acc.start)}. ${Store.cloud ? 'Saved to Firebase.' : 'Saved in this browser.'}</span></div>`;
+    h += `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px"><button class="btn-ghost" onclick="Paper.openFunds()">Add money or reset</button><span class="mut" style="font-size:12px;align-self:center">Starting capital ${rs(acc.start)}. ${Store.cloud ? 'Saved to Firebase.' : 'Saved in this browser.'}</span></div>`;
     $('pHist').innerHTML = h;
   }
 
@@ -381,6 +385,59 @@ const Paper = (() => {
   function setTgt(id, v) { const t = trades.find((x) => x.id === id); v = +v; if (t) { t.tgt = v > 0 ? tick05(v) : null; Store.saveTrade(t); } }
   function setOpt(k, v) { const o = opts(); o[k] = v; Store.setPref('paper_opts', o); renderPositions(); }
   function setLots(v) { const o = opts(); o.lots = Math.max(1, Math.floor(+v || 1)); Store.setPref('paper_opts', o); renderBanner(); }
+  /* ---------- Dummy money: add, withdraw, reset (no browser pop-ups) ---------- */
+  const MAX_AMT = 1e9; // ₹100 crore per entry
+  let resetArm = false;
+  const FS = { cap: null, capC: '', keepS: true, keepT: false, add: '', wd: '' }; // what you picked/typed survives re-renders
+  const fset = (k, v) => { FS[k] = v; if (k === 'cap') renderFunds(true); };
+  const parseAmt = (v) => { const n = Math.round(+String(v).replace(/[^0-9.]/g, '')); return n > 0 && n <= MAX_AMT ? n : null; };
+  function logFund(type, amt) { (acc.funds = acc.funds || []).unshift({ ts: Date.now(), type, amt, cash: acc.cash }); acc.funds = acc.funds.slice(0, 30); }
+  async function addFunds(v) {
+    const n = parseAmt(v); if (!n) return toast('Enter an amount between ₹1 and ₹100 crore');
+    acc.cash += n; acc.deposits = (acc.deposits || 0) + n; logFund('Added', n); FS.add = '';
+    await Store.saveAccount(acc); toast(`Added ${rs(n)} dummy money`); render(); renderFunds();
+  }
+  async function withdraw(v) {
+    const n = parseAmt(v); if (!n) return toast('Enter an amount to withdraw');
+    if (n > acc.cash) return toast(`You only have ${rs(acc.cash)} free cash`);
+    acc.cash -= n; acc.withdrawals = (acc.withdrawals || 0) + n; logFund('Withdrawn', n); FS.wd = '';
+    await Store.saveAccount(acc); toast(`Withdrew ${rs(n)}`); render(); renderFunds();
+  }
+  async function resetTo() {
+    if (openTrades().length) return toast('Close your open paper positions first, then reset.');
+    if (!resetArm) { resetArm = true; renderFunds(true); setTimeout(() => { resetArm = false; renderFunds(true); }, 6000); return; }
+    resetArm = false;
+    const sel = FS.cap || String(acc.start), c = sel === 'custom' ? parseAmt(FS.capC) : parseAmt(sel);
+    if (!c) return toast('Enter a starting amount');
+    const keepT = FS.keepT, keepS = FS.keepS;
+    await Store.resetAll({ trades: !keepT, signals: !keepS });
+    if (!keepT) trades = trades.filter((t) => t.status === 'open');
+    if (!keepS) signals = [];
+    acc = { cash: c, start: c, created: Date.now(), deposits: 0, withdrawals: 0, funds: [{ ts: Date.now(), type: 'Reset to', amt: c, cash: c }], resets: (acc.resets || 0) + 1 };
+    FS.cap = null; FS.capC = '';
+    await Store.saveAccount(acc); toast(`Account reset to ${rs(c)}`); render(); renderFunds(true);
+  }
+  function openFunds() { const d = $('fundsDrawer'); if (d) { d.open = true; d.scrollIntoView({ behavior: 'smooth', block: 'center' }); } }
+  function renderFunds(force) {
+    const el = $('pFunds'); if (!el) return;
+    const ae = document.activeElement; if (!force && ae && ae.closest && ae.closest('#pFunds') && /INPUT|SELECT/.test(ae.tagName)) return; // don't wipe what you're typing
+    const presets = [50000, 100000, 200000, 500000, 1000000, 2500000], capSel = FS.cap || String(acc.start);
+    el.innerHTML = `<div class="fund-grid">
+      <div class="fund-box"><b>Add money</b><div class="fund-q">${[10000, 50000, 100000, 500000].map((v) => `<button onclick="Paper.addFunds(${v})">+${rs(v)}</button>`).join('')}</div>
+        <div class="fund-row"><input id="fAdd" type="text" inputmode="numeric" placeholder="Any amount, e.g. 250000" aria-label="Amount to add" value="${esc(FS.add)}" oninput="Paper.fset('add',this.value)"><button class="btn-solid ce" onclick="Paper.addFunds($('fAdd').value)">Add</button></div></div>
+      <div class="fund-box"><b>Withdraw</b><div class="mut" style="font-size:12px">Free cash ${rs(acc.cash)}</div>
+        <div class="fund-row"><input id="fWd" type="text" inputmode="numeric" placeholder="Amount" aria-label="Amount to withdraw" value="${esc(FS.wd)}" oninput="Paper.fset('wd',this.value)"><button class="btn-ghost" onclick="Paper.withdraw($('fWd').value)">Withdraw</button></div></div>
+      <div class="fund-box"><b>Start over</b>
+        <div class="fund-row"><select id="fCap" aria-label="New starting capital" onchange="Paper.fset('cap',this.value)">${presets.map((v) => `<option value="${v}" ${String(v) === capSel ? 'selected' : ''}>${rs(v)}</option>`).join('')}<option value="custom" ${capSel === 'custom' ? 'selected' : ''}>Custom…</option></select>
+        <input id="fCapC" type="text" inputmode="numeric" placeholder="Custom amount" style="${capSel === 'custom' ? '' : 'display:none'}" aria-label="Custom starting capital" value="${esc(FS.capC)}" oninput="Paper.fset('capC',this.value)"></div>
+        <label class="fund-ck"><input type="checkbox" id="fKeepS" ${FS.keepS ? 'checked' : ''} onchange="Paper.fset('keepS',this.checked)"> Keep signal record (engine accuracy)</label>
+        <label class="fund-ck"><input type="checkbox" id="fKeepT" ${FS.keepT ? 'checked' : ''} onchange="Paper.fset('keepT',this.checked)"> Keep old trade history</label>
+        <button class="${resetArm ? 'btn-solid pe' : 'btn-ghost'}" onclick="Paper.resetTo()">${resetArm ? 'Tap again to confirm reset' : 'Reset account'}</button></div>
+    </div>
+    <div class="fund-sum">Put in so far: start ${rs(acc.start)}${acc.deposits ? ` + added ${rs(acc.deposits)}` : ''}${acc.withdrawals ? ` − withdrawn ${rs(acc.withdrawals)}` : ''} = <b>${rs(invested())}</b>. Overall P&L is measured against this, so added money never looks like profit.</div>
+    ${(acc.funds || []).length ? `<div class="fund-log">${acc.funds.slice(0, 5).map((f) => `<span>${new Date(f.ts).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })} · ${esc(f.type)} ${rs(f.amt)}</span>`).join('')}</div>` : ''}
+    <div class="legend">Tip: keep the paper amount close to what you would really trade. With unlimited money, position-sizing mistakes stay hidden, and that's the skill paper trading should build.</div>`;
+  }
   async function reset() {
     const cap = prompt('This clears the paper account, trade history and signal record. Enter new starting capital (₹):', String(PC.START_CAPITAL));
     if (cap == null) return;
@@ -388,7 +445,7 @@ const Paper = (() => {
     await Store.resetAll(); acc = { cash: c, start: c, created: Date.now() }; trades = []; signals = [];
     await Store.saveAccount(acc); toast('Account reset'); render();
   }
-  return { load, onTick, render, renderOrderForm, updateEstimate, takeSignal, placeManual, closeId, openFromAsk, setSL, setSLMode, setTgt, setOpt, setLots, reset, opts, charges,
+  return { load, onTick, render, renderOrderForm, updateEstimate, takeSignal, placeManual, closeId, openFromAsk, setSL, setSLMode, setTgt, setOpt, setLots, reset, opts, charges, addFunds, withdraw, resetTo, openFunds, renderFunds, fset,
     get ready() { return ready; }, openTrades };
 })();
 
