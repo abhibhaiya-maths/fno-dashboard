@@ -4,7 +4,7 @@ const COL = {
   grid: 'rgba(0,229,255,.07)', line: 'rgba(0,229,255,.16)', vwap: '#00E5FF', ema20: '#B69CFF', ema50: '#FF7AE0', bb: '#5B7BA6', cpr: '#4DA3FF', orb: '#E6F1FF', panel: 'rgba(6,12,22,.9)',
 };
 const FONT = '600 12px Rajdhani, system-ui, sans-serif';
-let lastActiveTk = null, sub = 'rsi', tab = 'chain', tf = 5, CI = null, newsTab = 'news', lastOrb = null;
+let lastActiveTk = null, sub = 'rsi', tab = 'chain', tf = 5, CI = null, newsTab = 'all', newsMore = false, lastOrb = null;
 const OV = Store.pref('overlays', { vwap: true, ema20: true, ema50: false, bb: false, st: true, fib: true, cpr: true, piv: false, orb: false, vp: false });
 const OVL = { vwap: 'VWAP', ema20: 'EMA 20', ema50: 'EMA 50', bb: 'Bollinger', st: 'Supertrend', fib: 'Fibonacci', cpr: 'CPR', piv: 'Pivots', orb: 'Opening range', vp: 'Volume profile' };
 const OVC = { vwap: COL.vwap, ema20: COL.ema20, ema50: COL.ema50, bb: COL.bb, st: COL.call, fib: COL.brass, cpr: COL.cpr, piv: COL.muted, orb: COL.text, vp: COL.vwap };
@@ -67,7 +67,7 @@ function renderControls() {
   $('subBtns').innerHTML = [['rsi', 'RSI'], ['macd', 'MACD'], ['adx', 'ADX']].map(([k, l]) => `<button class="btn ${k === sub ? 'on' : ''}" onclick="setSub('${k}')">${l}</button>`).join('');
   $('chartTitle').textContent = `${a.cf.label} · ${TFL[tf]} chart`;
   $('tabs').innerHTML = [['chain', a.cf.opt ? 'Option chain' : 'Futures & volatility'], ['mood', 'Market mood'], ['sig', `All ${a.intra.sigs.length + (a.short ? a.short.sigs.length : 0) + (a.long ? a.long.sigs.length : 0)} signals`]].map(([k, l]) => `<button class="btn ${k === tab ? 'on' : ''}" onclick="setTab('${k}')">${l}</button>`).join('');
-  $('newsTabs').innerHTML = [['news', a.cf.core ? 'News' : 'Company news'], ['results', 'Results'], ['official', 'Official']].map(([k, l]) => `<button class="btn ${k === newsTab ? 'on' : ''}" onclick="setNewsTab('${k}')">${l}</button>`).join('');
+  $('newsTabs').innerHTML = [['all', 'All'], ['official', 'Official'], ['market', a.cf.core ? 'Market' : a.cf.label], ['results', 'Results'], ['watch', 'Watchlist']].map(([k, l]) => `<button class="${k === newsTab ? 'on' : ''}" onclick="setNewsTab('${k}')" aria-pressed="${k === newsTab}">${esc(l)}</button>`).join('');
   const cf = a.cf;
   $('qchips').innerHTML = (cf.opt ? [`Should I buy ${cf.label} ${a.ch.atm} CE?`, `Should I buy ${cf.label} ${a.ch.atm} PE?`] : [`Is ${cf.label} bullish or bearish now?`, `Where is the stop-loss for ${cf.label}?`]).concat([`How far did ${cf.label} move today?`, 'Hold or exit my position?'])
     .map((t) => `<button class="chip" onclick="$('q').value='${t}';Voice.ask()">${t}</button>`).join('');
@@ -229,53 +229,93 @@ function renderTab() {
 
 /* ख़बरें और तिमाही नतीजे */
 const sentLb = (s) => (s > 0.15 ? ['b', 'Bullish'] : s < -0.15 ? ['s', 'Bearish'] : ['n', 'Neutral']);
+/* ---------- News and results as tiles: trusted sources, tier badge, impact, tags, de-duplicated ---------- */
+const SRC_SHORT = [[/^NSE/, 'NSE'], [/^BSE/, 'BSE'], [/^RBI/, 'RBI'], [/^SEBI/, 'SEBI'], [/^PIB/, 'PIB'], [/^ET /, 'Economic Times'], [/^Business Standard/, 'Business Standard'], [/^Moneycontrol/, 'Moneycontrol'], [/^Mint/, 'Mint']];
+const srcShort = (s) => { const m = SRC_SHORT.find(([re]) => re.test(s || '')); return m ? m[1] : s || 'News'; };
+function srcTier(s) {
+  s = s || '';
+  if (/^(NSE|BSE)/.test(s)) return ['ex', 'Exchange'];
+  if (/^(RBI|SEBI)/.test(s)) return ['reg', 'Regulator'];
+  if (/^PIB/.test(s)) return ['gov', 'Govt'];
+  if (/reuters|bloomberg|\bpti\b/i.test(s)) return ['wire', 'Wire'];
+  if (/cnbc/i.test(s)) return ['tv', 'TV'];
+  if (/moneycontrol/i.test(s)) return ['web', 'Portal'];
+  if (/demo/i.test(s)) return ['web', 'Demo'];
+  return ['np', 'Newspaper'];
+}
+const NEWS_RES = /\b(Q[1-4]|quarter(ly)?|results?|earnings|net profit|PAT|EBITDA|revenue)\b/i;
+const normT = (t) => String(t || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 70);
+// "5 min ago" / "3 hours ago" / "yesterday" → timestamp (demo headlines and older cached items carry only text)
+function agoMs(t) {
+  const m = String(t || '').match(/(\d+)\s*(minutes?|mins?|hours?|hrs?|h|days?|d)\b/i), now = Date.now();
+  if (/yesterday/i.test(t)) return now - 864e5;
+  if (!m) return null;
+  const u = m[2].toLowerCase(), n = +m[1];
+  return now - n * (u.startsWith('m') ? 60e3 : u.startsWith('h') ? 3600e3 : 864e5);
+}
+function newsPool(a) {
+  const watch = KEYS.filter((k) => !CFG[k].core).map((k) => ({ k, re: new RegExp('\\b(' + [k, ...(CFG[k].name || CFG[k].label).split(/\s+/).filter((w) => w.length > 3 && !/^(bank|india|limited|ltd|industries|fut)$/i.test(w)).slice(0, 2)].map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|') + ')', 'i'), label: CFG[k].label }));
+  const watchOf = (txt) => watch.find((w) => w.re.test(txt));
+  const now = Date.now(), out = [], seen = new Map();
+  const push = (n, cat) => {
+    if (!n || !n.t) return;
+    const key = normT(n.t); if (!key) return;
+    const ts = n.ts || agoMs(n.ago) || now - (n._i || 0) * 20 * 60e3;
+    const txt = (n.co || '') + ' ' + n.t, w = watchOf(txt);
+    const cats = new Set([cat]); if (NEWS_RES.test(n.t) || cat === 'results' || /result/i.test(n.src || '')) cats.add('results'); if (w || n._watch) cats.add('watch');
+    const prev = seen.get(key);
+    if (prev) { cats.forEach((c) => prev.cats.add(c)); prev.n = Math.max(prev.n, n.n || 1) + (prev.src !== n.src ? 1 : 0); return; }
+    const tags = [];
+    if (n._watch || w) tags.push(n._watch || w.label);
+    if (/\bnifty\b(?! bank)/i.test(n.t)) tags.push('Nifty');
+    if (/bank|\brbi\b|lender|nbfc|repo/i.test(n.t)) tags.push('Bank Nifty');
+    if (/sensex|\bbse\b/i.test(n.t)) tags.push('Sensex');
+    if (cats.has('results')) tags.push('Results');
+    const it = { t: n.t, co: n.co || '', src: n.src || (Source.mode === 'demo' ? 'Demo' : ''), link: n.link || '', ts, ago: n.ago || '', s: ok(n.s) ? n.s : 0, imp: n.imp || 'medium', n: n.n || 1, also: n.alsoBy || [], cats, tags: [...new Set(tags)].slice(0, 3) };
+    seen.set(key, it); out.push(it);
+  };
+  const O = Source.official ? Source.official() : { items: [] }, R = Source.results ? Source.results() : { items: [] };
+  O.items.forEach((n, i) => push({ ...n, _i: i }, 'official'));
+  (a.news || []).forEach((n, i) => push({ ...n, _i: i }, 'market'));
+  (R.items || []).forEach((n, i) => push({ ...n, _i: i }, 'results'));
+  KEYS.filter((k) => !CFG[k].core && k !== cur && A[k]).forEach((k) => (A[k].news || []).forEach((n, i) => push({ ...n, _i: i, _watch: CFG[k].label }, 'watch')));
+  // newest first, but fresh high-impact news (last 4 hours) stays on top
+  const rank = (x) => (x.imp === 'high' && now - x.ts < 4 * 3600e3 ? 1e13 : 0) + x.ts;
+  return out.sort((x, y) => rank(y) - rank(x));
+}
+function newsTile(n) {
+  const [tc, tl] = srcTier(n.src), d = n.s > 0.15 ? ['b', '▲ Bullish'] : n.s < -0.15 ? ['s', '▼ Bearish'] : ['n', 'Neutral'];
+  const title = n.link ? `<a href="${esc(n.link)}" target="_blank" rel="noopener">${esc(n.t)}</a>` : esc(n.t);
+  const more = n.n > 1 ? `<span class="nt-tag" title="${esc(n.also.join(', '))}">${n.n} sources</span>` : '';
+  return `<article class="nt ${d[0]}${n.imp === 'high' ? ' hi' : ''}">
+    <div class="nt-top"><span class="nt-src">${esc(srcShort(n.src))}${tl === 'Demo' ? '' : `<span class="nt-tier ${tc}">${tl}</span>`}</span><span>${esc(n.ago || '')}</span></div>
+    ${n.co ? `<div class="nt-co">${esc(n.co)}</div>` : ''}<h4>${title}</h4>
+    <div class="nt-foot"><span class="nt-imp ${d[0]}">${d[1]}</span>${more}${n.tags.map((x) => `<span class="nt-tag">${esc(x)}</span>`).join('')}</div></article>`;
+}
 function renderNews() {
-  const a = A[cur]; let h = '';
-  if (newsTab === 'news') {
-    if (!a.news.length) h = `<div class="mut">No ${a.cf.core ? '' : esc(a.cf.label) + ' '}news in the last 3 days yet. Feeds are checked again every 10 minutes.</div>`;
-    else {
-      const pos = ((clamp(a.newsAvg, -1, 1) + 1) / 2) * 100, avg = sentLb(a.newsAvg);
-      h = `<div class="row" style="border:0;padding-bottom:0"><span>News impact on ${esc(a.cf.label)} ${Source.mode === 'live' ? (Source.newsAI(cur) ? '(AI scored)' : '(keyword scored)') : '(demo)'}</span><span class="pill ${avg[0]}">${avg[1]} ${f2(a.newsAvg)}</span></div>
-        <div class="sentbar"><i style="left:calc(${pos}% - 1px)"></i></div>` +
-        a.news.slice(0, 8).map((n) => { const l = sentLb(n.s); return `<div class="news"><p>${n.link ? `<a href="${esc(n.link)}" target="_blank" rel="noopener">${esc(n.t)}</a>` : esc(n.t)}</p><div class="meta"><span class="pill ${l[0]}">${l[1]} ${sgn(n.s)}${n.s.toFixed(1)}</span><span>impact ${esc(n.imp)}</span><span>${esc(n.ago || '')}</span>${n.src ? `<span>${esc(n.src)}</span>` : ''}</div></div>`; }).join('');
-    }
-  } else if (newsTab === 'official') {
-    const O = Source.official ? Source.official() : { items: [], sources: {} };
-    const names = KEYS.filter((k) => !CFG[k].core).map((k) => (CFG[k].name || CFG[k].label).split(' ')[0].toLowerCase()).filter((x) => x.length > 2);
-    const mine = (n) => n.co && names.some((w) => n.co.toLowerCase().includes(w));
-    const items = [...O.items.filter(mine), ...O.items.filter((n) => !mine(n))].slice(0, 14);
-    h = `<div class="legend" style="margin:0 0 6px">Straight from the source: NSE corporate announcements (results, board meetings, orders, ratings), RBI press releases and notifications, SEBI circulars.${names.length ? ' Your watchlist companies come first.' : ''}</div>` +
-      (items.length ? items.map((n) => `<div class="news">${n.co ? `<div class="res-co">${esc(n.co)}${mine(n) ? '<span class="pill g">Watchlist</span>' : ''}</div>` : ''}<p>${n.link ? `<a href="${esc(n.link)}" target="_blank" rel="noopener">${esc(n.t)}</a>` : esc(n.t)}</p><div class="meta"><span class="pill n">${esc(n.src)}</span><span>${esc(n.ago || '')}</span></div></div>`).join('') : '<div class="mut">Nothing from the official feeds yet. They are checked every 10 minutes.</div>');
-    $('newsBody').innerHTML = h + `<div class="srcline">Official feeds: ${Object.entries(O.sources || {}).map(([n2, c]) => `${esc(n2)} ${c}`).join(', ') || 'loading'}</div>`;
-    return;
-  } else {
-    const R = Source.results ? Source.results() : { items: [] };
-    if (!R.items.length) h = '<div class="mut">No quarterly results news in the last 3 days.</div>';
-    else {
-      h = `<div class="legend" style="margin:0 0 6px">Quarterly results (Q2/Q3 etc.), last 3 days. ${R.ai ? 'Strong or weak rated by AI.' : ''}</div>` + R.items.slice(0, 10).map((n) => {
-        const l = n.s > 0.15 ? ['b', 'Strong'] : n.s < -0.15 ? ['s', 'Weak'] : ['n', 'Mixed'];
-        const hv = n.co && ALL_HV.some((x) => n.co.toLowerCase().includes(x.toLowerCase().split(' ')[0]));
-        const wl = n.co && KEYS.some((k) => !CFG[k].core && n.co.toLowerCase().includes((CFG[k].name || CFG[k].label).split(' ')[0].toLowerCase()));
-        return `<div class="news"><div class="res-co">${esc(n.co || 'Company')}${n.q ? `<span class="pill n">${esc(n.q)}</span>` : ''}${hv ? '<span class="pill g">Index heavyweight</span>' : ''}${wl ? '<span class="pill g">Watchlist</span>' : ''}</div>
-          <p>${n.link ? `<a href="${esc(n.link)}" target="_blank" rel="noopener">${esc(n.t)}</a>` : esc(n.t)}</p><div class="meta"><span class="pill ${l[0]}">${l[1]}</span><span>${esc(n.ago || '')}</span>${n.src ? `<span>${esc(n.src)}</span>` : ''}</div></div>`;
-      }).join('');
-    }
-  }
-  const src = Source.newsSources ? Source.newsSources(cur) : null;
-  if (src) h += `<div class="srcline">Sources (free RSS): ${Object.entries(src).map(([n, c]) => `${esc(n)} ${c}`).join(', ')}</div>`;
-  $('newsBody').innerHTML = h;
+  const a = A[cur], pool = newsPool(a), f = newsTab === 'all' ? pool : pool.filter((x) => x.cats.has(newsTab));
+  const mob = window.matchMedia('(max-width: 860px)').matches, show = mob && !newsMore ? f.slice(0, 6) : f.slice(0, 40);
+  const avg = sentLb(a.newsAvg);
+  $('newsNote').innerHTML = `Trusted sources only · ${esc(a.cf.label)} news mood <span class="pill ${avg[0]}">${avg[1]}${a.news.length ? ' ' + f2(a.newsAvg) : ''}</span>`;
+  const empty = { official: 'Nothing from NSE, BSE, RBI, SEBI or PIB yet.', market: 'No market news yet.', results: 'No quarterly results in the feeds yet.', watch: KEYS.some((k) => !CFG[k].core) ? 'No news about your watchlist companies in the last 3 days.' : 'Add stocks with "+ Add stock / MCX" to see their news here.', all: 'No news yet. Feeds are checked every 10 minutes.' }[newsTab];
+  const O = Source.official ? Source.official() : { sources: {} }, NS = Source.newsSources ? Source.newsSources(cur) || {} : {};
+  const src = Object.entries({ ...O.sources, ...NS }).filter(([, c]) => c != null).map(([n, c]) => `${esc(n.replace('Google News: ', ''))} ${c}`).join(' · ');
+  $('newsBody').innerHTML = (show.length ? `<div class="nw-grid">${show.map(newsTile).join('')}</div>` : `<div class="mut nw-empty">${empty}</div>`) +
+    (mob && f.length > 6 ? `<button class="nw-more" onclick="newsMore=!newsMore;renderNews()">${newsMore ? 'Show fewer' : `Show more (${f.length - 6})`}</button>` : '') +
+    `<div class="srcline">${Source.mode === 'live' ? 'Sources: ' + (src || 'loading') : 'Demo headlines'}</div>`;
 }
 /* Global cues, economic calendar, FII/DII (side panel) */
 const GNAME = [[/gift|sgx/i, 'GIFT Nifty'], [/dow|\^dji|us 30/i, 'Dow'], [/s&p|gspc/i, 'S&P 500'], [/us tech|ndx|nasdaq/i, 'Nasdaq 100'], [/nikkei/i, 'Nikkei'], [/hang seng/i, 'Hang Seng'], [/dax/i, 'DAX'], [/ftse/i, 'FTSE'], [/cac/i, 'CAC 40'], [/brent|bzusd/i, 'Brent'], [/wti/i, 'WTI'], [/usd ?inr/i, 'USD/INR']];
 function shortG(n) { const m = GNAME.find(([re]) => re.test(n)); return m ? m[1] : n; }
 function renderGlobal() {
   const G = Source.global ? Source.global() : [], C = Source.calendar ? Source.calendar() : { items: [] }, a = A[cur];
-  let h = '';
+  let h = '<div class="g-a">';
   const gift = G.find((g) => /gift|sgx/i.test(g.name + g.sym)), N = A.NIFTY;
   if (gift && N && ok(gift.price)) {
     const gap = gift.price - N.PC, pre = !N.sessionLive && istMin() < 0;
     h += `<div class="gift ${gap >= 0 ? 'up' : 'down'}"><div><small>GIFT Nifty</small><b>${f1(gift.price)}</b><span>${sgn(gift.chg)}${f2(gift.chg)}%</span></div><p>${pre ? `Points to a ${Math.abs(gap) < 30 ? 'flat' : gap > 0 ? 'gap-up' : 'gap-down'} open: ${sgn(gap)}${f0(gap)} pts vs Nifty's last close.` : `${sgn(gap)}${f0(gap)} pts vs Nifty's previous close. Most useful before 9:15.`}</p></div>`;
   }
+  h += '</div><div class="g-b">';
   const rest = G.filter((g) => g !== gift);
   h += rest.length ? `<div class="gl-grid">${rest.map((g) => `<div class="gl"><small>${esc(shortG(g.name))}</small><b>${g.price >= 1000 ? f0(g.price) : f2(g.price)}</b><span class="${g.chg >= 0 ? 'up' : 'down'}">${sgn(g.chg)}${f2(g.chg)}%</span></div>`).join('')}</div>`
     : '<div class="mut">Global markets load from Upstox (deploy the new Worker if this stays empty).</div>';
@@ -285,11 +325,11 @@ function renderGlobal() {
   const exp = KEYS.filter((k) => A[k] && A[k].cf.opt && A[k].ch.expiry && A[k].ch.expiry !== 'Demo' && A[k].ch.dte <= 7).map((k) => ({ date: A[k].ch.expiry, time: '15:30', t: `${A[k].cf.label} options expiry`, imp: A[k].cf.core ? 'high' : 'medium', src: 'Exchange' }));
   const seen = new Set(), ev = [...(C.items || []), ...exp].filter((e) => { const k = e.date + e.t; if (seen.has(k)) return false; seen.add(k); return e.date >= today; }).sort((x, y) => (x.date + x.time < y.date + y.time ? -1 : 1)).slice(0, 9);
   const dl = (d) => (d === today ? 'Today' : d === tom ? 'Tomorrow' : new Date(d + 'T00:00:00Z').toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' }));
-  h += '<div class="sec">Event calendar, next 10 days (IST)</div>' + (ev.length ? ev.map((e) => `<div class="ev ${e.imp}"><span class="ev-d">${dl(e.date)}<br><small>${esc(e.time)}</small></span><span>${esc(e.t)}${e.fc ? `<br><small class="mut">Forecast ${esc(e.fc)}, previous ${esc(e.pv)}</small>` : ''}</span></div>`).join('') : '<div class="mut">No high-impact events found.</div>');
+  h += '</div><div class="g-c"><div class="sec">Event calendar, next 10 days (IST)</div>' + (ev.length ? ev.map((e) => `<div class="ev ${e.imp}"><span class="ev-d">${dl(e.date)}<br><small>${esc(e.time)}</small></span><span>${esc(e.t)}${e.fc ? `<br><small class="mut">Forecast ${esc(e.fc)}, previous ${esc(e.pv)}</small>` : ''}</span></div>`).join('') : '<div class="mut">No high-impact events found.</div>');
   if (C.sources) h += `<div class="srcline">Calendar: ${Object.entries(C.sources).map(([n, c]) => `${esc(n)} ${c}`).join(', ')}</div>`;
-  $('globalBody').innerHTML = h;
+  $('globalBody').innerHTML = h + '</div>';
 }
-function setNewsTab(k) { newsTab = k; renderControls(); renderNews(); }
+function setNewsTab(k) { newsTab = k; newsMore = false; renderControls(); renderNews(); }
 function saveFII() { const f = $('fiiIn').value, d = $('diiIn').value; Store.setFII({ fii: f === '' ? null : +f, dii: d === '' ? null : +d }); toast('FII/DII saved'); refreshAll(); }
 
 /* ---------- चार्ट ---------- */

@@ -19,6 +19,7 @@ function renderAll() {
   const a = A[cur];
   $('main').style.display = a ? '' : 'none';
   $('orb').style.display = a ? '' : 'none';
+  $('below').style.display = a ? '' : 'none';
   if (!a) return;
   renderControls(); renderHorizons(); renderScore(); renderSetup(); renderLevels(); renderTab(); renderNews(); renderGlobal(); renderOrb(); Engine.renderProjection(); Engine.renderFeed(); Engine.renderTicker(); Engine.renderStatus(); drawChart(); Paper.render();
   $('orderDrawer').style.display = a.cf.opt ? '' : 'none';

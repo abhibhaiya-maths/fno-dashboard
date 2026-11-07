@@ -79,12 +79,12 @@ const LiveSource = (() => {
       try {
         const j = await api(cf.core ? '/api/news?index=' + k : `/api/news?id=${enc(k)}&name=${enc(cf.name || cf.label)}`);
         R(k).newsAI = j.ai; R(k).sources = j.sources || null;
-        R(k).news = (j.items || []).map((n) => ({ t: n.t, s: n.s, imp: n.imp, link: n.link, src: n.src, ago: agoText(n.ts) }));
+        R(k).news = (j.items || []).map((n) => ({ t: n.t, s: n.s, imp: n.imp, link: n.link, src: n.src, ts: n.ts, n: n.n, alsoBy: n.alsoBy, ago: agoText(n.ts) }));
       } catch (e) { cf.core ? fail(e) : soft(e); }
     }));
   }
   async function refreshResults() {
-    try { const j = await api('/api/results'); resultsData = { ai: j.ai, items: (j.items || []).map((n) => ({ co: n.co, q: n.q, t: n.t, s: n.s, link: n.link, src: n.src, ago: agoText(n.ts) })) }; } catch (e) { fail(e); }
+    try { const j = await api('/api/results'); resultsData = { ai: j.ai, items: (j.items || []).map((n) => ({ co: n.co, q: n.q, t: n.t, s: n.s, link: n.link, src: n.src, ts: n.ts, ago: agoText(n.ts) })) }; } catch (e) { fail(e); }
   }
   async function refreshGlobal() { try { glob = (await api('/api/global')).items || []; } catch (e) { soft(e); } }
   async function refreshCalendar() { try { cal = await api('/api/calendar'); } catch (e) { soft(e); } }
