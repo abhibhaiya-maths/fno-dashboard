@@ -1,6 +1,15 @@
 /* ===== विश्लेषण: डेटा → संकेत, स्कोर, लेवल, सेटअप ===== */
 // Session windows, minutes from 09:15 IST: NSE/BSE 09:15–15:30, MCX 09:00–23:30
 const SESS = { NSE: { o: 0, c: 375 }, MCX: { o: -15, c: 870 } };
+// Special sessions on non-working days (Diwali Muhurat etc.). Minutes counted from 09:15 IST. Add a line here for future ones.
+const SPECIAL_SESS = {
+  '2026-11-08': { name: 'Diwali Muhurat trading', o: 305, c: 375 }, // NSE/BSE 14:20–15:30 (pre-open 14:05–14:20)
+};
+function sessFor(cf, ymd) {
+  const sp = SPECIAL_SESS[ymd];
+  if (sp) return { o: sp.o, c: sp.c, special: sp.name };
+  return (cf && cf.sess) || SESS.NSE;
+}
 const CFG = {
   NIFTY: { label: 'NIFTY 50', voice: 'निफ्टी', step: 50, exch: 'NSE', cons: 50, kind: 'INDEX', core: true, opt: true, key: 'NSE_INDEX|Nifty 50', sess: SESS.NSE },
   SENSEX: { label: 'SENSEX', voice: 'सेंसेक्स', step: 100, exch: 'BSE', cons: 30, kind: 'INDEX', core: true, opt: true, key: 'BSE_INDEX|SENSEX', sess: SESS.NSE },
@@ -41,7 +50,7 @@ function nearestRow(rows, K) { let b = null; for (const r of rows) if (!b || Mat
 function sideIV(o) { return o && o.iv > 0 ? o.iv : null; }
 
 function analyze(D) {
-  const cf = CFG[D.key], s1 = D.candles, SS = cf.sess || SESS.NSE;
+  const cf = CFG[D.key], s1 = D.candles, SS = sessFor(cf, D.dayDates ? D.dayDates[2] : '');
   const prev = s1.filter((x) => x.d === 1), today = s1.filter((x) => x.d === 2);
   if (!prev.length || !today.length) return null;
   const hasVol = today.some((x) => x.v > 0);

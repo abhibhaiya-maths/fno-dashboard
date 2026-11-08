@@ -213,8 +213,9 @@ const LiveSource = (() => {
     }
     // build 1-minute candles from ticks, so the chart moves tick by tick
     function barTick(k, px) {
-      const S = (CFG[k] && CFG[k].sess) || SESS.NSE, m = istMin(); if (m < S.o || m >= S.c) return;
+      const S = sessFor(CFG[k], istYmd()), m = istMin(); if (m < S.o || m >= S.c) return;
       const b = R(k).bars, cur = b[m];
+      if (cur && cur.c !== px) lastMove = Date.now();
       if (!cur) b[m] = { o: px, h: px, l: px, c: px }; else { cur.h = Math.max(cur.h, px); cur.l = Math.min(cur.l, px); cur.c = px; }
     }
 
@@ -251,11 +252,13 @@ const LiveSource = (() => {
     return { connect, syncKeys, carryOver, get connected() { return connected; }, get lag() { return lag; }, get ticks() { return ticks; }, get lastTick() { return lastTick; }, get everConnected() { return everConnected; }, get fails() { return fails; } };
   })();
 
-  const isOpenDay = () => { const d = istNow().getUTCDay(); return d > 0 && d < 6; };
+  // open day = Mon–Fri, a listed special session (Muhurat), or prices actually moving on the live feed right now
+  let lastMove = 0;
+  const isOpenDay = () => { const d = istNow().getUTCDay(); return (d > 0 && d < 6) || !!SPECIAL_SESS[istYmd()] || Date.now() - lastMove < 120000; };
   function get(key) {
     const r = raw[key], cf = CFG[key];
     if (!cf || !r || !r.days || r.days.length < 2 || !snap) return null;
-    const S = cf.sess || SESS.NSE, td = istYmd(), nowM0 = istMin();
+    const td = istYmd(), S = sessFor(cf, td), nowM0 = istMin();
     const marketOpenNow = isOpenDay() && nowM0 >= S.o && nowM0 < S.c;
     let days = r.days.slice(-3), fromTicks = false;
     // Market is open but Upstox hasn't sent today's candles: build today from the live ticks instead of showing yesterday
@@ -310,10 +313,10 @@ const LiveSource = (() => {
   function clock() {
     const n = istNow(), m = istMin();
     const t = [n.getUTCHours(), n.getUTCMinutes(), n.getUTCSeconds()].map((x) => String(x).padStart(2, '0')).join(':');
-    const open = m >= 0 && m < 375 && isOpenDay();
+    const SN = sessFor(null, istYmd()), open = m >= SN.o && m < SN.c && isOpenDay();
     const mcx = !open && isOpenDay() && m >= -15 && m < 870 && KEYS.some((k) => CFG[k].exch === 'MCX');
     const stale = !Stream.connected && lastOk && Date.now() - lastOk > 30000 ? ', data paused' : '';
-    return { min: m, date: istYmd(), label: (open ? `${Stream.connected ? 'Streaming' : 'Live'} ${t}` : mcx ? `NSE closed, MCX ${Stream.connected ? 'streaming' : 'live'} ${t}` : `Market closed, ${t}`) + stale };
+    return { min: m, date: istYmd(), label: (open ? `${SN.special ? SN.special + ', ' : ''}${Stream.connected ? 'Streaming' : 'Live'} ${t}` : mcx ? `NSE closed, MCX ${Stream.connected ? 'streaming' : 'live'} ${t}` : `Market closed, ${t}`) + stale };
   }
   async function ask(question, context, history) { return api('/api/ask', { method: 'POST', body: JSON.stringify({ question, context, history: history || [] }) }); }
   function connectUrl(idToken) { return APP_CONFIG.WORKER_URL.replace(/\/$/, '') + '/auth/login?id_token=' + encodeURIComponent(idToken); }
