@@ -109,14 +109,18 @@ function hzVerdict(a) {
   if (I && !S) return ['n', `Intraday ${nm(I)}, but the last few minutes are flat. Better entries come when the 1-minute confirms.`];
   return ['n', 'No horizon has a clear direction. Waiting is a position too.'];
 }
+let MODE_MORE = false;
 function renderHorizons() {
   const a = A[cur], box = $('hz'); if (!box) return;
   const I = a.intra, ip = I.sigs.filter((x) => x.w > 0 && x.s * (I.dir === 'CE' ? 1 : -1) > 0).sort((x, y) => y.w - x.w);
   const intra = { score: I.score, dir: I.dir, gate: I.gate, strength: I.dir ? (a.hz === 'intra' ? signalFor(a).strength : null) : null, up: I.coreUp, dn: I.coreDn, coreN: I.coreN, reasons: I.dir ? ip.slice(0, 3) : [] };
   const v = hzVerdict(a), info = HZ_INFO[a.hz];
   const fb = a.hzWanted !== a.hz ? ` (${HZ_INFO[a.hzWanted].name} needs more data, so Intraday is used for now)` : '';
-  box.innerHTML = `<div class="hz-basis">Signal below is based on: <b>${info.name}</b>, ${info.tf} candles, ${info.horizon}${fb}. <span class="mut">Tap a card to switch.</span>${info.bt ? `<br><span class="mut">${info.bt}</span>` : ''}
-    <div class="mode-row"><span>Trading mode</span><span class="seg mode-seg">${Object.entries(ENG_MODES).map(([k, M]) => `<button class="${k === ENG_MODE ? 'on' : ''}" onclick="setEngMode('${k}')" title="${esc(M.note)}">${M.name}</button>`).join('')}</span><span class="mut">${esc(ENG_MODES[ENG_MODE].note)}</span></div></div><div class="hz-row">${hzCard(a, 'short', 'Short', '1-minute', a.short, 'Next 5–15 min')}${hzCard(a, 'intra', 'Intraday', '5-minute', intra, 'Next 30–90 min')}${hzCard(a, 'long', 'Long run', 'daily', a.long, 'Next 3–10 sessions')}</div><div class="hz-v ${v[0]}">${esc(v[1])}</div>`;
+  const M = ENG_MODES[ENG_MODE];
+  box.innerHTML = `<div class="hz-basis"><div>Signal Based On <b>${info.name}</b> · ${info.tf} Candles · ${info.horizon}${fb}</div>
+    <div class="mode-row"><span>Trading Mode</span><span class="seg mode-seg">${Object.entries(ENG_MODES).map(([k, X]) => `<button class="${k === ENG_MODE ? 'on' : ''}" onclick="setEngMode('${k}')" title="${esc(X.short || '')}">${X.name}</button>`).join('')}</span></div>
+    <div class="mode-short">${esc(M.short || '')}</div>
+    <details class="mode-more" ${MODE_MORE ? 'open' : ''} ontoggle="MODE_MORE=this.open"><summary>How This Mode Works</summary><p>${esc(M.note)}</p>${info.bt ? `<p>${esc(info.bt)}</p>` : ''}<p>Tap A Card Below To Switch Between Short, Intraday And Long Run.</p></details></div><div class="hz-row">${hzCard(a, 'short', 'Short', '1-minute', a.short, 'Next 5–15 min')}${hzCard(a, 'intra', 'Intraday', '5-minute', intra, 'Next 30–90 min')}${hzCard(a, 'long', 'Long run', 'daily', a.long, 'Next 3–10 sessions')}</div><div class="hz-v ${v[0]}">${esc(v[1])}</div>`;
 }
 function renderSigTab(a) {
   const lb = { 1: ['b', 'Bullish'], 0: ['n', 'Neutral'], '-1': ['s', 'Bearish'] };
@@ -197,7 +201,7 @@ function renderTab() {
     if (!ch.rows.length) { $('tabBody').innerHTML = '<div class="mut">No option chain data yet. It refreshes every 15–30 seconds.</div>' + futVolHTML(a); return; }
     const L = (v) => f1(v / 1e5), mxOI = Math.max(...ch.view.map((r) => Math.max(r.ce.oi, r.pe.oi))) || 1;
     const bar = (v, c) => `<span class="oibar" style="width:${Math.round((v / mxOI) * 46)}px;background:${c}"></span>`;
-    h = `<div class="tbl"><table><thead><tr><th>CE OI (L)</th><th>OI chg</th><th>IV</th><th>Delta</th><th>CE LTP</th><th class="k">Strike</th><th class="l">PE LTP</th><th class="l">Delta</th><th class="l">IV</th><th class="l">OI chg</th><th class="l">PE OI (L)</th></tr></thead><tbody>` +
+    h = `<div class="tbl"><table class="chain"><thead><tr><th>CE OI (L)</th><th>OI chg</th><th>IV</th><th>Delta</th><th>CE LTP</th><th class="k">Strike</th><th class="l">PE LTP</th><th class="l">Delta</th><th class="l">IV</th><th class="l">OI chg</th><th class="l">PE OI (L)</th></tr></thead><tbody>` +
       ch.view.map((r) => {
         const ci = r.K < a.price ? 'itm' : '', pi = r.K > a.price ? 'itm' : '', cc = r.ce.oi - (r.ce.poi || r.ce.oi), pc = r.pe.oi - (r.pe.poi || r.pe.oi);
         return `<tr class="${r.K === ch.atm ? 'atm' : ''}"><td class="${ci}">${bar(r.ce.oi, COL.put)}${L(r.ce.oi)}</td><td class="${ci} ${cc >= 0 ? 'up' : 'down'}">${sgn(cc)}${L(cc)}</td><td class="${ci}">${f1(r.ce.iv * 100)}</td><td class="${ci}">${f2(r.ce.de)}</td><td class="${ci}">${f2(r.ce.ltp)}</td>
@@ -729,4 +733,27 @@ function zoomBy(f) { const N = CI ? CI.k.length : 0, n0 = ZM.n || VIEW[tf]; ZM.n
   c.addEventListener('pointerup', up); c.addEventListener('pointercancel', up);
   c.addEventListener('pointerleave', () => { ZM.hover = null; if (!P.size) drawChart(); });
   c.addEventListener('dblclick', zoomReset);
+})();
+
+(function orbAutoHide() {
+  const sp = $('signalPanel'), orb = $('orb'); if (!sp || !orb || !('IntersectionObserver' in window)) return;
+  new IntersectionObserver((e) => orb.classList.toggle('away', e[0].isIntersecting), { threshold: 0.15 }).observe(sp);
+})();
+
+/* ---------- Phones: no sideways scrolling. Wide tables become cards (each cell labelled with its column name);
+   small tables and the option chain shrink to fit the screen. ---------- */
+(function responsiveTables() {
+  let q = false;
+  const run = () => {
+    q = false;
+    document.querySelectorAll('table').forEach((t) => {
+      const ths = t.classList.contains('chain') ? ['OI (L)', 'Chg', 'IV', 'Delta', 'Call', '', 'Put', 'Delta', 'IV', 'Chg', 'OI (L)'] : [...t.querySelectorAll('thead th')].map((th) => th.textContent.trim()), n = ths.length;
+      if (!n) return;
+      t.classList.toggle('rt-card', n >= 5 && !t.classList.contains('chain'));
+      t.classList.toggle('rt-fit', n < 5 || t.classList.contains('chain'));
+      t.querySelectorAll('tbody tr').forEach((tr) => [...tr.children].forEach((td, i) => { if (!td.hasAttribute('colspan') && ths[i] != null && td.dataset.label !== ths[i]) td.dataset.label = ths[i]; }));
+    });
+  };
+  new MutationObserver(() => { if (!q) { q = true; requestAnimationFrame(run); } }).observe(document.body, { childList: true, subtree: true });
+  run();
 })();

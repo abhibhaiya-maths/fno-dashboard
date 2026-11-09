@@ -1,6 +1,7 @@
 /* ===== Voice: ask by speaking or typing. Screen answers are English; spoken answers are Hindi. ===== */
 const Voice = (() => {
-  let recog = null, listening = false;
+  let recog = null, listening = false, useRecorder = false;
+  try { useRecorder = localStorage.getItem('fno_rec') === '1'; } catch (e) { /* private */ }
   const hint = (t) => ($('hint').textContent = t);
   const tell = (t) => { openAsk(); hint(t); toast(t); };
 
@@ -67,20 +68,63 @@ const Voice = (() => {
     'audio-capture': 'No microphone found. Check that the mic isn’t in use by another app.',
     'network': 'Voice recognition needs internet. Check your connection and try again.',
   };
+  /* Fallback when the browser has no speech recognition (iPhone with Dictation off, in-app browsers):
+     record the question (stops by itself after a pause or 10 seconds), the Worker turns it into text, then it is asked. */
+  let rec = null;
+  const canRecord = () => !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.MediaRecorder);
+  async function recordAsk() {
+    if (rec) { rec.stopNow(); return; }
+    if (Source.mode !== 'live') { tell('Voice by recording works on the live site (it needs the Worker). In demo, type your question.'); return; }
+    if (!canRecord()) { tell('This browser can’t use the microphone. Tap the question box and use your keyboard’s mic.'); $('q').focus(); return; }
+    openAsk();
+    let stream;
+    try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+    catch (e) { tell('Microphone is blocked for this site. Allow it: Settings → Safari → Microphone (iPhone), or the lock icon in the address bar → Microphone.'); return; }
+    const mime = ['audio/mp4', 'audio/webm;codecs=opus', 'audio/webm', 'audio/ogg'].find((m) => MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(m)) || '';
+    const mr = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined), chunks = [];
+    let ac = null, timer = null, done = false;
+    const finish = () => { if (done) return; done = true; clearInterval(timer); try { mr.state !== 'inactive' && mr.stop(); } catch (e) { /* stopped */ } };
+    rec = { stopNow: finish };
+    mr.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
+    mr.onstop = async () => {
+      stream.getTracks().forEach((t) => t.stop()); if (ac) ac.close().catch(() => {}); rec = null; listening = false; micState(false);
+      const blob = new Blob(chunks, { type: (mr.mimeType || mime || 'audio/mp4') });
+      if (blob.size < 2000) { hint('Didn’t hear anything. Tap the mic and speak.'); return; }
+      hint('Understanding your question…');
+      try {
+        const b64 = await new Promise((res, rej) => { const fr = new FileReader(); fr.onload = () => res(String(fr.result).split(',')[1]); fr.onerror = rej; fr.readAsDataURL(blob); });
+        const r = await Source.stt(b64, blob.type);
+        $('q').value = r.text; ask();
+      } catch (e) { tell('Couldn’t understand that: ' + String(e.message || e).slice(0, 140)); }
+    };
+    mr.start(250); listening = true; micState(true); hint('Listening… speak now, tap the mic again when you finish');
+    // stop on its own after ~1.5 s of silence once you have spoken, or after 10 s
+    try {
+      ac = new (window.AudioContext || window.webkitAudioContext)(); if (ac.resume) ac.resume().catch(() => {}); const src = ac.createMediaStreamSource(stream), an = ac.createAnalyser(); an.fftSize = 1024; src.connect(an);
+      const buf = new Uint8Array(an.fftSize), t0 = Date.now(); let spoke = false, quietSince = Date.now();
+      timer = setInterval(() => {
+        an.getByteTimeDomainData(buf); let sum = 0; for (const v of buf) sum += (v - 128) ** 2; const rms = Math.sqrt(sum / buf.length);
+        if (rms > 6) { spoke = true; quietSince = Date.now(); }
+        if ((spoke && Date.now() - quietSince > 1500) || Date.now() - t0 > 10000) finish();
+      }, 120);
+    } catch (e) { timer = setInterval(() => finish(), 8000); }
+  }
   function toggleMic() {
     stop(); // stop talking before listening, so the mic doesn't hear the speaker
+    if (rec) { rec.stopNow(); return; }
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SR) {
-      tell('Voice input isn’t available in this browser. Open the site in Chrome or Safari (not inside WhatsApp/Instagram), or tap the box and use your keyboard’s mic.');
-      $('q').focus(); return;
-    }
+    if (!SR || useRecorder) { recordAsk(); return; }
     if (listening) { try { recog.stop(); } catch { /* already stopped */ } return; }
     openAsk();
     recog = new SR(); recog.lang = 'hi-IN'; recog.interimResults = true; recog.maxAlternatives = 1; recog.continuous = false;
     let heard = false;
     recog.onstart = () => { listening = true; micState(true); hint('Listening… speak in Hindi or English'); };
     recog.onresult = (e) => { heard = true; let t = ''; for (const r of e.results) t += r[0].transcript; $('q').value = t; if (e.results[e.results.length - 1].isFinal) { try { recog.stop(); } catch { /* fine */ } ask(); } };
-    recog.onerror = (e) => { if (e.error !== 'aborted') tell(MIC_ERR[e.error] || 'Couldn’t catch that. Tap the mic and try again.'); };
+    recog.onerror = (e) => {
+      // iPhone with Dictation off (or an in-app browser): switch to recording and keep going, no settings needed
+      if ((e.error === 'service-not-allowed' || e.error === 'network' || e.error === 'language-not-supported') && canRecord() && Source.mode === 'live') { useRecorder = true; try { localStorage.setItem('fno_rec', '1'); } catch (x) { /* private */ } heard = true; setTimeout(recordAsk, 50); return; }
+      if (e.error !== 'aborted') tell(MIC_ERR[e.error] || 'Couldn’t catch that. Tap the mic and try again.');
+    };
     recog.onend = () => { listening = false; micState(false); if (!heard) hint('Tap the mic and speak, or type your question.'); };
     try { recog.start(); } catch { listening = false; micState(false); tell('Couldn’t start the mic. Tap it again.'); }
   }

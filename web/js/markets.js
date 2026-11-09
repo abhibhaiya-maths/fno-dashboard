@@ -128,7 +128,7 @@ const Markets = (() => {
     ['orders', 'Big Order Wins', 'Order-win headlines from the last 7 days (trusted business news).'],
     ['brokers', 'Broker Upgrades And Downgrades', 'Rating and target-price changes reported in the last 7 days.'],
     ['results', 'Results This Week', 'F&O companies with board meetings for results in the next 7 days (NSE calendar).'],
-    ['multi', 'Multibagger Watch', 'Needs sales, profit, ROCE and order-book data from company results. Planned as the next step; not available yet.'],
+    ['multi', 'Multibagger Watch', 'Early signs of a long run: a rising 200 DMA, price above the 50 and 200 DMA, beating Nifty over a year, buying volume heavier than selling, a tight base near the high, plus order wins and broker upgrades. Price, volume and news only: check sales, profit and debt in the results before investing.'],
   ];
   async function loadScr() {
     try {
@@ -170,9 +170,12 @@ const Markets = (() => {
     const vol20 = v.slice(-21, -1).reduce((a, b) => a + b, 0) / 20, volX = vol20 ? v[L] / vol20 : null;
     let g = 0, l = 0; for (let i = L - 13; i <= L; i++) { const ch = c[i] - c[i - 1]; if (ch > 0) g += ch; else l -= ch; } const rsi = l ? 100 - 100 / (1 + g / l) : 100;
     const above200recently = s200 && c.slice(-6, -1).some((x, i) => x > sma(200, L - 5 + i));
+    let uv = 0, dv = 0; for (let i = Math.max(1, L - 49); i <= L; i++) { if (c[i] > c[i - 1]) uv += v[i]; else if (c[i] < c[i - 1]) dv += v[i]; }
+    const z20 = d.slice(-20), tight = c[L] ? ((Math.max(...z20.map((r) => r[2])) - Math.min(...z20.map((r) => r[3]))) / c[L]) * 100 : null;
+    const nr250 = nifty && nifty.length > 240 ? ((nifty[nifty.length - 1][4] - nifty[Math.max(0, nifty.length - 251)][4]) / nifty[Math.max(0, nifty.length - 251)][4]) * 100 : null;
     const nr60 = nifty && nifty.length > 61 ? ((nifty[nifty.length - 1][4] - nifty[nifty.length - 61][4]) / nifty[nifty.length - 61][4]) * 100 : null;
     return { price: c[L], date: d[L][0], chg1: ret(1), r5: ret(5), r20: ret(20), r60: ret(60), r250: ret(250), s20, s50, s200, slope200: s200 && s200p ? ((s200 - s200p) / s200p) * 100 : null,
-      hi52, lo52, offHi: ((c[L] - hi52) / hi52) * 100, volX, rsi, rs60: ok(nr60) && ok(ret(60)) ? ret(60) - nr60 : null,
+      hi52, lo52, offHi: ((c[L] - hi52) / hi52) * 100, volX, rsi, udv: dv ? uv / dv : null, tight, rs250: ok(nr250) && ok(ret(250)) ? ret(250) - nr250 : null, rs60: ok(nr60) && ok(ret(60)) ? ret(60) - nr60 : null,
       brk200: !!(s200 && c[L] < s200 && above200recently), death: !!(s50 && s200 && s50p && s200p10 && s50 < s200 && s50p >= s200p10) };
   }
   // match news headlines to F&O stocks by symbol or a distinctive name
@@ -204,19 +207,35 @@ const Markets = (() => {
         const h = dn.filter((z) => z.sym === x.sym); if (h.length) why.push([`Broker downgrade / target cut (${h.length})`, 'r']);
         if (why.length) add(x, 40 + why.length * 15 + (x.volX >= 1.3 && x.brk200 ? 10 : 0), why); });
     }
+    if (scr === 'multi') {
+      const ord = headlinesFor(calls && calls.orders).filter((h) => h.sym), upg = headlinesFor(calls && calls.up).filter((h) => h.sym), soon = rescal ? soonResults() : [];
+      R.forEach((x) => {
+        if (!(x.s50 && x.s200 && x.price > x.s50 && x.s50 > x.s200 && x.slope200 > 0 && x.offHi >= -25 && x.lo52 && x.price >= x.lo52 * 1.3)) return;
+        if (ok(x.rs250) ? x.rs250 <= 0 : !(x.rs60 > 0)) return;
+        const o = ord.filter((h) => h.sym === x.sym), u = upg.filter((h) => h.sym === x.sym), rs = soon.find((r) => r.sym === x.sym);
+        const why = [[ok(x.rs250) ? `${f0(x.rs250)}% ahead of Nifty in a year` : `${f1(x.rs60)}% ahead of Nifty in 3 months`], ['Rising 200 DMA, above 50 and 200 DMA'], [x.offHi >= -5 ? 'Near its 52-week high' : `${f0(-x.offHi)}% below 52-week high`, x.offHi >= -5 ? '' : 'w']];
+        if (ok(x.udv)) why.push([`Buying volume ${f1(x.udv)}× selling (50 days)`, x.udv >= 1.2 ? '' : 'w']);
+        if (ok(x.tight) && x.tight < 12) why.push([`Tight base: ${f0(x.tight)}% range in 20 days`]);
+        if (o.length) why.push([`Order win${o.length > 1 ? 's' : ''} this week${o[0].cr ? ` (₹${o[0].cr.toLocaleString('en-IN')} cr)` : ''}`]);
+        if (u.length) why.push(['Broker upgrade / target raised']);
+        if (rs) why.push([`Results on ${rs.date}`, 'w']);
+        add(x, 40 + clamp((ok(x.rs250) ? x.rs250 : x.rs60 * 2) / 3, 0, 20) + (x.udv >= 1.2 ? 10 : 0) + (ok(x.tight) && x.tight < 12 ? 8 : 0) + (x.offHi >= -5 ? 8 : 0) + (o.length ? 10 : 0) + (u.length ? 8 : 0), why);
+      });
+      if (!R.some((x) => ok(x.udv))) out.length = 0;
+    }
     return out.sort((p, q) => q.score - p.score);
   }
   function renderScr() {
     const b = $m('mkBody'); if (!b) return;
     const S = SCREENS.find((s) => s[0] === scr);
-    const counts = {}; const keep = scr; SCREENS.forEach(([k]) => { if (['orders', 'brokers', 'results', 'multi'].includes(k)) return; scr = k; counts[k] = results().length; }); scr = keep;
+    const counts = {}; const keep = scr; SCREENS.forEach(([k]) => { if (['orders', 'brokers', 'results'].includes(k)) return; scr = k; counts[k] = results().length; }); scr = keep;
     if (calls) { counts.orders = (calls.orders || []).length; counts.brokers = (calls.up || []).length + (calls.down || []).length; }
     if (rescal) counts.results = soonResults().length;
-    let h = `<section class="mk-panel scr"><aside><div class="sec" style="margin-top:0">Ready-Made Screens</div><div class="presets">${SCREENS.map(([k, n, d]) => `<button class="preset ${k === scr ? 'on' : ''} ${k === 'red' ? 'red' : ''} ${k === 'multi' ? 'dis' : ''}" onclick="Markets.setScr('${k}')"><em>${counts[k] ?? ''}</em><b>${n}</b><small>${d}</small></button>`).join('')}</div></aside><div>`;
+    let h = `<section class="mk-panel scr"><aside><div class="sec" style="margin-top:0">Ready-Made Screens</div><div class="presets">${SCREENS.map(([k, n, d]) => `<button class="preset ${k === scr ? 'on' : ''} ${k === 'red' ? 'red' : ''}" onclick="Markets.setScr('${k}')"><em>${counts[k] ?? ''}</em><b>${n}</b><small>${d}</small></button>`).join('')}</div></aside><div>`;
     const sc = scan ? `Last scan ${scan.day} (${new Date(scan.ts).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' })}), ${scan.rows.length} F&O stocks${live() ? '' : ', sample data'}` : 'No scan yet';
     h += `<div class="scan-bar"><div><span id="scTxt">${scanning ? 'Scanning…' : sc}</span><div class="rp-pbar"><i id="scProg"></i></div></div><button class="btn" onclick="Markets.runScan()" ${scanning ? 'disabled' : ''}>${scan ? 'Rescan Now' : 'Run First Scan'} (about 1 minute)</button></div>`;
     h += `<div class="ph"><h2>${S[1]}</h2></div><p class="mut" style="font-size:13px;margin:-6px 0 10px">${S[2]}</p>`;
-    if (scr === 'multi') h += `<div class="alert i">Multibagger screening needs each company's sales, profit, ROCE, debt and order book. That data is not in any free API; it has to be built up from the quarterly results companies file with NSE/BSE. This is planned as the next step. The price-based screens and Big Order Wins already cover part of it.</div>`;
+    if (scr === 'multi' && scan && !scan.rows.some((x) => ok(x.udv))) h += `<div class="alert i">This screen needs a fresh scan (it reads buying versus selling volume). Tap Scan once; it takes about a minute.</div>`;
     else if (scr === 'orders' || scr === 'brokers') {
       const list = scr === 'orders' ? headlinesFor(calls && calls.orders) : [...headlinesFor(calls && calls.up).map((x) => ({ ...x, kind: 'up' })), ...headlinesFor(calls && calls.down).map((x) => ({ ...x, kind: 'down' }))].sort((p, q) => q.ts - p.ts);
       h += list.length ? `<div class="tblw"><table><thead><tr><th class="l">Headline</th><th class="l">Stock</th>${scr === 'orders' ? '<th>Order (₹ cr)</th>' : '<th class="l">Type</th>'}<th>Price</th><th>1D</th><th>1W</th><th></th></tr></thead><tbody>${list.map((x) => `<tr><td class="l"><a href="${esc(x.link)}" target="_blank" rel="noopener">${esc(x.t)}</a><br><small class="mut">${esc(x.src)} · ${new Date(x.ts).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}</small></td>
@@ -261,6 +280,7 @@ const Markets = (() => {
     let s = 7; const r = () => ((s = (s * 16807) % 2147483647) / 2147483647);
     const rows = syms.map((sym) => { const price = 200 + r() * 3000, r250 = (r() - 0.3) * 80, s200 = price / (1 + (r() - 0.35) * 0.3), s50 = s200 * (1 + (r() - 0.3) * 0.15);
       return { sym, name: sym, key: '', price, chg1: (r() - 0.5) * 6, r5: (r() - 0.6) * 20, r20: (r() - 0.5) * 25, r60: (r() - 0.4) * 40, r250, s20: price * (1 + (r() - 0.5) * 0.05), s50, s200, slope200: (r() - 0.4) * 5, hi52: price * (1 + r() * 0.3), lo52: price * 0.6, offHi: -r() * 25, volX: 0.5 + r() * 3.5, rsi: 20 + r() * 60, rs60: (r() - 0.5) * 30, brk200: r() > 0.85, death: r() > 0.9 }; });
+    rows.forEach((x) => { x.udv = 0.8 + r() * 0.9; x.tight = 5 + r() * 20; x.rs250 = x.r250 - 8; });
     rows[0].offHi = 0.2; rows[0].volX = 2.2; rows[0].s50 = rows[0].price * 0.95; rows[0].s200 = rows[0].price * 0.85; rows[0].rs60 = 6;
     return { ts: Date.now(), day: ymdIST(), rows, fails: 0 };
   }

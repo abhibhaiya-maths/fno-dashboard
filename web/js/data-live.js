@@ -331,10 +331,11 @@ const LiveSource = (() => {
     const stale = !Stream.connected && lastOk && Date.now() - lastOk > 30000 ? ', data paused' : '';
     return { min: m, date: istYmd(), label: (open ? `${SN.special ? SN.special + ', ' : ''}${Stream.connected ? 'Streaming' : 'Live'} ${t}` : mcx ? `NSE closed, MCX ${Stream.connected ? 'streaming' : 'live'} ${t}` : `Market closed, ${t}`) + stale };
   }
+  async function stt(audio, mime) { return api('/api/stt', { method: 'POST', body: JSON.stringify({ audio, mime }) }); }
   async function ask(question, context, history) { return api('/api/ask', { method: 'POST', body: JSON.stringify({ question, context, history: history || [] }) }); }
   function connectUrl(idToken) { return APP_CONFIG.WORKER_URL.replace(/\/$/, '') + '/auth/login?id_token=' + encodeURIComponent(idToken); }
   return { mode: 'live', raw: (p) => api(p), init, refreshSnapshot, refreshChains, refreshCandles, refreshFut, refreshDaily, refreshNews, refreshResults, refreshGlobal, refreshCalendar, refreshFII, refreshOfficial,
-    search, instInfo, get, clock, rateLimited, rateWait: () => Math.max(0, Math.ceil((rateUntil - Date.now()) / 1000)), ask, connectUrl, results: () => resultsData, stream: Stream, drop: (k) => { delete raw[k]; },
+    search, instInfo, get, clock, rateLimited, stt, rateWait: () => Math.max(0, Math.ceil((rateUntil - Date.now()) / 1000)), ask, connectUrl, results: () => resultsData, stream: Stream, drop: (k) => { delete raw[k]; },
     global: () => glob, calendar: () => cal, official: () => off, fiiAuto: () => fii, geo: () => geo, refreshGeo, world: () => world, maps: () => maps, hvNews: () => hvNews, refreshMaps, refreshHvNews, participant: () => part, refreshWorld, refreshParticipant,
     get status() { return status; }, get error() { return lastErr; }, newsAI: (k) => R(k).newsAI, newsSources: (k) => R(k).sources };
 })();

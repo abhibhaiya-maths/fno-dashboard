@@ -5,13 +5,13 @@ const SESS = { NSE: { o: 0, c: 375 }, MCX: { o: -15, c: 870 } };
 const ENG = { mode: 'v1', enterUp: 58, enterDn: 42, coreNeed: 3, rangeADX: 18, chase: [3, 2, 4], pbBlock: true, v2need: 3.5, v2flip: true, dailyFilter: 'soft', confirm1m: true, failATR: 1.5, coolMin: 30, lastEntryMin: 0, t1R: 1.5, t2R: 2.5, trailR: 1, cprMax: 0.15, tdMax: 3, itm: 0, exitTwap: false, tstop: 0, oppExit: true };
 // Two trading modes, both backtested on 54 days of Nifty / Bank Nifty / Sensex 1-minute data (costs included)
 const ENG_MODES = {
-  graded: { name: 'Graded', set: { itm: 0, mode: 'v1', confirm1m: true, dailyFilter: 'soft', t1R: 1.5, t2R: 2.5, trailR: 1, exitTwap: false, tstop: 0, oppExit: true, lastEntryMin: 0 },
+  graded: { short: '★ Full Size · A Small · B Minimum · S Paper Or 1 Lot. Nothing Is Blocked By The Clock.', name: 'Graded', set: { itm: 0, mode: 'v1', confirm1m: true, dailyFilter: 'soft', t1R: 1.5, t2R: 2.5, trailR: 1, exitTwap: false, tstop: 0, oppExit: true, lastEntryMin: 0 },
     note: 'Recommended. Every setup runs side by side from 9:15 to 3:30 and the best one is shown with a grade that sets the size: ★ Prime (trend-day pullback, profitable over a full year: full size), A (intraday signal with the market context behind it: small size), B (context, daily trend or time of day against it: minimum size), S (1-minute scalp with the 5-minute trend: paper or 1 lot). Nothing is blocked by the clock.' },
-  trend: { name: 'Trend-Day', set: { itm: 2, mode: 'trend', confirm1m: false, dailyFilter: false, t1R: 2, t2R: 99, trailR: 1, exitTwap: true, tstop: 20, oppExit: false, lastEntryMin: 30 },
+  trend: { short: 'Only ★ Trend-Day Pullbacks On Nifty And Sensex. About 1 Trade A Day On Trend Days.', name: 'Trend-Day', set: { itm: 2, mode: 'trend', confirm1m: false, dailyFilter: false, t1R: 2, t2R: 99, trailR: 1, exitTwap: true, tstop: 20, oppExit: false, lastEntryMin: 30 },
     note: 'Only the ★ Prime setup, nothing else. Trades only on narrow-CPR (trend) days: pullback entries, exit on a TWAP break, a 20-minute time stop, the stop or the trail. 1-year backtest after costs: profitable in both half-years on Nifty and Sensex with futures (profit factor ~1.25) and slightly with 2-strike in-the-money options (~1.1); ATM options lose. About 1 trade a day per index. Bank Nifty is off (it lost money).' },
-  active: { name: 'Active', set: { itm: 0, mode: 'v1', confirm1m: true, dailyFilter: 'soft', t1R: 1.5, t2R: 2.5, trailR: 1, exitTwap: false, tstop: 0, oppExit: true, lastEntryMin: 0 },
+  active: { short: 'Every Intraday Signal, No Grades. For Practice.', name: 'Active', set: { itm: 0, mode: 'v1', confirm1m: true, dailyFilter: 'soft', t1R: 1.5, t2R: 2.5, trailR: 1, exitTwap: false, tstop: 0, oppExit: true, lastEntryMin: 0 },
     note: 'For practice and reading the market only. Many signals (4–5 a day), but over 1 year it was break-even before option costs (profit factor 0.95–1.05) and loses money after them.' },
-  safe: { name: 'Safe', set: { itm: 0, mode: 'v1', confirm1m: true, dailyFilter: true, t1R: 2, t2R: 4, trailR: 1.5, exitTwap: false, tstop: 0, oppExit: true, lastEntryMin: 0 },
+  safe: { short: 'Only With The Daily Trend, Bigger Targets. For Practice.', name: 'Safe', set: { itm: 0, mode: 'v1', confirm1m: true, dailyFilter: true, t1R: 2, t2R: 4, trailR: 1.5, exitTwap: false, tstop: 0, oppExit: true, lastEntryMin: 0 },
     note: 'Only with the daily trend, bigger targets. Good on the 54-day test, but not proven over a full year. Use for practice.' },
 };
 let ENG_MODE = 'graded';

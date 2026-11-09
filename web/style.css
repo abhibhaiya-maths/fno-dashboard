@@ -506,7 +506,7 @@ main{align-items:stretch;padding-bottom:14px}
 .below .gl-grid{grid-template-columns:repeat(4,minmax(0,1fr))}
 .below .g-c>.sec:first-child{margin-top:0}
 @media (max-width:1100px){.below #globalBody{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}.below .g-c{grid-column:1/-1}}
-@media (max-width:860px){.below{padding:0 16px 16px}.below #globalBody{grid-template-columns:1fr}.below .gl-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.nw-grid{grid-template-columns:1fr}}
+@media (max-width:860px){.below{padding:0 16px 16px}.below #globalBody{grid-template-columns:minmax(0,1fr)}.below .gl-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.nw-grid{grid-template-columns:1fr}}
 @media (prefers-reduced-motion:reduce){.nw-filt button{transition:none}}
 @media (max-width:860px){.nt{min-height:0}.nw-head h2{flex-wrap:wrap}.nw-head .ph-note{flex-basis:100%;margin-top:2px}}
 .nt-rx{font-size:11.5px;color:var(--muted);border-top:1px dashed var(--line);padding-top:6px;margin-top:auto}
@@ -673,7 +673,7 @@ h1,h2,h3,.ph h2,.sec,.sigt,.sig-k,.dirbox,.btn,.btn-solid,.big,.rpbtn,.lnk,.seg 
 .score i u{display:block;height:100%}.score b{font-family:var(--disp);font-size:16px;width:24px}
 .why{display:flex;flex-wrap:wrap;gap:4px;max-width:380px}.why span{font-size:11.5px;border-radius:4px;padding:1px 6px;background:var(--call-soft);color:var(--call)}
 .why span.r{background:var(--put-soft);color:var(--put)}.why span.w{background:var(--warn-soft);color:var(--warn)}
-@media (max-width:1100px){.mk-grid,.scr{grid-template-columns:1fr}}
+@media (max-width:1100px){.mk-grid,.scr{grid-template-columns:minmax(0,1fr)}}
 @media (max-width:640px){.mk-sum{grid-template-columns:repeat(2,1fr)}.mk-tm{height:480px}.presets{display:flex;gap:8px;overflow-x:auto}.preset{flex:0 0 220px}.mk-tabs button{font-size:19px}.mk-scale .mut{margin-left:0}}
 .mk-pick{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.mk-seg{flex-wrap:wrap}
 .mk-sel{background:var(--inset);color:var(--muted);border:1px solid var(--line2);border-radius:var(--r-sm);padding:5px 8px;font:500 12.5px var(--sans)}.mk-sel.on{color:var(--cyan);border-color:var(--cyan)}
@@ -726,3 +726,106 @@ h1,h2,h3,.ph h2,.sec,.sigt,.sig-k,.dirbox,.btn,.btn-solid,.big,.rpbtn,.lnk,.seg 
   .brain{margin:8px 12px 0}.eng5{grid-template-columns:repeat(2,minmax(0,1fr))}.bp-grid{grid-template-columns:1fr}.brow{grid-template-columns:120px 1fr 90px}
   .chart-hint{text-align:left}
 }
+
+/* ===== Reading comfort: Title Case everywhere (as requested), justified paragraphs, less clutter ===== */
+body{text-transform:capitalize}
+button{text-transform:capitalize}
+input,textarea,.srch-head input,#q,code,.link-raw{text-transform:none}
+select,option{text-transform:capitalize}
+p,.alert,.sigs,.pj-note,.legend,.btxt,.fund-sum,.srch-foot,.hz-v,.stx-d,.mi small,.gline .mut,.mode-more p,.mode-short,.note,.chart-hint,.geo-i,.nt-tile p,.ai-ans,.answer .alert,footer,.score-sub,.adv div{text-align:justify;text-align-last:left;hyphens:auto;-webkit-hyphens:auto}
+.mode-short{font-size:12.5px;color:var(--muted);margin-top:6px}
+.mode-more{margin-top:4px;font-size:12.5px;color:var(--muted)}
+.mode-more summary{cursor:pointer;color:var(--cyan);font-size:12px;list-style:none}
+.mode-more summary::before{content:'▸ '}.mode-more[open] summary::before{content:'▾ '}
+.mode-more p{margin:6px 0 0;line-height:1.5}
+.hz-basis{line-height:1.5}
+.orb{transition:opacity .25s,transform .25s}
+.orb.away{opacity:0;transform:scale(.85);pointer-events:none}
+@media (prefers-reduced-motion:reduce){.orb{transition:none}}
+/* phones: wide tables scroll inside their box instead of widening the whole page */
+.below #globalBody>*{min-width:0}
+.below .wtbl,.below table{display:block;max-width:100%;overflow-x:auto}
+/* phones: the top bar is tall there, so it scrolls away instead of covering a third of the screen */
+@media (max-width:860px){.topbar{position:relative}}
+#hz{padding:14px 16px 4px}
+/* header: one tidy row on desktop (brand, clock, ask box, tools, status), two rows on phones */
+.topbar{grid-template-columns:auto auto minmax(0,1fr) auto auto}
+.navbtns{display:flex;align-items:center;gap:8px}
+.navbtns .snd{width:36px;height:36px;font-size:16px}
+@media (max-width:1100px){.topbar{grid-template-columns:auto minmax(0,1fr) auto}.topbar .status{grid-column:1/-1;justify-content:flex-start}}
+@media (max-width:860px){
+  .topbar{grid-template-columns:1fr}
+  .brand{grid-row:1}.cmd{grid-row:2}.navbtns{grid-row:3;justify-content:space-between}.navbtns .rpbtn{flex:1}
+  .topbar .status{grid-row:4}
+}
+
+/* ===== Phones: vertical scrolling only. Strips become grids, wide tables become labelled cards, nothing is hidden ===== */
+@media (max-width:640px){
+  html,body{overflow-x:hidden;max-width:100%}
+  .tickers{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));overflow:visible;scroll-snap-type:none;gap:8px}
+  .tk-wrap{flex:none;min-width:0}.tk-add{flex:none;min-height:64px}
+  .cues{flex-direction:column}.cu-lead{flex:none}
+  .cu-row{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));overflow:visible}
+  .cu{min-width:0;padding:6px 8px}.cu small,.cu i{white-space:normal}
+  .brain{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));overflow:visible}
+  .brain>div{min-width:0}.brain .bs{grid-column:1/-1}.brain .bi b,.brain .bi small{white-space:normal}
+  .tbl,.tblw,.below .wtbl,.below table{overflow:visible;max-width:100%}
+  .below table:not(.rt-card){display:table}
+  table.rt-fit{table-layout:fixed;width:100%;font-size:12px}
+  table.rt-fit th,table.rt-fit td{white-space:normal;word-break:break-word;padding:5px 3px}
+  table.chain{font-size:10.5px}table.chain th,table.chain td{padding:4px 1px}
+  table.rt-card,table.rt-card tbody,table.rt-card tr,table.rt-card td{display:block;width:100%}
+  table.rt-card thead{display:none}
+  table.rt-card tr{border:1px solid var(--line);border-radius:var(--r-sm);padding:6px 10px;margin-bottom:8px;background:var(--inset)}
+  table.rt-card td{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;text-align:right!important;padding:3px 0;border:0;white-space:normal}
+  table.rt-card td[data-label]::before{content:attr(data-label);color:var(--muted);font-size:11.5px;text-align:left;flex:0 0 38%}
+  table.rt-card td[colspan]{display:block;text-align:left!important;font-weight:600}
+  table.rt-card td:empty{display:none}
+  .presets{display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr));overflow:visible!important}
+  .preset{flex:none!important;min-width:0}
+  .eng5{grid-template-columns:minmax(0,1fr)}
+  .seg{flex-wrap:wrap}
+  .mode-seg{display:grid;grid-template-columns:repeat(4,minmax(0,1fr))}
+}
+@media (max-width:640px){
+  .ofrm{grid-template-columns:repeat(2,minmax(0,1fr))}.ofrm>*{min-width:0}.ofrm input,.ofrm select{width:100%;min-width:0}
+}
+/* phones: the mic and the live-signal globe sit in a slim bottom dock instead of floating over the cards */
+@media (max-width:640px){
+  body{padding-bottom:76px}
+  body::after{content:"";position:fixed;left:0;right:0;bottom:0;height:64px;z-index:44;background:rgba(4,7,13,.92);backdrop-filter:blur(12px);border-top:1px solid var(--line);pointer-events:none}
+  .micfab{width:48px;height:48px;left:16px;bottom:8px}
+  .micfab svg{width:22px;height:22px}
+  .orb{width:auto;height:46px;right:16px;bottom:9px;border-radius:999px;padding:0 16px;background:var(--panel-solid);border:1.5px solid var(--c);box-shadow:0 0 16px var(--cs)}
+  .orb .orb-ring,.orb .orb-globe{display:none}
+  .orb-txt{flex-direction:row;gap:8px;align-items:baseline;text-shadow:none}
+  .orb-txt b,.orb.wait .orb-txt b{font-size:18px;color:var(--c)}
+  .orb-txt small{font-size:12px;color:var(--muted);margin:0}
+  .orb.away{opacity:1;transform:none;pointer-events:auto}
+  .speakbar{bottom:72px}
+}
+/* phones: option chain as two lines per strike (premiums on top, OI / change / IV / delta below), world cues as compact rows */
+@media (max-width:640px){
+  table.chain,table.chain tbody{display:block;width:100%}
+  table.chain thead{display:none}
+  table.chain tr{display:grid;grid-template-columns:repeat(4,minmax(0,1fr)) 64px repeat(4,minmax(0,1fr));column-gap:3px;row-gap:2px;padding:6px 2px;border-bottom:1px solid var(--line)}
+  table.chain td{display:flex;flex-direction:column;padding:0!important;border:0!important;font-size:11px;text-align:center!important;min-width:0}
+  table.chain td::before{content:attr(data-label);font-size:9px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  table.chain td:nth-child(1),table.chain td:nth-child(2),table.chain td:nth-child(3),table.chain td:nth-child(4){grid-row:2}
+  table.chain td:nth-child(8),table.chain td:nth-child(9),table.chain td:nth-child(10),table.chain td:nth-child(11){grid-row:2}
+  table.chain td:nth-child(1){grid-column:1}table.chain td:nth-child(2){grid-column:2}table.chain td:nth-child(3){grid-column:3}table.chain td:nth-child(4){grid-column:4}
+  table.chain td:nth-child(8){grid-column:6}table.chain td:nth-child(9){grid-column:7}table.chain td:nth-child(10){grid-column:8}table.chain td:nth-child(11){grid-column:9}
+  table.chain td:nth-child(5){grid-row:1;grid-column:1/5;font-size:14px;font-weight:600;text-align:left!important;flex-direction:row;gap:6px;align-items:baseline}
+  table.chain td:nth-child(7){grid-row:1;grid-column:6/10;font-size:14px;font-weight:600;text-align:right!important;flex-direction:row-reverse;gap:6px;align-items:baseline}
+  table.chain td:nth-child(6){grid-row:1/3;grid-column:5;justify-content:center;font-size:13.5px;font-weight:700}
+  table.chain td:nth-child(6)::before{content:none}
+  .wtbl table.rt-card tr{display:grid;grid-template-columns:minmax(0,1fr) auto auto;column-gap:10px;padding:8px 10px}
+  .wtbl table.rt-card td{display:block;padding:1px 0}
+  .wtbl table.rt-card td::before{content:none}
+  .wtbl table.rt-card td:nth-child(1){text-align:left!important;font-weight:600}
+  .wtbl table.rt-card td:nth-child(4){grid-column:1/-1;text-align:left!important;font-size:12px}
+  .wtbl table.rt-card td:nth-child(5){grid-column:1/-1;text-align:left!important;font-size:11.5px;color:var(--muted)}
+  .wtbl table.rt-card td[colspan]{grid-column:1/-1}
+  .preset b{font-size:15px}.preset small{font-size:11.5px;line-height:1.35}
+}
+@media (max-width:640px){table.chain td{font-size:10.5px;white-space:nowrap}table.chain td:nth-child(5),table.chain td:nth-child(7){font-size:14px}}
