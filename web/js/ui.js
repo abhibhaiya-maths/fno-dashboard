@@ -701,6 +701,8 @@ function renderBest() {
 /* ---------- Chart zoom and pan (like trading apps): wheel or pinch zooms the candles, drag scrolls back in time, double-tap returns to live ---------- */
 const ZM = { n: null, off: 0 };
 function zoomReset() { ZM.n = null; ZM.off = 0; drawChart(); }
+// + / − buttons: zoom on the latest candles (or on what you scrolled back to), keeping the right edge in place
+function zoomBy(f) { const N = CI ? CI.k.length : 0, n0 = ZM.n || VIEW[tf]; ZM.n = clamp(Math.round(n0 * f), 12, Math.max(12, N)); ZM.off = clamp(ZM.off, 0, Math.max(0, N - ZM.n)); drawChart(); }
 (function chartGestures() {
   const c = $('chart'); if (!c) return;
   const bars = () => (CI ? CI.k.length : 0), view = () => ZM.n || VIEW[tf];

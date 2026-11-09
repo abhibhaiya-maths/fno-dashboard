@@ -718,7 +718,9 @@ h1,h2,h3,.ph h2,.sec,.sigt,.sig-k,.dirbox,.btn,.btn-solid,.big,.rpbtn,.lnk,.seg 
 .bq small{display:block;font-size:11.5px;color:var(--muted)}.bq-go{padding:4px 10px;font-size:12px}
 .chartwrap{position:relative}
 #chart{touch-action:pan-y;cursor:crosshair}
-.zoom-live{position:absolute;right:70px;top:8px;background:var(--panel-solid);color:var(--cyan);border:1px solid var(--line2);border-radius:var(--r-sm);padding:3px 10px;font-size:12px;cursor:pointer}
+.zoom-btns{position:absolute;right:70px;top:8px;display:flex;gap:6px}
+.zoom-btns button{background:var(--panel-solid);color:var(--cyan);border:1px solid var(--line2);border-radius:var(--r-sm);min-width:32px;height:28px;font-size:15px;cursor:pointer}
+.zoom-live{padding:0 10px;font-size:12px!important}
 .chart-hint{font-size:11px;color:var(--dim);text-align:right;margin-top:2px}
 @media (max-width:860px){
   .brain{margin:8px 12px 0}.eng5{grid-template-columns:repeat(2,minmax(0,1fr))}.bp-grid{grid-template-columns:1fr}.brow{grid-template-columns:120px 1fr 90px}

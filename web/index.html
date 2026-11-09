@@ -11,7 +11,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css?v=20261110h">
+<link rel="stylesheet" href="style.css?v=20261110i">
 </head>
 <body>
 
@@ -62,8 +62,8 @@
         <div class="seg" id="tfBtns"></div>
       </div>
       <div class="chips" id="ovChips"></div>
-      <div class="chartwrap"><canvas id="chart" aria-label="Price chart: scroll or pinch to zoom, drag to move back in time, double-tap to return to live"></canvas><button class="zoom-live" id="zoomLive" onclick="zoomReset()" style="display:none">⟲ Live</button></div>
-      <div class="chart-hint">Scroll or pinch to zoom · drag to go back · double-tap for live</div>
+      <div class="chartwrap"><canvas id="chart" aria-label="Price chart: scroll or pinch to zoom, drag to move back in time, double-tap to return to live"></canvas><div class="zoom-btns"><button onclick="zoomBy(1/1.4)" aria-label="Zoom in">＋</button><button onclick="zoomBy(1.4)" aria-label="Zoom out">−</button><button class="zoom-live" id="zoomLive" onclick="zoomReset()" style="display:none">⟲ Live</button></div></div>
+      <div class="chart-hint">＋ / − or scroll / pinch to zoom · drag to go back · ⟲ Live or double-tap to return</div>
       <div class="subbar"><div class="seg" id="subBtns"></div><span class="subval" id="subVal"></span></div>
       <canvas id="sub"></canvas>
     </section>
@@ -196,22 +196,22 @@ For analysis and practice only, not investment advice. No signal is a guarantee.
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
-<script src="js/config.js?v=20261110h"></script>
-<script src="js/indicators.js?v=20261110h"></script>
-<script src="js/analysis.js?v=20261110h"></script>
-<script src="js/structure.js?v=20261110h"></script>
-<script src="js/brain.js?v=20261110h"></script>
-<script src="js/backtest.js?v=20261110h"></script>
-<script src="js/replay.js?v=20261110h"></script>
-<script src="js/markets.js?v=20261110h"></script>
-<script src="js/store.js?v=20261110h"></script>
-<script src="js/data-demo.js?v=20261110h"></script>
-<script src="js/data-live.js?v=20261110h"></script>
-<script src="js/paper.js?v=20261110h"></script>
-<script src="js/voice.js?v=20261110h"></script>
-<script src="js/ui.js?v=20261110h"></script>
-<script src="js/engine.js?v=20261110h"></script>
-<script src="js/main.js?v=20261110h"></script>
+<script src="js/config.js?v=20261110i"></script>
+<script src="js/indicators.js?v=20261110i"></script>
+<script src="js/analysis.js?v=20261110i"></script>
+<script src="js/structure.js?v=20261110i"></script>
+<script src="js/brain.js?v=20261110i"></script>
+<script src="js/backtest.js?v=20261110i"></script>
+<script src="js/replay.js?v=20261110i"></script>
+<script src="js/markets.js?v=20261110i"></script>
+<script src="js/store.js?v=20261110i"></script>
+<script src="js/data-demo.js?v=20261110i"></script>
+<script src="js/data-live.js?v=20261110i"></script>
+<script src="js/paper.js?v=20261110i"></script>
+<script src="js/voice.js?v=20261110i"></script>
+<script src="js/ui.js?v=20261110i"></script>
+<script src="js/engine.js?v=20261110i"></script>
+<script src="js/main.js?v=20261110i"></script>
 <script>$('pLots').value = Paper.opts().lots;</script>
 </body>
 </html>
