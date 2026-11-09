@@ -373,9 +373,9 @@ function renderGlobal() {
   if (C.sources) h += `<div class="srcline">Calendar: ${Object.entries(C.sources).map(([n, c]) => `${esc(n)} ${c}`).join(', ')}</div>`;
   const Gx = Source.geo ? Source.geo() : null;
   if (Gx) {
-    const lc = { High: 'down', Elevated: 'warn', Normal: '', Low: 'up', Unknown: 'mut' }[Gx.level] || '';
-    h += `</div><div class="g-d"><div class="geo-h"><span class="sec" style="margin:0">Geopolitical risk (GDELT, world news)</span><span class="geo-lv ${lc}">${esc(Gx.level || '–')}${ok(Gx.ratio) ? ` · ${f1(Gx.ratio)}× 3-day avg` : ''}</span></div>
-      <div class="geo-list">${(Gx.items || []).slice(0, 4).map((n) => `<div class="geo-i"><span class="mut">${esc(String(n.src || '').replace(/^www\./, ''))} · ${esc(n.ago || '')}</span>${n.link ? `<a href="${esc(n.link)}" target="_blank" rel="noopener">${esc(n.t)}</a>` : esc(n.t)}</div>`).join('') || '<span class="mut">No major headlines from trusted outlets in the last 12 hours.</span>'}</div>`;
+    const lc = { High: 'down', Elevated: 'warn', Normal: '', Low: 'up', Easing: 'up', Unknown: 'mut' }[Gx.level] || '';
+    h += `</div><div class="g-d"><div class="geo-h"><span class="sec" style="margin:0">Geopolitical risk (${esc(Gx.via || 'GDELT')})</span><span class="geo-lv ${lc}">${esc(Gx.level || '–')}${ok(Gx.ratio) ? ` · ${f1(Gx.ratio)}× 3-day avg` : ''}</span></div>
+      <div class="geo-list">${(Gx.items || []).slice(0, 6).map((n) => `<div class="geo-i ${n.tone || ''}"><span class="mut">${esc(String(n.src || '').replace(/^www\./, ''))}${n.ts ? ' · ' + esc(new Date(n.ts).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' })) : ''}${n.tone === 'risk' ? ' · <span class="down">risk</span>' : n.tone === 'calm' ? ' · <span class="up">easing</span>' : ''}</span>${n.link ? `<a href="${esc(n.link)}" target="_blank" rel="noopener">${esc(n.t)}</a>` : esc(n.t)}</div>`).join('') || '<span class="mut">No major headlines from trusted outlets in the last 12 hours.</span>'}</div>${ok(Gx.esc) ? `<div class="srcline">${Gx.esc} risk headlines, ${Gx.calm} easing headlines</div>` : ''}`;
   }
   $('globalBody').innerHTML = h + '</div>';
 }

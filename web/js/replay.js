@@ -49,7 +49,7 @@ const Replay = (() => {
         d1 = BT.parseDaily(j && j.data && j.data.candles); done++; await sleep(400);
         out.inst[it.k] = { key: it.key, m1, d1 };
       }
-      data = out; await save(out); prog(''); info(); toast('History downloaded. Pick a day to replay, or run the backtest.');
+      data = out; await save(out); prog(''); info(); start(true); toast('History downloaded. Pick a day to replay, or run the backtest.');
     } catch (e) { $r('rpDataTxt').textContent = 'Download stopped: ' + e.message + (e.code === 'UPSTOX_RATE' ? ' (try again in a few minutes)' : /hist|404|Not found/i.test(e.message) ? ' (deploy the new Worker code first)' : ''); }
     btn.disabled = false;
   }
@@ -88,11 +88,11 @@ const Replay = (() => {
       <button class="btn ghost" onclick="Replay.saveFile()">Save as file</button>
       <label class="btn ghost">Load file<input type="file" accept=".json,application/json" hidden onchange="Replay.loadFile(this.files[0])"></label></div>
     <div class="rp-bar">
-      <label>Instrument <select id="rpInst" onchange="Replay.fillDays()"><option>NIFTY</option><option>BANKNIFTY</option><option>SENSEX</option></select></label>
-      <label>Day <select id="rpDay"></select></label>
-      <label>Engine <select id="rpHz"><option value="intra">Intraday (5-min)</option><option value="short">Short (1-min)</option><option value="long">Long run (daily)</option></select></label>
+      <label>Instrument <select id="rpInst" onchange="Replay.fillDays();Replay.start(true)"><option>NIFTY</option><option>BANKNIFTY</option><option>SENSEX</option></select></label>
+      <label>Day <select id="rpDay" onchange="Replay.start(true)"></select></label>
+      <label>Engine <select id="rpHz" onchange="Replay.start(true)"><option value="intra">Intraday (5-min)</option><option value="short">Short (1-min)</option><option value="long">Long run (daily)</option></select></label>
       <label class="chk"><input type="checkbox" id="rpHide"> Training mode: hide engine signals till the day ends</label>
-      <button class="btn" onclick="Replay.start()">Start replay</button>
+      <button class="btn" onclick="Replay.start()">Start Replay From 09:30</button>
       <button class="btn ghost" onclick="Replay.backtest()">Backtest all days</button>
     </div>
     <div class="rp-main">
@@ -127,6 +127,7 @@ const Replay = (() => {
     build(); $r('rp').classList.add('on'); document.body.style.overflow = 'hidden';
     if (!data) data = await load();
     info();
+    if (data && !R) start(true);
   }
   function close() { pause(); const el = $r('rp'); if (el) el.classList.remove('on'); document.body.style.overflow = ''; }
   function fillDays() {
@@ -137,7 +138,10 @@ const Replay = (() => {
   }
 
   /* ---------- replay ---------- */
-  function start() {
+  function start(paused) {
+    try { start0(paused); } catch (e) { pause(); const b = $r('rpEng'); if (b) b.innerHTML = `<div class="alert">Replay could not run this day: ${esc(e.message)}. Please send a screenshot of this message.</div>`; console.error(e); }
+  }
+  function start0(paused) {
     if (!data) return toast('Download the history first.');
     pause();
     const k = $r('rpInst').value, date = $r('rpDay').value; if (!date) return toast('Pick a day.');
@@ -148,7 +152,7 @@ const Replay = (() => {
     R.sim = engineTrader();
     // skip the first 15 minutes quickly (engine is locked then anyway)
     while (R.i < bars.length && bars[R.i][0] < 15) stepOne(true);
-    draw(); side(); play();
+    draw(); side(); if (!paused) play();
   }
   function engineTrader() {
     // same rules as the backtest: shows where the engine itself would have entered and exited
@@ -188,7 +192,7 @@ const Replay = (() => {
   function play() {
     if (!R || R.ended) return; pause();
     const sp = curSpd, per = sp > 10 ? Math.round(sp / 10) : 1, iv = sp > 10 ? 100 : 1000 / sp;
-    timer = setInterval(() => { for (let j = 0; j < per; j++) stepOne(j < per - 1); if (!R || R.ended) pause(); }, iv);
+    timer = setInterval(() => { try { for (let j = 0; j < per; j++) stepOne(j < per - 1); } catch (e) { pause(); $r('rpEng').innerHTML = `<div class=\"alert\">Replay stopped: ${esc(e.message)}</div>`; console.error(e); } if (!R || R.ended) pause(); }, iv);
     $r('rpPlay').textContent = '⏸ Pause';
   }
   function pause() { if (timer) clearInterval(timer); timer = null; const b = $r('rpPlay'); if (b) b.textContent = '▶ Play'; }

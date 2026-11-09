@@ -675,3 +675,5 @@ h1,h2,h3,.ph h2,.sec,.sigt,.sig-k,.dirbox,.btn,.btn-solid,.big,.rpbtn,.lnk,.seg 
 .why span.r{background:var(--put-soft);color:var(--put)}.why span.w{background:var(--warn-soft);color:var(--warn)}
 @media (max-width:1100px){.mk-grid,.scr{grid-template-columns:1fr}}
 @media (max-width:640px){.mk-sum{grid-template-columns:repeat(2,1fr)}.mk-tm{height:480px}.presets{display:flex;gap:8px;overflow-x:auto}.preset{flex:0 0 220px}.mk-tabs button{font-size:19px}.mk-scale .mut{margin-left:0}}
+.mk-pick{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.mk-seg{flex-wrap:wrap}
+.mk-sel{background:var(--inset);color:var(--muted);border:1px solid var(--line2);border-radius:var(--r-sm);padding:5px 8px;font:500 12.5px var(--sans)}.mk-sel.on{color:var(--cyan);border-color:var(--cyan)}

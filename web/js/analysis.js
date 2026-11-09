@@ -395,7 +395,7 @@ function signalFor(a) {
   if (a.open && (a.open.type === 'OD' || a.open.type === 'OTD') && a.open.dir === -d && a.curMin < a.SS.o + 90 && (!ok(a.vw) || (a.price - a.vw) * a.open.dir > 0)) { strength = 'mild'; caveats.push(`Against today's ${a.open.name}`); }
   if (a.vol && a.vol.ivp >= 80) caveats.push(`IV percentile ${a.vol.ivp}: rich premiums`);
   if (a.events && a.events.length) { strength = 'mild'; caveats.push('Event risk: ' + a.events[0].t); }
-  if (a.D.geo && /High|Elevated/.test(a.D.geo.level || '')) { strength = 'mild'; caveats.push(`Geopolitical news ${a.D.geo.level.toLowerCase()} (${f1(a.D.geo.ratio)}× normal)`); }
+  if (a.D.geo && /High|Elevated/.test(a.D.geo.level || '')) { strength = 'mild'; caveats.push(`Geopolitical news ${a.D.geo.level.toLowerCase()} (${ok(a.D.geo.ratio) ? f1(a.D.geo.ratio) + '× normal' : 'many risk headlines'})`); }
   // costs: wide spreads and targets too small to beat charges
   if (a.cf.opt && a.ch.rows.length) {
     const st0 = setupFor(a, state), q = optQuote(a, st0.K, state), lot = a.lot || 1;

@@ -18,7 +18,9 @@ const Markets = (() => {
     document.body.appendChild(el);
     addEventListener('resize', () => { if (tab === 'map' && $m('mk').classList.contains('on')) drawTM(); });
   }
-  function open(t) { build(); $m('mk').classList.add('on'); document.body.style.overflow = 'hidden'; show(t || tab); }
+  const FROM_CUR = { NIFTY: 'NIFTY50', SENSEX: 'SENSEX', BANKNIFTY: 'BANKNIFTY' };
+  let opened = false;
+  function open(t) { if (!opened && typeof cur !== 'undefined' && FROM_CUR[cur]) idx = FROM_CUR[cur]; opened = true; build(); $m('mk').classList.add('on'); document.body.style.overflow = 'hidden'; show(t || tab); }
   function close() { $m('mk').classList.remove('on'); document.body.style.overflow = ''; clearInterval(mapT); mapT = null; }
   function show(t) {
     tab = t; if ($m('mkNote')) $m('mkNote').textContent = ''; document.querySelectorAll('.mk-tabs button').forEach((b) => b.classList.toggle('on', b.dataset.t === t));
@@ -29,25 +31,40 @@ const Markets = (() => {
 
   /* ---------- market map ---------- */
   async function loadMap() {
-    try { map = live() ? await Source.raw('/api/map?idx=' + idx) : demoMap(); mapErr = ''; }
+    try { map = live() ? await Source.raw('/api/map?idx=' + idx) : Object.assign(demoMap(), idx === 'FNO' ? { fno: true, label: 'F&O Stocks', index: null } : idx !== 'NIFTY50' ? { label: idx + ' (sample)' } : {}); mapErr = ''; }
     catch (e) { mapErr = e.message + (/404|Not found/i.test(e.message) ? ' (deploy the new Worker code)' : ''); }
     if (tab === 'map') renderMap();
   }
   function setIdx(k) { idx = k; map = null; renderMap(); loadMap(); }
   function renderMap() {
     const b = $m('mkBody'); if (!b) return;
-    const IDX = [['NIFTY50', 'Nifty 50'], ['BANKNIFTY', 'Bank Nifty'], ['NIFTYIT', 'Nifty IT'], ['NIFTYNEXT50', 'Nifty Next 50']];
-    let h = `<div class="mk-grid"><section class="mk-panel"><div class="ph"><h2>${map ? esc(map.label) : 'Market'} Map</h2><div class="seg mk-seg">${IDX.map(([k, n]) => `<button class="${k === idx ? 'on' : ''}" onclick="Markets.setIdx('${k}')">${n}</button>`).join('')}</div></div>`;
+    const MAIN = [['NIFTY50', 'Nifty 50'], ['SENSEX', 'Sensex'], ['BANKNIFTY', 'Bank Nifty'], ['FINNIFTY', 'Fin Nifty'], ['MIDCPNIFTY', 'Midcap Select'], ['FNO', 'All F&O Stocks']];
+    const MORE = [['NIFTYNEXT50', 'Nifty Next 50'], ['NIFTYIT', 'Nifty IT'], ['NIFTYAUTO', 'Nifty Auto'], ['NIFTYPHARMA', 'Nifty Pharma'], ['NIFTYFMCG', 'Nifty FMCG'], ['NIFTYMETAL', 'Nifty Metal'], ['NIFTYENERGY', 'Nifty Energy'], ['NIFTYPSUBANK', 'PSU Bank'], ['NIFTYREALTY', 'Nifty Realty']];
+    const inMore = MORE.find((x) => x[0] === idx);
+    let h = `<div class="mk-grid"><section class="mk-panel"><div class="ph"><h2>${map ? esc(map.label) : 'Market'} Map</h2><div class="mk-pick"><div class="seg mk-seg">${MAIN.map(([k, n]) => `<button class="${k === idx ? 'on' : ''}" onclick="Markets.setIdx('${k}')">${n}</button>`).join('')}</div>
+      <select class="mk-sel ${inMore ? 'on' : ''}" onchange="if(this.value)Markets.setIdx(this.value)" aria-label="Sector indices"><option value="">Sector Indices…</option>${MORE.map(([k, n]) => `<option value="${k}" ${k === idx ? 'selected' : ''}>${n}</option>`).join('')}</select></div></div>`;
     if (!map) { h += `<div class="mut" style="padding:40px 0;text-align:center">${mapErr ? esc(mapErr) : 'Loading live prices…'}</div></section></div>`; b.innerHTML = h; return; }
     const it = map.items.filter((x) => ok(x.chg)), up = it.filter((x) => x.chg > 0).length, dn = it.filter((x) => x.chg < 0).length;
     const byW = map.items.slice().sort((p, q) => q.w - p.w), top = byW.slice(0, 10), sumPts = (a) => a.reduce((s, x) => s + (x.pts || 0), 0);
     const I = map.index;
-    h += `<div class="sum mk-sum"><div><small>${esc(map.label)}</small><b class="${cls(I && I.chg)}">${I ? f2(I.price) + ' ' + pct(I.chg) : '–'}</b></div>
+    if (map.fno) {
+      const g = it.slice().sort((p, q) => q.chg - p.chg), avg = it.length ? it.reduce((s, x) => s + x.chg, 0) / it.length : 0;
+      h += `<div class="sum mk-sum"><div><small>F&O Stocks</small><b>${map.items.length}</b></div><div><small>Advancers / Decliners</small><b><span class="up">${up}</span> / <span class="down">${dn}</span></b></div>
+        <div><small>Average Move</small><b class="${cls(avg)}">${pct(avg)}</b></div><div><small>Top Gainer / Loser</small><b><span class="up">${g[0] ? esc(g[0].sym) : '–'}</span> / <span class="down">${g.length ? esc(g[g.length - 1].sym) : '–'}</span></b></div></div>`;
+    } else h += `<div class="sum mk-sum"><div><small>${esc(map.label)}</small><b class="${cls(I && I.chg)}">${I ? f2(I.price) + ' ' + pct(I.chg) : '–'}</b></div>
       <div><small>Advancers / Decliners</small><b><span class="up">${up}</span> / <span class="down">${dn}</span></b></div>
       <div><small>Top 10 By Weight</small><b class="${cls(sumPts(top))}">${sgn(sumPts(top))}${f1(sumPts(top))} pts</b></div>
-      <div><small>Rest Of The Index</small><b class="${cls(sumPts(byW.slice(10)))}">${sgn(sumPts(byW.slice(10)))}${f1(sumPts(byW.slice(10)))} pts</b></div></div>
-      <div id="mkTM" class="mk-tm" aria-label="Heatmap: box size is index weight, colour is today's change"></div>
-      <div class="mk-scale"><span>−3%</span><i></i><span>+3%</span><span class="mut">Box size = weight in the index (${esc(map.wsrc)}). Tap a box for details.</span></div><div id="mkPop"></div></section>`;
+      <div><small>Rest Of The Index</small><b class="${cls(sumPts(byW.slice(10)))}">${sgn(sumPts(byW.slice(10)))}${f1(sumPts(byW.slice(10)))} pts</b></div></div>`;
+    h += `<div id="mkTM" class="mk-tm" aria-label="Heatmap: box size is ${map.fno ? 'traded value' : 'index weight'}, colour is today's change"></div>
+      <div class="mk-scale"><span>−3%</span><i></i><span>+3%</span><span class="mut">Box size = ${map.fno ? '' : 'weight in the index, '}${esc(map.wsrc)}. Tap a box for details.</span></div><div id="mkPop"></div></section>`;
+    if (map.fno) {
+      const g = it.slice().sort((p, q) => q.chg - p.chg), list = [...g.slice(0, 8), ...g.slice(-8)], mx = Math.max(0.5, ...list.map((x) => Math.abs(x.chg)));
+      h += `<section class="mk-panel"><div class="ph"><h2>Top Gainers And Losers</h2></div>${list.map((x) => { const w = (Math.abs(x.chg) / mx) * 50; return `<div class="cb"><span>${esc(x.sym)}</span><div class="t"><i style="${x.chg >= 0 ? `left:50%;width:${w}%;background:var(--call)` : `right:50%;width:${w}%;background:var(--put)`}"></i></div><em class="${x.chg >= 0 ? 'up' : 'down'}">${pct(x.chg, 1)}</em></div>`; }).join('')}
+        <div class="sec">Breadth</div><div class="ad"><i style="width:${up + dn ? (up / (up + dn)) * 100 : 50}%;background:var(--call)"></i><i style="flex:1;background:var(--put)"></i></div><div class="mut" style="font-size:12px">${up} up · ${dn} down</div>
+        <div class="sec">Sectors</div><div class="sect">${(map.sectors || []).slice().sort((p, q) => q.chg - p.chg).map((s) => `<div class="st ${s.chg > 0 ? 'up' : s.chg < 0 ? 'dn' : ''}"><small>${esc(s.name)}</small><b class="${cls(s.chg)}">${pct(s.chg)}</b></div>`).join('')}</div>
+        <div class="legend">Box size is today's traded value, so the most active stocks are biggest. Updates every 30 seconds.</div></section></div>`;
+      b.innerHTML = h; drawTM(); pop(popSym); return;
+    }
     // who moved
     const C = map.items.filter((x) => ok(x.pts)).sort((p, q) => q.pts - p.pts), pos = C.filter((x) => x.pts > 0).slice(0, 6), neg = C.filter((x) => x.pts < 0).slice(-5), all = [...pos, ...neg];
     const mx = Math.max(1, ...all.map((x) => Math.abs(x.pts)));
