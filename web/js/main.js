@@ -1,6 +1,7 @@
 /* ===== शुरुआत और लूप ===== */
 let cur = Store.pref('index', 'NIFTY');
-HZ = Store.pref('hz', 'intra'); // analysis.js loads before store.js, so read the saved horizon here
+HZ = Store.pref('hz', 'intra');
+setEngMode(Store.pref('engMode', 'active'), true); // analysis.js loads before store.js, so read the saved horizon here
 const A = {};
 const DEMO = !APP_CONFIG.WORKER_URL || new URLSearchParams(location.search).has('demo');
 const Source = DEMO ? DemoSource : LiveSource;

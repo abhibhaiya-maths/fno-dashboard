@@ -73,7 +73,7 @@ const Paper = (() => {
     if (e.cost > acc.cash) return toast(`Not enough cash: need ${rs(e.cost)}, have ${rs(acc.cash)}`);
     const st = setupFor(a, type), dl = Math.abs(e.q.delta || 0.5);
     const slv = ok(sl) && sl > 0 && sl < e.px ? sl : tick05(Math.max(0.05, e.px - dl * st.risk));
-    const tgv = ok(tgt) && tgt > e.px ? tgt : tick05(e.px + dl * st.risk * 1.5);
+    const tgv = ok(tgt) && tgt > e.px ? tgt : tick05(e.px + dl * st.risk * ENG.t1R);
     acc.cash -= e.cost;
     const t = { id: uid(), key, label: a.cf.label, K, type, lots, lot: a.lot, qty: e.qty, exch: a.cf.exch, entry: e.px, entryCh: e.ch, sl: slv, sl0: slv, tgt: tgv,
       risk0: e.px - slv, high: e.px, ltp: e.px, status: 'open', openedTs: Date.now(), openedDate: dateKey(), openedMin: a.curMin, openIdx: a.price,
@@ -150,7 +150,7 @@ const Paper = (() => {
       t.ltp = bid; t.high = Math.max(t.high, bid);
       // ---- Auto SL: only ever moves up ----
       let na = t.slAuto;
-      if (t.high - t.entry >= t.risk0) na = Math.max(na, t.entry, tick05(t.high - t.risk0));           // +1R: breakeven, then trail 1R behind the high
+      if (t.high - t.entry >= t.risk0) na = Math.max(na, t.entry, tick05(t.high - ENG.trailR * t.risk0)); // +1R: breakeven, then trail 1.5R behind the high (backtest: lets winners run)
       if (t.tgtHit) na = Math.max(na, tick05(t.tgt - 0.5 * t.risk0));                                    // target touched: lock most of it
       if (a.short && a.short.dir === (d === 1 ? 'PE' : 'CE') && a.short.strength === 'strong' && bid > t.entry)
         na = Math.max(na, tick05(t.entry + (bid - t.entry) * 0.5));                                       // 1-minute turned hard against: protect half the open profit

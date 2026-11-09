@@ -27,32 +27,47 @@ const Replay = (() => {
   /* ---------- download from Upstox ---------- */
   const ymdOf = (ms) => new Date(ms + 5.5 * 3600e3).toISOString().slice(0, 10);
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  async function download() {
+  // span: '1m' | '3m' | '6m' | '1y' | 'custom' (from/to dates). New days are added to what is already saved.
+  async function download(span) {
     if (Source.mode !== 'live') return toast('Downloading needs live mode (log in with your Upstox-connected Worker).');
+    span = span || ($r('rpSpan') && $r('rpSpan').value) || '3m';
+    const DAYS = { '1m': 31, '3m': 92, '6m': 183, '1y': 366 }, now = Date.now(), todayS = ymdOf(now);
+    let toS = todayS, fromS;
+    if (span === 'custom') {
+      fromS = $r('rpFrom').value; toS = $r('rpTo').value || todayS;
+      if (!fromS) return toast('Pick a From date.');
+      if (fromS > toS) return toast('From date must be before To date.');
+      if (fromS < '2022-01-01') return toast('Upstox has 1-minute history from January 2022 onwards.');
+    } else fromS = ymdOf(now - DAYS[span] * 864e5);
+    // the engine needs two earlier sessions before the first replay day, so start 5 calendar days earlier
+    const t0 = Date.parse(fromS + 'T00:00:00Z') - 5 * 864e5, t1 = Date.parse(toS + 'T00:00:00Z');
+    // Upstox gives at most about a month of 1-minute candles per request: ask in 28-day windows
+    const wins = []; for (let e = t1; e >= t0; e -= 28 * 864e5) wins.push([ymdOf(Math.max(t0, e - 27 * 864e5) - 5.5 * 3600e3), ymdOf(e - 5.5 * 3600e3)]);
     const btn = $r('rpDl'); btn.disabled = true;
-    const now = Date.now(), wins = [[0, 27], [28, 55], [56, 83]];
     const list = BT.INST.map(([k, key]) => ({ k, key }));
-    const out = { v: 1, created: new Date().toISOString(), inst: {} };
+    const out = data && data.inst ? data : { v: 1, inst: {} };
     let done = 0; const total = list.length * (wins.length + 1);
     const prog = (t) => { $r('rpProg').style.width = Math.round((done / total) * 100) + '%'; $r('rpDataTxt').textContent = t; };
     try {
       for (const it of list) {
-        const m1 = {}; let d1 = [];
-        for (const [a, b] of wins) {
-          prog(`Downloading ${it.k}: ${ymdOf(now - b * 864e5)} to ${ymdOf(now - a * 864e5)}…`);
-          const j = await fetchRetry(`/api/hist?key=${encodeURIComponent(it.key)}&unit=minutes&iv=1&from=${ymdOf(now - b * 864e5)}&to=${ymdOf(now - a * 864e5)}`);
-          Object.assign(m1, BT.parse(j && j.data && j.data.candles));
-          done++; await sleep(400);
+        const X = out.inst[it.k] || (out.inst[it.k] = { key: it.key, m1: {}, d1: [] });
+        for (const [f, t] of wins) {
+          prog(`Downloading ${it.k}: ${f} to ${t} (${done + 1} of ${total})…`);
+          const j = await fetchRetry(`/api/hist?key=${encodeURIComponent(it.key)}&unit=minutes&iv=1&from=${f}&to=${t}`);
+          Object.assign(X.m1, BT.parse(j && j.data && j.data.candles));
+          done++; await sleep(350);
         }
-        prog(`Downloading ${it.k}: daily candles, 1 year…`);
-        const j = await fetchRetry(`/api/hist?key=${encodeURIComponent(it.key)}&unit=days&iv=1&from=${ymdOf(now - 400 * 864e5)}&to=${ymdOf(now)}`);
-        d1 = BT.parseDaily(j && j.data && j.data.candles); done++; await sleep(400);
-        out.inst[it.k] = { key: it.key, m1, d1 };
+        prog(`Downloading ${it.k}: daily candles…`);
+        const j = await fetchRetry(`/api/hist?key=${encodeURIComponent(it.key)}&unit=days&iv=1&from=${ymdOf(t0 - 400 * 864e5)}&to=${toS}`);
+        const d1 = BT.parseDaily(j && j.data && j.data.candles), byD = {}; [...(X.d1 || []), ...d1].forEach((r) => (byD[r[0]] = r));
+        X.d1 = Object.values(byD).sort((p, q) => (p[0] < q[0] ? -1 : 1)); done++; await sleep(350);
       }
-      data = out; await save(out); prog(''); info(); start(true); toast('History downloaded. Pick a day to replay, or run the backtest.');
+      out.created = new Date().toISOString();
+      data = out; await save(out); prog(''); $r('rpProg').style.width = '0'; info(); start(true); toast(`History downloaded (${fromS} to ${toS}). Pick a day to replay, or run the backtest.`);
     } catch (e) { $r('rpDataTxt').textContent = 'Download stopped: ' + e.message + (e.code === 'UPSTOX_RATE' ? ' (try again in a few minutes)' : /hist|404|Not found/i.test(e.message) ? ' (deploy the new Worker code first)' : ''); }
     btn.disabled = false;
   }
+  function spanUI() { const c = $r('rpSpan').value === 'custom'; $r('rpCustom').style.display = c ? 'inline-flex' : 'none'; }
   async function fetchRetry(p) {
     for (let i = 0; i < 3; i++) {
       try { return await Source.raw(p); } catch (e) { if (e.code === 'UPSTOX_RATE' && i < 2) { $r('rpDataTxt').textContent = 'Upstox asked to slow down, waiting 60 s…'; await sleep(61000); continue; } throw e; }
@@ -73,7 +88,7 @@ const Replay = (() => {
     const box = $r('rpDataTxt');
     if (!data) { box.textContent = 'No history yet. Download it once (about a minute); it is kept in this browser.'; return; }
     const parts = Object.keys(data.inst).filter((k) => k !== 'VIX').map((k) => { const d = BT.dates(data, k); return d.length ? `${k} ${d.length} days (${d[0]} to ${d[d.length - 1]})` : `${k}: none`; });
-    box.textContent = 'Loaded: ' + parts.join(' · ') + `. Saved ${data.created ? data.created.slice(0, 10) : ''}.`;
+    box.textContent = 'Loaded: ' + parts.join(' · ') + `. Saved ${data.created ? ymdOf(Date.parse(data.created)) : ''}. New downloads are added to this; 1 year ≈ 2 minutes and a ~20 MB file.`;
     fillDays();
   }
 
@@ -84,7 +99,9 @@ const Replay = (() => {
     el.innerHTML = `
     <div class="rp-top"><h2>Replay and backtest</h2><span class="mut">Practise on past days and check how the engine would have done. Paper money only.</span><button class="x" onclick="Replay.close()" aria-label="Close">✕</button></div>
     <div class="rp-data"><div class="rp-dtxt"><span id="rpDataTxt"></span><div class="rp-pbar"><i id="rpProg"></i></div></div>
-      <button class="btn" id="rpDl" onclick="Replay.download()">Download last ~60 days from Upstox</button>
+      <label class="rp-span">Period <select id="rpSpan" onchange="Replay.spanUI()"><option value="1m">Last 1 month</option><option value="3m" selected>Last 3 months</option><option value="6m">Last 6 months</option><option value="1y">Last 1 year</option><option value="custom">Choose dates…</option></select></label>
+      <span id="rpCustom" class="rp-custom" style="display:none"><input type="date" id="rpFrom" min="2022-01-01" aria-label="From date"> to <input type="date" id="rpTo" min="2022-01-01" aria-label="To date"></span>
+      <button class="btn" id="rpDl" onclick="Replay.download()">Download From Upstox</button>
       <button class="btn ghost" onclick="Replay.saveFile()">Save as file</button>
       <label class="btn ghost">Load file<input type="file" accept=".json,application/json" hidden onchange="Replay.loadFile(this.files[0])"></label></div>
     <div class="rp-bar">
@@ -165,8 +182,8 @@ const Replay = (() => {
         else if ((fav - o.t2) * sd >= 0) ex = [o.t2, 'Target 2'];
         else if (m >= 365) ex = [bar.c, '15:20 square-off'];
         else if ((s.state === 'CE' || s.state === 'PE') && s.state !== o.dir && m - o.m >= 5) ex = [bar.c, 'Opposite signal'];
-        if (!ex) { const g = (bar.c - o.e) * sd; if (g >= o.risk) o.be = true; if (o.be) { const tr = bar.c - sd * o.risk; if ((tr - o.sl) * sd > 0) o.sl = tr; if ((o.e - o.sl) * sd > 0) o.sl = o.e; } }
-        if (ex) { R.eng.push({ ...o, x: ex[0], xm: m, why: ex[1], pts: (ex[0] - o.e) * sd - BT.COST_PTS }); T.open = null; }
+        if (!ex) { const g = (bar.c - o.e) * sd; if (g >= o.risk) o.be = true; if (o.be) { const tr = bar.c - sd * ENG.trailR * o.risk; if ((tr - o.sl) * sd > 0) o.sl = tr; if ((o.e - o.sl) * sd > 0) o.sl = o.e; } }
+        if (ex) { R.eng.push({ ...o, x: ex[0], xm: m, why: ex[1], pts: (ex[0] - o.e) * sd - BT.costOf(o.e) }); T.open = null; }
       }
       if (!T.open && (s.state === 'CE' || s.state === 'PE') && m < 345) { const st = setupFor(a, s.state); T.open = { dir: s.state, strength: s.strength || '', m, e: bar.c, sl: st.sl, t2: st.t2, risk: st.risk, be: false }; }
     };
@@ -219,14 +236,14 @@ const Replay = (() => {
   }
   function exitMine(why, px) {
     const o = R.me; if (!o) return;
-    const bar = R.shown[R.shown.length - 1], x = ok(px) ? px : bar.c, sd = o.dir === 'CE' ? 1 : -1, pts = (x - o.e) * sd - BT.COST_PTS;
+    const bar = R.shown[R.shown.length - 1], x = ok(px) ? px : bar.c, sd = o.dir === 'CE' ? 1 : -1, pts = (x - o.e) * sd - BT.costOf(o.e);
     R.mine.push({ ...o, x, xm: bar.m, why: why || 'You exited', pts, rs: pts * 0.5 * lotOf(R.k) * o.lots });
     R.me = null; side(); draw();
   }
   function end() {
     R.ended = true; pause();
     if (R.me) exitMine('Day end');
-    if (R.sim.open) { const o = R.sim.open, b = R.shown[R.shown.length - 1], sd = o.dir === 'CE' ? 1 : -1; R.eng.push({ ...o, x: b.c, xm: b.m, why: 'Day end', pts: (b.c - o.e) * sd - BT.COST_PTS }); R.sim.open = null; }
+    if (R.sim.open) { const o = R.sim.open, b = R.shown[R.shown.length - 1], sd = o.dir === 'CE' ? 1 : -1; R.eng.push({ ...o, x: b.c, xm: b.m, why: 'Day end', pts: (b.c - o.e) * sd - BT.costOf(o.e) }); R.sim.open = null; }
     R.hide = false; side(); draw();
   }
 
@@ -284,7 +301,7 @@ const Replay = (() => {
     if (R.ended) {
       const me = sum(R.mine), en = sum(R.eng), mw = R.mine.filter((t) => t.pts > 0).length, ew = R.eng.filter((t) => t.pts > 0).length;
       lg += `<div class="rp-res"><div><small>You</small><b class="${me >= 0 ? 'up' : 'down'}">${sgn(me)}${f1(me)} pts</b><span>${R.mine.length} trades, ${mw} right · ≈ ₹${f0(R.mine.reduce((s, t) => s + t.rs, 0))}</span></div><div><small>Engine</small><b class="${en >= 0 ? 'up' : 'down'}">${sgn(en)}${f1(en)} pts</b><span>${R.eng.length} trades, ${ew} right</span></div></div>
-        <div class="legend">Points are after ${BT.COST_PTS} pts of costs per trade. "Right" = closed in profit. Look at the chart: where did you or the engine enter against the trend?</div>`;
+        <div class="legend">Points are after costs (about 0.008% of price per trade: ~2 pts Nifty, ~5 Bank Nifty, ~6.5 Sensex). "Right" = closed in profit. Look at the chart: where did you or the engine enter against the trend?</div>`;
     }
     $r('rpLog').innerHTML = lg;
   }
@@ -307,7 +324,7 @@ const Replay = (() => {
     const box = $r('rpBt'); if (!bt) return;
     const S = BT.summary(bt.days), card = (t, v, sub, cls) => `<div class="rp-card"><small>${t}</small><b class="${cls || ''}">${v}</b><span>${sub || ''}</span></div>`;
     let h = `<div class="sec">Backtest: ${bt.k}, ${HZN[bt.hz]}, ${S.days} days</div><div class="rp-cards">
-      ${card('Net result', `${sgn(S.netPts)}${S.netPts} pts`, `after ${BT.COST_PTS} pts cost per trade`, S.netPts >= 0 ? 'up' : 'down')}
+      ${card('Net result', `${sgn(S.netPts)}${S.netPts} pts`, `after ~0.008% cost per trade`, S.netPts >= 0 ? 'up' : 'down')}
       ${card('Trades right', S.winPct === null ? '–' : S.winPct + '%', `${S.trades} trades · avg win ${S.avgWin}, avg loss ${S.avgLoss}`)}
       ${card('Direction right (next 15 min)', S.dirAcc === null ? '–' : S.dirAcc + '%', 'when it showed CALL or PUT')}
       ${card('Time on WAIT', S.waitPct + '%', 'of market minutes')}
@@ -324,5 +341,5 @@ const Replay = (() => {
   }
   function openDay(d) { $r('rpDay').value = d; $r('rpHide').checked = false; start(); $r('rp').scrollTo({ top: 0, behavior: 'smooth' }); }
 
-  return { open, close, download, saveFile, loadFile, fillDays, start, toggle, speed, adv, buy, exitMine: () => exitMine('You exited'), backtest, openDay, get data() { return data; } };
+  return { open, close, download, spanUI, saveFile, loadFile, fillDays, start, toggle, speed, adv, buy, exitMine: () => exitMine('You exited'), backtest, openDay, get data() { return data; } };
 })();

@@ -371,3 +371,46 @@ function studyAll(a) {
   try { a.gap = gapStudy(a); } catch (e) { a.gap = null; }
   try { a.open = a.sessionLive ? openingType(a) : null; } catch (e) { a.open = null; }
 }
+
+/* ---------- 6. Macro impact: what today's crude / dollar / yields / geopolitics mean for Indian sectors and your stocks ---------- */
+const MACRO = [
+  { id: 'brent', name: 'Crude oil', thr: 1.5,
+    up: { good: [['Oil producers', 'ONGC, OIL']], bad: [['Oil marketing (OMCs)', 'BPCL, HPCL, IOC'], ['Paints', 'ASIANPAINT, BERGEPAINT'], ['Airlines', 'INDIGO'], ['Tyres', 'MRF, APOLLOTYRE, CEATLTD'], ['Chemicals', 'PIDILITIND, SRF']], idx: -1,
+      why: 'India imports about 85% of its oil: costlier crude raises inflation and weakens the rupee.' },
+    dn: { good: [['Oil marketing (OMCs)', 'BPCL, HPCL, IOC'], ['Paints', 'ASIANPAINT, BERGEPAINT'], ['Airlines', 'INDIGO'], ['Tyres', 'MRF, APOLLOTYRE, CEATLTD'], ['Chemicals', 'PIDILITIND, SRF']], bad: [['Oil producers', 'ONGC, OIL']], idx: 1,
+      why: 'Cheaper crude cuts India\'s import bill, eases inflation and supports the rupee.' } },
+  { id: 'usdinr', name: 'Rupee', thr: 0.25,
+    up: { good: [['IT exporters', 'INFY, TCS, HCLTECH, WIPRO, TECHM'], ['Pharma exporters', 'SUNPHARMA, DRREDDY, CIPLA']], bad: [['Importers / oil', 'BPCL, HPCL, IOC'], ['Foreign-debt heavy', 'ADANIENT, TATAMOTORS']], idx: -1,
+      why: 'A weaker rupee (USD/INR up) usually comes with FII selling; exporters earn more in rupees.' },
+    dn: { good: [['Importers / oil', 'BPCL, HPCL, IOC']], bad: [['IT exporters', 'INFY, TCS, HCLTECH, WIPRO']], idx: 1, why: 'A stronger rupee helps importers and usually comes with FII buying.' } },
+  { id: 'us10y', name: 'US 10-year yield', thr: 1.5,
+    up: { good: [], bad: [['Banks and financials', 'HDFCBANK, ICICIBANK, BAJFINANCE'], ['High-valuation stocks', 'TRENT, ETERNAL, DMART']], idx: -1, why: 'Higher US yields pull foreign money back to US bonds.' },
+    dn: { good: [['Banks and financials', 'HDFCBANK, ICICIBANK, BAJFINANCE'], ['Growth stocks', 'TRENT, ETERNAL']], bad: [], idx: 1, why: 'Falling US yields make emerging markets like India more attractive.' } },
+  { id: 'dxy', name: 'Dollar index', thr: 0.4,
+    up: { good: [['IT exporters', 'INFY, TCS, HCLTECH']], bad: [['Metals', 'TATASTEEL, HINDALCO, JSWSTEEL, VEDL']], idx: -1, why: 'A strong dollar drains emerging-market flows and weighs on metal prices.' },
+    dn: { good: [['Metals', 'TATASTEEL, HINDALCO, JSWSTEEL, VEDL']], bad: [], idx: 1, why: 'A weaker dollar supports emerging markets and metal prices.' } },
+  { id: 'gold', name: 'Gold', thr: 1.2,
+    up: { good: [['Gold lenders', 'MUTHOOTFIN, MANAPPURAM']], bad: [['Jewellery margins', 'TITAN, KALYANKJIL']], idx: -1, why: 'A sharp gold rally usually means investors are seeking safety (risk-off).' },
+    dn: { good: [], bad: [['Gold lenders', 'MUTHOOTFIN, MANAPPURAM']], idx: 0, why: 'Falling gold eases fear but hurts gold-loan collateral values.' } },
+  { id: 'usvix', name: 'US VIX', thr: 8,
+    up: { good: [['Defensives', 'HINDUNILVR, NESTLEIND, SUNPHARMA']], bad: [['High-beta stocks', 'ADANIENT, TATAMOTORS, BAJFINANCE']], idx: -1, why: 'Global fear rising: FIIs cut risk in emerging markets.' },
+    dn: { good: [['High-beta stocks', 'ADANIENT, TATAMOTORS, BAJFINANCE']], bad: [], idx: 1, why: 'Global fear easing: supportive for risk assets.' } },
+];
+function macroImpact() {
+  const W = worldRead(A.NIFTY), out = [];
+  if (W) MACRO.forEach((M) => {
+    const r = W.rows.find((x) => x.id === M.id); if (!r || !ok(r.chg) || Math.abs(r.chg) < M.thr) return;
+    const s = r.chg > 0 ? M.up : M.dn;
+    out.push({ key: M.id + (r.chg > 0 ? '+' : '-'), name: `${M.name} ${r.chg > 0 ? 'up' : 'down'} ${f2(Math.abs(r.chg))}%`, chg: r.chg, idx: s.idx, why: s.why, good: s.good, bad: s.bad, big: Math.abs(r.chg) >= M.thr * 2 });
+  });
+  const G = A.NIFTY && A.NIFTY.D.geo;
+  if (G && /High|Elevated/.test(G.level)) out.push({ key: 'geo+', name: `Geopolitical risk ${G.level.toLowerCase()}`, idx: -1, why: 'Conflict headlines bring gaps and sharp swings; crude usually rises with them.', good: [['Defence', 'HAL, BEL, BDL, MAZDOCK'], ['Oil producers', 'ONGC, OIL']], bad: [['Airlines and OMCs', 'INDIGO, BPCL, HPCL, IOC'], ['High-beta stocks', 'ADANIENT, TATAMOTORS']], big: G.level === 'High' });
+  if (G && G.level === 'Easing') out.push({ key: 'geo-', name: 'Geopolitical tension easing', idx: 1, why: 'Peace or deal headlines lower the risk premium: crude and VIX tend to fall, risk appetite returns.', good: [['Airlines and OMCs', 'INDIGO, BPCL, HPCL, IOC'], ['Broad market', 'Nifty, Bank Nifty']], bad: [['Defence', 'HAL, BEL, BDL'], ['Oil producers', 'ONGC, OIL']], big: false });
+  const mine = new Set((typeof KEYS !== 'undefined' ? KEYS : []).map((k) => (CFG[k] && (CFG[k].sym || CFG[k].label || k) || '').toUpperCase()));
+  out.forEach((o) => {
+    const hit = (list) => list.flatMap(([, syms]) => syms.split(/,\s*/)).filter((s) => mine.has(s));
+    o.mineGood = hit(o.good); o.mineBad = hit(o.bad);
+  });
+  const net = out.reduce((s, o) => s + o.idx, 0);
+  return { items: out, net, read: !out.length ? 'No big macro move right now.' : net > 0 ? 'Macro backdrop leans supportive for Indian equities.' : net < 0 ? 'Macro backdrop leans against Indian equities.' : 'Macro signals are mixed.' };
+}

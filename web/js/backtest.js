@@ -7,7 +7,8 @@ const BT = (() => {
   const INST = [
     ['NIFTY', 'NSE_INDEX|Nifty 50'], ['BANKNIFTY', 'NSE_INDEX|Nifty Bank'], ['SENSEX', 'BSE_INDEX|SENSEX'], ['VIX', 'NSE_INDEX|India VIX'],
   ];
-  const COST_PTS = 2; // spread + charges on an ATM option, in index points (round trip)
+  const COST_PTS = 2; // Nifty-equivalent; scaled by price below (0.008% round trip)
+  const costOf = (px) => Math.max(1, px * 0.00008);
 
   // Upstox rows are [isoTime, o, h, l, c, vol, oi], newest first. Keep 09:15–15:29 and group by date.
   function parse(rows) {
@@ -53,7 +54,7 @@ const BT = (() => {
     try { HZ = hz || 'intra'; const a = applyHz(analyze(D)); const s = signalFor(a); return { a, s }; }
     finally { SIM.on = false; HZ = keep; }
   }
-  function resetMemory() { for (const id in HYS) if (id.startsWith(SIM.ns)) delete HYS[id]; }
+  function resetMemory() { for (const id in HYS) if (id.startsWith(SIM.ns)) delete HYS[id]; for (const id in SIGMEM) if (id.startsWith(SIM.ns)) delete SIGMEM[id]; }
 
   /* Simulated trader that follows the engine exactly like the paper-trade auto rules:
      enter on a CALL/PUT signal, stop from the setup, at 1R move the stop to entry, then trail 1R,
@@ -73,13 +74,13 @@ const BT = (() => {
         if (!exit) {
           const gain = (bar.c - o.e) * sd;
           if (gain >= o.risk && !o.be) { o.be = true; o.sl = o.e; }
-          if (o.be) { const tr = bar.c - sd * o.risk; if ((tr - o.sl) * sd > 0) { o.sl = tr; o.trail = true; } }
+          if (o.be) { const tr = bar.c - sd * ENG.trailR * o.risk; if ((tr - o.sl) * sd > 0) { o.sl = tr; o.trail = true; } }
         }
-        if (exit) { const pts = (exit[0] - o.e) * sd - COST_PTS; T.trades.push({ ...o, x: exit[0], xm: m, why: exit[1], pts, win: pts > 0 }); T.open = null; }
+        if (exit) { const pts = (exit[0] - o.e) * sd - costOf(o.e); T.trades.push({ ...o, x: exit[0], xm: m, why: exit[1], pts, win: pts > 0 }); T.open = null; }
       }
       if (!T.open && s && (s.state === 'CE' || s.state === 'PE') && m < 345) {
         const st = setupFor(a, s.state);
-        T.open = { dir: s.state, strength: s.strength || '', title: s.title, m, e: bar.c, sl: st.sl, t2: st.t2, risk: st.risk, mfe: 0, mae: 0, be: false, trail: false };
+        T.open = { dir: s.state, strength: s.strength || '', title: s.title, m, e: bar.c, sl: st.sl, t2: st.t2, risk: st.risk, mfe: 0, mae: 0, be: false, trail: false, n: T.trades.length };
       }
     };
     return T;
@@ -93,10 +94,13 @@ const BT = (() => {
       const m = c[0], bar = { m, o: c[1], h: c[2], l: c[3], c: c[4] };
       const r = step(data, k, date, m, hz); if (!r) continue;
       T.onBar(m, bar, r.a, r.s);
-      log.push({ m, c: bar.c, st: r.s.state, str: r.s.strength || '', title: r.s.title, score: Math.round(r.a.score) });
+      const A1 = r.a;
+      log.push({ m, c: bar.c, st: r.s.state, str: r.s.strength || '', title: r.s.title, score: Math.round(A1.score),
+        f: { adx: ok(A1.adx) ? Math.round(A1.adx) : null, ext: ok(A1.e20) && A1.atr ? +((A1.price - A1.e20) / A1.atr).toFixed(2) : null, mv: ok(A1.mvA) ? +A1.mvA.toFixed(2) : null,
+          vw: ok(A1.vw) ? (A1.price > A1.vw ? 1 : -1) : 0, stx: A1.stx ? A1.stx.state + (A1.stx.trend > 0 ? '+' : A1.stx.trend < 0 ? '-' : '') : '', cu: A1.coreUp, cd: A1.coreDn, st: A1.stD, setup: A1.setupType, atr: +(A1.atr || 0).toFixed(2), sh: A1.short ? A1.short.dir || '' : '', lg: A1.long ? A1.long.dir || '' : '', pb: A1.pb ? A1.pb.state : '', open: A1.open ? A1.open.type : '' } });
       if (onMinute) onMinute(m, bar, r.a, r.s);
     }
-    if (T.open) { const o = T.open, last = bars[bars.length - 1], sd = o.dir === 'CE' ? 1 : -1, pts = (last[4] - o.e) * sd - COST_PTS; T.trades.push({ ...o, x: last[4], xm: last[0], why: 'Day end', pts, win: pts > 0 }); }
+    if (T.open) { const o = T.open, last = bars[bars.length - 1], sd = o.dir === 'CE' ? 1 : -1, pts = (last[4] - o.e) * sd - costOf(o.e); T.trades.push({ ...o, x: last[4], xm: last[0], why: 'Day end', pts, win: pts > 0 }); }
     return { date, k, hz, trades: T.trades, log, stats: dayStats(bars, log, T.trades) };
   }
 
@@ -145,6 +149,6 @@ const BT = (() => {
       exits: t.reduce((o, x) => ((o[x.why] = (o[x.why] || 0) + 1), o), {}) };
   }
 
-  return { INST, COST_PTS, parse, parseDaily, dates, buildD, step, runDay, summary, resetMemory };
+  return { INST, COST_PTS, costOf, parse, parseDaily, dates, buildD, step, runDay, summary, resetMemory };
 })();
 if (typeof module !== 'undefined') module.exports = BT;

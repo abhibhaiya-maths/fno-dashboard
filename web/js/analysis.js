@@ -1,6 +1,21 @@
 /* ===== विश्लेषण: डेटा → संकेत, स्कोर, लेवल, सेटअप ===== */
 // Session windows, minutes from 09:15 IST: NSE/BSE 09:15–15:30, MCX 09:00–23:30
 const SESS = { NSE: { o: 0, c: 375 }, MCX: { o: -15, c: 870 } };
+// Engine settings (tuned by backtest on real Nifty / Bank Nifty / Sensex data)
+const ENG = { mode: 'v1', enterUp: 58, enterDn: 42, coreNeed: 3, rangeADX: 18, chase: [3, 2, 4], pbBlock: true, v2need: 3.5, v2flip: true, dailyFilter: 'soft', confirm1m: true, failATR: 1.5, coolMin: 30, lastEntryMin: 75, t1R: 1.5, t2R: 2.5, trailR: 1 };
+// Two trading modes, both backtested on 54 days of Nifty / Bank Nifty / Sensex 1-minute data (costs included)
+const ENG_MODES = {
+  active: { name: 'Active', set: { dailyFilter: 'soft', t1R: 1.5, t2R: 2.5, trailR: 1 },
+    note: 'More trades (about 4–5 a day per index), about 45% right, catches nearly every big move of the day. Backtest profit factor: Nifty 1.39, Sensex 1.15, Bank Nifty 0.97.' },
+  safe: { name: 'Safe', set: { dailyFilter: true, t1R: 2, t2R: 4, trailR: 1.5 },
+    note: 'Fewer trades (about 2 a day per index), only with the daily trend, bigger targets. Highest profit in backtest: profit factor Nifty 1.64, Sensex 1.51, Bank Nifty 1.02.' },
+};
+let ENG_MODE = 'active';
+function setEngMode(m, quiet) {
+  if (!ENG_MODES[m]) return; ENG_MODE = m; Object.assign(ENG, ENG_MODES[m].set);
+  for (const id in SIGMEM) if (!id.startsWith(SIM.ns)) delete SIGMEM[id];
+  if (!quiet) { try { Store.setPref('engMode', m); } catch (e) { /* ignore */ } if (typeof refreshAll === 'function') refreshAll(); if (typeof toast === 'function') toast(`${ENG_MODES[m].name} mode: ${ENG_MODES[m].note}`); }
+}
 // Special sessions on non-working days (Diwali Muhurat etc.). Minutes counted from 09:15 IST. Add a line here for future ones.
 const SPECIAL_SESS = {
   '2026-11-08': { name: 'Diwali Muhurat trading', o: 305, c: 375 }, // NSE/BSE 14:20–15:30 (pre-open 14:05–14:20)
@@ -233,12 +248,12 @@ function analyze(D) {
   const coreN = [vwName, 'Supertrend (10,3)', 'EMA 20 / EMA 50', 'Price structure (5m swings)', 'Last 30 minutes'];
   const core = sigs.filter((x) => coreN.includes(x.n) && x.w > 0);
   const coreUp = core.filter((x) => x.s >= 0.5).length, coreDn = core.filter((x) => x.s <= -0.5).length;
-  const raw = score >= 58 ? 'CE' : score <= 42 ? 'PE' : null;
+  const raw = score >= ENG.enterUp ? 'CE' : score <= ENG.enterDn ? 'PE' : null;
   let dir = raw, gate = null;
-  if (raw === 'CE' && coreUp < 3) { dir = null; gate = coreDn >= 3 ? `Options data and mood look bullish, but price is falling (${coreDn} of ${core.length} trend tools down). Don't buy calls into a fall.` : `Only ${coreUp} of ${core.length} trend tools are up. Wait for price to confirm.`; }
-  if (raw === 'PE' && coreDn < 3) { dir = null; gate = coreUp >= 3 ? `Options data and mood look bearish, but price is rising (${coreUp} of ${core.length} trend tools up). Don't buy puts into a rally.` : `Only ${coreDn} of ${core.length} trend tools are down. Wait for price to confirm.`; }
+  if (raw === 'CE' && coreUp < ENG.coreNeed) { dir = null; gate = coreDn >= 3 ? `Options data and mood look bullish, but price is falling (${coreDn} of ${core.length} trend tools down). Don't buy calls into a fall.` : `Only ${coreUp} of ${core.length} trend tools are up. Wait for price to confirm.`; }
+  if (raw === 'PE' && coreDn < ENG.coreNeed) { dir = null; gate = coreUp >= 3 ? `Options data and mood look bearish, but price is rising (${coreUp} of ${core.length} trend tools up). Don't buy puts into a rally.` : `Only ${coreDn} of ${core.length} trend tools are down. Wait for price to confirm.`; }
   // No trend (low ADX, no swing structure): option buyers lose to time decay in a range, so stand aside
-  if (dir && ok(ax) && ax < 18 && struct === 0) { dir = null; gate = `Range-bound market (ADX ${f1(ax)}, no swing trend). Option buyers lose to time decay in a range; wait for a breakout.`; }
+  if (dir && ok(ax) && ax < ENG.rangeADX && struct === 0) { dir = null; gate = `Range-bound market (ADX ${f1(ax)}, no swing trend). Option buyers lose to time decay in a range; wait for a breakout.`; }
 
   const lv = [...Object.entries(piv), ...(vlt && ok(vlt.pwH) ? [['Prev week high', vlt.pwH], ['Prev week low', vlt.pwL]] : []), ['CPR TC', tc], ['CPR BC', bc], ['Opening high', ORH], ['Opening low', ORL], ['Day high', DH], ['Day low', DL], ['VAH', VP.VAH], ['VAL', VP.VAL], ['POC', VP.POC], ['VWAP', vw]];
   if (ok(maxCE)) lv.push(['Call OI wall', maxCE]);
@@ -252,6 +267,7 @@ function analyze(D) {
   try { A0.long = longTerm(A0); } catch (e) { A0.long = null; }
   try { refine(A0); } catch (e) { A0.pb = null; }
   try { studyAll(A0); } catch (e) { console.warn('structure', e); }
+  if (ENG.mode === 'v2') { try { decideV2(A0); } catch (e) { console.warn('v2', e); } }
   return A0;
 }
 
@@ -282,6 +298,32 @@ function pullbackOf(a) {
   const trigger = state === 'pullback' && (sh && sh.dir === (up ? 'CE' : 'PE') || shLean >= 57);
   return { trend: up ? 'CE' : 'PE', d, ext, base, leg, retr, pullX, state, inZone, trigger, z382: lvl(0.382), z50: lvl(0.5), z618: lvl(0.618), z786: lvl(0.786), barsSince };
 }
+/* v2: price-led direction. The 5-minute swing structure (closes beyond swings), VWAP side, fast EMAs, Supertrend and
+   30-minute momentum vote; the slower score only grades strength. Flips as soon as structure breaks and VWAP is lost. */
+function decideV2(a) {
+  if (!a.sessionLive) return;
+  const X = a.stx, c = a.I5.k.map((x) => x.c), L = c.length - 1, e9 = ema(c, 9)[L], e21 = ema(c, 21)[L];
+  const v = [];
+  if (X) v.push([X.trend, 2, '5-minute structure']);
+  if (ok(a.vw)) v.push([a.price > a.vw ? 1 : -1, 1.5, 'VWAP side']);
+  if (ok(e21)) v.push([e9 > e21 ? 1 : -1, 1, 'EMA 9/21']);
+  if (ok(a.stD)) v.push([a.stD, 1, 'Supertrend']);
+  if (ok(a.mvA) && Math.abs(a.mvA) >= 0.5) v.push([Math.sign(a.mvA), 1, '30-min momentum']);
+  const tot = v.reduce((s, x) => s + x[0] * x[1], 0), max = v.reduce((s, x) => s + x[1], 0);
+  a.v2 = { tot, max, votes: v };
+  let dir = tot >= ENG.v2need && a.price > a.vw ? 'CE' : tot <= -ENG.v2need && a.price < a.vw ? 'PE' : null, gate = null;
+  // fresh change of character + VWAP lost = the old direction is over right now
+  if (ENG.v2flip && X && X.state === 'choch' && X.last && a.I5.k.length - 1 - X.last.j <= 3) { const d = X.last.dir > 0 ? 'CE' : 'PE'; if ((d === 'CE') === (a.price > a.vw)) dir = d; }
+  if (!dir) gate = `Price tools are split (${f1(tot)} of ±${f1(max)}). Wait for structure and VWAP to line up.`;
+  if (dir && ok(a.adx) && a.adx < 15 && X && X.state === 'range') { dir = null; gate = `Range-bound market (ADX ${f1(a.adx)}, no swing trend). Wait for a breakout.`; }
+  // only an extreme, still-accelerating stretch blocks entry
+  if (dir && ok(a.e20) && a.atr) { const sd = dir === 'CE' ? 1 : -1, ext = ((a.price - a.e20) * sd) / a.atr, burst = ok(a.mvA) ? a.mvA * sd : 0; if (ext > 4 && burst > 2.5) { dir = null; a.chase = true; gate = `Extended: price is ${f1(ext)} ATR from its 20-EMA after a burst. Wait for a pause.`; } }
+  a.dir = dir; a.gate = gate; a.setupType = a.setupType === 'pullback' && dir === (a.pb && a.pb.trend) ? 'pullback' : 'trend';
+  // the score now follows the vote, so the gauge and the signal tell the same story
+  a.score = Math.round(50 + 50 * (0.8 * (tot / (max || 1)) + 0.2 * ((a.score - 50) / 50)));
+  a.coreUp = v.filter((x) => x[0] > 0).length; a.coreDn = v.filter((x) => x[0] < 0).length; a.coreN = v.length;
+}
+
 function refine(a) {
   const pb = pullbackOf(a), nm = (x) => (x === 'CE' ? (a.cf.opt ? 'CALL' : 'long') : a.cf.opt ? 'PUT' : 'short');
   a.pb = pb; a.setupType = 'trend';
@@ -289,7 +331,7 @@ function refine(a) {
     const pct = Math.round(pb.retr * 100), word = pb.trend === 'CE' ? 'uptrend' : 'downtrend';
     pb.label = pb.state === 'pullback' ? `Pullback in ${word}: ${pct}% retracement of the last move (${f0(pb.base)} → ${f0(pb.ext)})` : pb.state === 'failed' ? `Pullback failed: ${pct}% retracement, the ${word} may be over` : `Trend leg running (${f0(pb.base)} → ${f0(pb.ext)})`;
     // 1. a healthy pullback is not a reversal: no counter-trend signal until 78.6% breaks
-    if (pb.state === 'pullback' && a.dir && a.dir !== pb.trend) {
+    if (ENG.pbBlock && pb.state === 'pullback' && a.dir && a.dir !== pb.trend) {
       a.dir = null;
       a.gate = `${pb.label}. That is a normal dip inside the ${word}, not a reversal yet. A reversal is confirmed only beyond ${f0(pb.z786)} (78.6%).`;
     }
@@ -309,7 +351,7 @@ function refine(a) {
     a.extATR = ext;
     // only a stretched AND still-accelerating move counts as chasing (strong trend days stay tradable)
     const burst = ok(a.mvA) ? a.mvA * sd : 0;
-    if ((ext > 3 && burst > 2) || ext > 4) {
+    if ((ext > ENG.chase[0] && burst > ENG.chase[1]) || ext > ENG.chase[2]) {
       const back = a.e20 + sd * a.atr * 0.8;
       a.gate = `Extended: price is ${f1(ext)} ATR ${sd > 0 ? 'above' : 'below'} its 20-EMA. Late entries after a stretched move are where most option buyers lose; wait for a pullback towards ${f0(back)} or a pause.`;
       a.dir = null; a.chase = true;
@@ -333,8 +375,8 @@ function setupFor(a, dir) {
   // pullback entries: the stop goes just beyond the pullback's extreme (structure), not a fixed ATR distance
   if (a.setupType === 'pullback' && a.pb && a.pb.trend === dir) risk = clamp(Math.abs(e - a.pb.pullX) + 0.25 * a.atr, 0.8 * a.atr, 2 * a.atr);
   const q = optQuote(a, a.ch.atm, dir), dl = Math.abs(q.delta || 0.5), P = q.ltp;
-  return { dir, e, sl: e - sd * risk, t1: e + sd * risk * 1.5, t2: e + sd * risk * 2.5, risk, K: a.ch.atm, P,
-    pSL: tick05(Math.max(0.05, P - dl * risk)), pT1: tick05(P + dl * risk * 1.5), delta: q.delta, theta: q.theta };
+  return { dir, e, sl: e - sd * risk, t1: e + sd * risk * ENG.t1R, t2: e + sd * risk * ENG.t2R, risk, K: a.ch.atm, P,
+    pSL: tick05(Math.max(0.05, P - dl * risk)), pT1: tick05(P + dl * risk * ENG.t1R), delta: q.delta, theta: q.theta };
 }
 
 function alertsFor(a, dir) {
@@ -371,10 +413,10 @@ function signalFor(a) {
   if (!a.sessionLive && a.D.marketOpenNow) return { state: 'WAIT', title: "Waiting for today's data", sub: `Market is open, but today's candles haven't arrived from Upstox yet${a.D.todayErr ? ` (${a.D.todayErr})` : ''}. Signals pause instead of using yesterday's chart. They resume as soon as data or live ticks arrive.`, reasons: [], against: [] };
   if (!a.sessionLive) return { state: 'WAIT', title: 'Market closed', sub: `Signals resume 15 minutes after the next open (${hm(SS.o + 15)})`, reasons: [], against: [] };
   if (a.curMin < SS.o + 15) return { state: 'WAIT', title: 'Wait: opening range forming', sub: `No new signals in the first 15 minutes (till ${hm(SS.o + 15)})`, reasons: [], against: [] };
-  if (a.curMin >= SS.c - 30) return { state: 'WAIT', title: 'Wait: too late for new trades', sub: a.isMCX ? 'Last 30 minutes of the MCX session: new positions are risky.' : 'New positions after 3:00 are risky. Open positions square off at 3:20.', reasons: [], against: [] };
+  if (a.curMin >= SS.c - (a.isMCX || a.hz === 'long' || SS.special ? 30 : ENG.lastEntryMin)) return { state: 'WAIT', title: 'Wait: too late for new trades', sub: a.isMCX ? 'Last 30 minutes of the MCX session: new positions are risky.' : a.hz === 'long' ? 'New positions after 3:00 are risky.' : SS.special ? 'Last 30 minutes of the special session: new positions are risky.' : `No new intraday trades after ${hm(SS.c - ENG.lastEntryMin)}: in backtests the last hour's entries lost money. Open positions square off at 3:20.`, reasons: [], against: [] };
   const s = a.score;
   let state = a.dir || 'WAIT';
-  if (state === 'WAIT') return { state, title: a.gate ? (/but price is/.test(a.gate) ? 'Wait: price and context disagree' : /Range-bound|Flat/.test(a.gate) ? 'Wait: no trend right now' : /Confirming/.test(a.gate) ? 'Wait: confirming new direction' : /^Extended/.test(a.gate) ? "Wait: don't chase" : /^Pullback in/.test(a.gate) ? 'Wait: pullback, not a reversal' : 'Wait: trend tools not aligned') : 'Wait: no clear setup', sub: a.gate || `Score ${s}: signals are mixed. Waiting is a position too.`, reasons: [...pro(1).slice(0, 2), ...pro(-1).slice(0, 2)], against: [] };
+  if (state === 'WAIT') return { state, title: a.trendDir && !a.dir ? `${a.trendDir === 'CE' ? '▲ CALL' : '▼ PUT'} trend: wait for 1-min entry` : a.gate ? (/signal failed|last .* signal failed/i.test(a.gate) ? 'Wait: last signal failed' : /daily trend/.test(a.gate) ? `Wait: ${a.blocked === 'CE' ? 'CALL' : a.blocked === 'PE' ? 'PUT' : 'trade'} against the daily trend` : /but price is/.test(a.gate) ? 'Wait: price and context disagree' : /Range-bound|Flat/.test(a.gate) ? 'Wait: no trend right now' : /Confirming/.test(a.gate) ? 'Wait: confirming new direction' : /^Extended/.test(a.gate) ? "Wait: don't chase" : /^Pullback in/.test(a.gate) ? 'Wait: pullback, not a reversal' : 'Wait: trend tools not aligned') : 'Wait: no clear setup', sub: a.gate || `Score ${s}: signals are mixed. Waiting is a position too.`, reasons: [...pro(1).slice(0, 2), ...pro(-1).slice(0, 2)], against: [] };
   const d = state === 'CE' ? 1 : -1, strength0 = d === 1 ? s : 100 - s, coreFor = d === 1 ? a.coreUp : a.coreDn;
   let strength = a.hz && a.hz !== 'intra' ? a.hzStrength || 'mild' : strength0 >= 70 && coreFor >= 4 && ok(a.adx) && a.adx >= 25 ? 'strong' : 'mild';
   const caveats = [];
@@ -382,6 +424,7 @@ function signalFor(a) {
   if (coreFor < 4) caveats.push(`${coreFor} of ${a.coreN} trend tools agree`);
   if (a.stD === -d) { strength = 'mild'; caveats.push('Supertrend still points the other way; better to wait for it to flip'); }
   if (a.vix && a.vix.v > 18 && !a.isMCX) caveats.push('High VIX: expensive premiums');
+  if (a.againstDaily) { strength = 'mild'; caveats.push('Against the daily trend: take smaller size (these were right less often in backtests)'); }
   // market structure: a fresh change of character against the setup, a level about to hold against it, a two-sided open
   const X = a.stx;
   if (X && X.state === 'choch' && X.dir === -d) { strength = 'mild'; caveats.push(`5-minute change of character against this setup at ${f0(X.last.lvl)}`); }
@@ -429,7 +472,7 @@ function signalHi(a) {
    "Short: PUT / Long run: CALL" instead of one blurred number. */
 // Which horizon drives the main signal, projection, setup, globe and paper trades (you pick it by tapping a card)
 const HZ_INFO = {
-  short: { name: 'Short-term', tf: '1-minute', horizon: 'next 5–15 minutes', proj: 'Next 15-minute projection', mins: 15 },
+  short: { name: 'Short-term', tf: '1-minute', horizon: 'next 5–15 minutes', proj: 'Next 15-minute projection', mins: 15, bt: 'Backtest: about break-even after costs (9–10 trades a day). Use it to time entries of the Intraday signal, not on its own.' },
   intra: { name: 'Intraday', tf: '5-minute', horizon: 'next 30–90 minutes', proj: 'Next 30-minute projection', mins: 30 },
   long: { name: 'Long run', tf: 'daily', horizon: 'next 3–10 sessions', proj: 'Next 5-session projection', mins: null },
 };
@@ -440,7 +483,7 @@ let HZ = (typeof Store !== 'undefined' && Store.pref('hz', 'intra')) || 'intra';
    - an EXISTING direction is kept while the score still leans its way (hysteresis) and the other side
      doesn't own the core trend tools, so it doesn't flicker to WAIT on every small wobble. */
 // Replay/backtest runs the engine on a simulated clock with its own memory, so it never touches the live signals
-const SIM = { on: false, t: 0, ns: 'rp:' };
+const SIM = { on: false, t: 0, ns: 'rp:' }, SIGMEM = {};
 const HYS = {}, HYS_CFG = { short: [54, 30], intra: [53, 20], long: [55, 0] };
 function stick(id, hz, h) {
   const [hold, sec0] = HYS_CFG[hz], sec = !SIM.on && typeof Source !== 'undefined' && Source.mode === 'demo' ? sec0 / 15 : sec0;
@@ -471,12 +514,37 @@ function applyHz(a) {
     const r = stick(a.key + ':' + k, k, h); h.dir = r.dir; h.held = !!r.held;
     if (!r.dir) { h.strength = null; if (r.note) h.gate = r.note; } else if (!h.strength || r.held) h.strength = 'mild';
   }
+  // Backtest-proven trade rules (Aug–Nov 2026, Nifty / Bank Nifty / Sensex, 1-minute data):
+  //  1. Trading against the daily trend lost money (37% right) while trading with it made money (48%): block it.
+  //  2. A signal whose price runs 1.5 ATR against it has failed: drop it at once and block that side for 30 minutes
+  //     (re-entries right after a loss were the worst trades). This is what stops "CALL shown while price keeps falling".
+  const nmD = (d) => (d === 'CE' ? (a.cf.opt ? 'CALL' : 'long') : a.cf.opt ? 'PUT' : 'short');
+  const guard = (id, h, atr) => {
+    const mk = (SIM.on ? SIM.ns : '') + id, G = SIGMEM[mk] || (SIGMEM[mk] = { dir: null, e: 0, fail: {} }), now = SIM.on ? SIM.t : Date.now();
+    if (!h.dir) { G.dir = null; return; }
+    const sd = h.dir === 'CE' ? 1 : -1;
+    if (G.fail[h.dir] && now - G.fail[h.dir] < ENG.coolMin * 60000) { h.gate = `The last ${nmD(h.dir)} signal failed (price ran ${ENG.failATR} ATR against it). No new ${nmD(h.dir)} for ${Math.ceil((ENG.coolMin * 60000 - (now - G.fail[h.dir])) / 60000)} min.`; h.dir = null; G.dir = null; return; }
+    if (G.dir !== h.dir) { G.dir = h.dir; G.e = a.price; }
+    if (atr && (G.e - a.price) * sd >= ENG.failATR * atr) {
+      G.fail[h.dir] = now; G.dir = null; if (HYS[mk]) Object.assign(HYS[mk], { dir: null, pend: null });
+      h.gate = `${nmD(h.dir)} signal failed: price moved ${ENG.failATR} ATR against it. Standing aside on that side for ${ENG.coolMin} min.`; h.dir = null;
+    }
+  };
+  const dailyDir = a.long && a.long.dir;
+  const daily = (h) => { if (h.dir && dailyDir && dailyDir !== h.dir) { h.againstDaily = true; if (ENG.dailyFilter === 'soft') return; }
+    if (ENG.dailyFilter === true && h.dir && dailyDir && dailyDir !== h.dir) { h.gate = `Intraday points ${nmD(h.dir)}, but that is against the daily trend (the long-run engine says ${nmD(dailyDir)}). In backtests, trades against the daily trend were right only 37% of the time. Wait.`; h.blocked = h.dir; h.dir = null; } };
+  { const h = { dir: a.dir, gate: a.gate }; daily(h); guard(a.key + ':intra', h, a.atr); a.dir = h.dir; a.gate = h.gate || a.gate; a.blocked = h.blocked || null; }
+  if (a.short) { daily(a.short); guard(a.key + ':short', a.short, a.short.atr * 1.5); if (!a.short.dir) a.short.strength = null; }
+  // 3. Entry timing: the intraday direction is traded only when the 1-minute engine agrees (backtest: same profit as the
+  //    daily-trend block, ~30% more trades, and every index profitable in both test periods). The trend stays visible.
+  a.againstDaily = !!(a.dir && dailyDir && dailyDir !== a.dir);
+  if (ENG.confirm1m && a.dir && a.short && a.short.dir !== a.dir) { a.trendDir = a.dir; a.gate = `Intraday trend is ${nmD(a.dir)}, but the 1-minute is not confirming yet. Enter when it turns ${nmD(a.dir)} (usually after a small dip).`; a.dir = null; }
   a.intra = { score: a.score, dir: a.dir, gate: a.gate, sigs: a.sigs, coreUp: a.coreUp, coreDn: a.coreDn, coreN: a.coreN, atr: a.atr, adx: a.adx, stD: a.stD, paScore: a.paScore, cxScore: a.cxScore, active: a.active };
   a.hz = 'intra'; a.hzWanted = HZ;
   const h = HZ === 'short' ? a.short : HZ === 'long' ? a.long : null;
   if (!h) return a; // not enough data for that horizon yet: intraday stays in charge (shown on screen)
   Object.assign(a, { hz: HZ, score: h.score, dir: h.dir, gate: h.gate, sigs: h.sigs, coreUp: h.up, coreDn: h.dn, coreN: h.coreN, active: h.sigs.filter((x) => x.w > 0).length,
-    adx: h.adx, stD: h.stD, hzStrength: h.strength,
+    adx: h.adx, stD: h.stD, hzStrength: h.strength, blocked: h.blocked || null,
     // risk unit for SL/targets: scalps use the 1-minute ATR, positional uses part of the daily ATR
     atr: HZ === 'short' ? h.atr * 1.5 : h.atr * 0.6 });
   return a;

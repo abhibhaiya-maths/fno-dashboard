@@ -115,7 +115,8 @@ function renderHorizons() {
   const intra = { score: I.score, dir: I.dir, gate: I.gate, strength: I.dir ? (a.hz === 'intra' ? signalFor(a).strength : null) : null, up: I.coreUp, dn: I.coreDn, coreN: I.coreN, reasons: I.dir ? ip.slice(0, 3) : [] };
   const v = hzVerdict(a), info = HZ_INFO[a.hz];
   const fb = a.hzWanted !== a.hz ? ` (${HZ_INFO[a.hzWanted].name} needs more data, so Intraday is used for now)` : '';
-  box.innerHTML = `<div class="hz-basis">Signal below is based on: <b>${info.name}</b>, ${info.tf} candles, ${info.horizon}${fb}. <span class="mut">Tap a card to switch.</span></div><div class="hz-row">${hzCard(a, 'short', 'Short', '1-minute', a.short, 'Next 5–15 min')}${hzCard(a, 'intra', 'Intraday', '5-minute', intra, 'Next 30–90 min')}${hzCard(a, 'long', 'Long run', 'daily', a.long, 'Next 3–10 sessions')}</div><div class="hz-v ${v[0]}">${esc(v[1])}</div>`;
+  box.innerHTML = `<div class="hz-basis">Signal below is based on: <b>${info.name}</b>, ${info.tf} candles, ${info.horizon}${fb}. <span class="mut">Tap a card to switch.</span>${info.bt ? `<br><span class="mut">${info.bt}</span>` : ''}
+    <div class="mode-row"><span>Trading mode</span><span class="seg mode-seg">${Object.entries(ENG_MODES).map(([k, M]) => `<button class="${k === ENG_MODE ? 'on' : ''}" onclick="setEngMode('${k}')" title="${esc(M.note)}">${M.name}</button>`).join('')}</span><span class="mut">${esc(ENG_MODES[ENG_MODE].note)}</span></div></div><div class="hz-row">${hzCard(a, 'short', 'Short', '1-minute', a.short, 'Next 5–15 min')}${hzCard(a, 'intra', 'Intraday', '5-minute', intra, 'Next 30–90 min')}${hzCard(a, 'long', 'Long run', 'daily', a.long, 'Next 3–10 sessions')}</div><div class="hz-v ${v[0]}">${esc(v[1])}</div>`;
 }
 function renderSigTab(a) {
   const lb = { 1: ['b', 'Bullish'], 0: ['n', 'Neutral'], '-1': ['s', 'Bearish'] };
@@ -353,7 +354,13 @@ function shortG(n) { const m = GNAME.find(([re]) => re.test(n)); return m ? m[1]
 function renderGlobal() {
   const C = Source.calendar ? Source.calendar() : { items: [] };
   const CK = premarketChecklist(), W = CK.W;
-  let h = `<div class="g-a"><div class="sec" style="margin-top:0">Before you trade: ${CK.good} supportive, ${CK.bad} against</div>` +
+  const MI = macroImpact();
+  let h = `<div class="g-a"><div class="sec" style="margin-top:0">Macro impact on Indian sectors</div><div class="mi-read ${MI.net > 0 ? 'up' : MI.net < 0 ? 'down' : ''}">${esc(MI.read)}</div>` +
+    MI.items.map((o) => `<div class="mi ${o.idx > 0 ? 'ok' : o.idx < 0 ? 'bad' : 'n'}"><b>${esc(o.name)}</b><small>${esc(o.why)}</small>
+      ${o.good.length ? `<div class="mi-l up">Helps: ${o.good.map(([n, t]) => `${esc(n)} <span>(${esc(t)})</span>`).join('; ')}</div>` : ''}
+      ${o.bad.length ? `<div class="mi-l down">Hurts: ${o.bad.map(([n, t]) => `${esc(n)} <span>(${esc(t)})</span>`).join('; ')}</div>` : ''}
+      ${o.mineGood.length || o.mineBad.length ? `<div class="mi-me">In your watchlist: ${[...o.mineGood.map((x) => `<span class="up">${esc(x)} ▲</span>`), ...o.mineBad.map((x) => `<span class="down">${esc(x)} ▼</span>`)].join(', ')}</div>` : ''}</div>`).join('') +
+    `<div class="sec">Before you trade: ${CK.good} supportive, ${CK.bad} against</div>` +
     CK.items.map((x) => `<div class="ck ${x.st}"><div><b>${esc(x.t)}</b><span>${esc(x.v)}</span></div><small>${esc(x.m)}</small></div>`).join('') +
     '<div class="legend">Green = supportive for Nifty, red = against, grey = neutral. A professional checks these before the first trade; none of them decides the day alone.</div>';
   h += '</div><div class="g-b"><div class="sec" style="margin-top:0">World markets and what they mean for India</div>';
@@ -523,6 +530,10 @@ function stxRows(a) {
     if (F && F.ready) rows.push(['OI flow', F.bias >= 0.3 ? 'up' : F.bias <= -0.3 ? 'dn' : 'n', F.read, F.notes.length ? F.notes[0][2] : `Call OI near the money ${sgn(F.ce15)}${f1(F.ce15 / 1e5)}L, put OI ${sgn(F.pe15)}${f1(F.pe15 / 1e5)}L in 15 minutes.`]);
     else if (a.sessionLive) rows.push(['OI flow', 'n', 'Building live OI history', `${F ? F.mins : 0} of 15 minutes recorded. OI-switch alerts start after that; keep the tab open.`]);
   }
+  try {
+    const MI = macroImpact(), big = MI.items.filter((o) => o.big || o.mineGood.length || o.mineBad.length);
+    if (big.length) rows.push(['Macro', MI.net > 0 ? 'up' : MI.net < 0 ? 'dn' : 'n', big.map((o) => o.name).join(' · '), big.map((o) => `${o.good.length ? 'Helps ' + o.good.map((x) => x[0]).join(', ') : ''}${o.good.length && o.bad.length ? '; ' : ''}${o.bad.length ? 'hurts ' + o.bad.map((x) => x[0]).join(', ') : ''}.`).join(' ')]);
+  } catch (e) { /* world data not loaded yet */ }
   const G = a.gap && a.gap.today;
   if (G && G.side !== 'flat' && G.base && G.base.n >= 5) {
     const b = G.base, up = G.side === 'up';
