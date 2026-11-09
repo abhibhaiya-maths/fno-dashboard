@@ -14,7 +14,7 @@ const LiveSource = (() => {
     const r = await fetch(APP_CONFIG.WORKER_URL.replace(/\/$/, '') + path, { ...opts, headers: { ...(opts.headers || {}), Authorization: 'Bearer ' + t, 'Content-Type': 'application/json' } });
     const j = await r.json().catch(() => ({ error: 'Bad response from Worker (' + r.status + ')' }));
     if (!r.ok) {
-      const e = new Error(j.error || 'HTTP ' + r.status); e.code = j.code; e.status = r.status;
+      const e = new Error(j.error || (j.errors && j.errors[0] && (j.errors[0].message || j.errors[0].errorCode)) || 'HTTP ' + r.status); e.code = j.code; e.status = r.status;
       if (e.code === 'UPSTOX_RATE') rateUntil = Date.now() + 1000 * Math.max(60, j.retryAfter || 90); // Upstox blocked us: pause as long as it asks
       throw e;
     }
@@ -320,7 +320,7 @@ const LiveSource = (() => {
   }
   async function ask(question, context, history) { return api('/api/ask', { method: 'POST', body: JSON.stringify({ question, context, history: history || [] }) }); }
   function connectUrl(idToken) { return APP_CONFIG.WORKER_URL.replace(/\/$/, '') + '/auth/login?id_token=' + encodeURIComponent(idToken); }
-  return { mode: 'live', init, refreshSnapshot, refreshChains, refreshCandles, refreshFut, refreshDaily, refreshNews, refreshResults, refreshGlobal, refreshCalendar, refreshFII, refreshOfficial,
+  return { mode: 'live', raw: (p) => api(p), init, refreshSnapshot, refreshChains, refreshCandles, refreshFut, refreshDaily, refreshNews, refreshResults, refreshGlobal, refreshCalendar, refreshFII, refreshOfficial,
     search, instInfo, get, clock, rateLimited, rateWait: () => Math.max(0, Math.ceil((rateUntil - Date.now()) / 1000)), ask, connectUrl, results: () => resultsData, stream: Stream, drop: (k) => { delete raw[k]; },
     global: () => glob, calendar: () => cal, official: () => off, fiiAuto: () => fii, geo: () => geo, refreshGeo, world: () => world, participant: () => part, refreshWorld, refreshParticipant,
     get status() { return status; }, get error() { return lastErr; }, newsAI: (k) => R(k).newsAI, newsSources: (k) => R(k).sources };

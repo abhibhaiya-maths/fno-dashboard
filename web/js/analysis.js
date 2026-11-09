@@ -391,7 +391,8 @@ function signalFor(a) {
   if (lvA && lvA.near && lvA.verdict === 'hold') { strength = 'mild'; caveats.push(`${lvA.kind} ${f0(lvA.v)} is close and more likely to ${d === 1 ? 'reject' : 'bounce'}`); }
   if (a.oif && a.oif.ready && a.oif.bias * d <= -0.5) caveats.push('Option writers near the money lean the other way');
   if (a.open && a.open.type === 'OA' && a.curMin < a.SS.o + 60) { strength = 'mild'; caveats.push('Two-sided open: range-day odds'); }
-  if (a.open && (a.open.type === 'OD' || a.open.type === 'OTD') && a.open.dir === -d) { strength = 'mild'; caveats.push(`Against today's ${a.open.name}`); }
+  // the opening type only matters early, and only while price is still on the drive's side of VWAP (a reversed day is a reversed day)
+  if (a.open && (a.open.type === 'OD' || a.open.type === 'OTD') && a.open.dir === -d && a.curMin < a.SS.o + 90 && (!ok(a.vw) || (a.price - a.vw) * a.open.dir > 0)) { strength = 'mild'; caveats.push(`Against today's ${a.open.name}`); }
   if (a.vol && a.vol.ivp >= 80) caveats.push(`IV percentile ${a.vol.ivp}: rich premiums`);
   if (a.events && a.events.length) { strength = 'mild'; caveats.push('Event risk: ' + a.events[0].t); }
   if (a.D.geo && /High|Elevated/.test(a.D.geo.level || '')) { strength = 'mild'; caveats.push(`Geopolitical news ${a.D.geo.level.toLowerCase()} (${f1(a.D.geo.ratio)}× normal)`); }
@@ -438,10 +439,13 @@ let HZ = (typeof Store !== 'undefined' && Store.pref('hz', 'intra')) || 'intra';
      and while it confirms the old direction is dropped, so you never see a stale CALL during a fall;
    - an EXISTING direction is kept while the score still leans its way (hysteresis) and the other side
      doesn't own the core trend tools, so it doesn't flicker to WAIT on every small wobble. */
+// Replay/backtest runs the engine on a simulated clock with its own memory, so it never touches the live signals
+const SIM = { on: false, t: 0, ns: 'rp:' };
 const HYS = {}, HYS_CFG = { short: [54, 30], intra: [53, 20], long: [55, 0] };
 function stick(id, hz, h) {
-  const [hold, sec0] = HYS_CFG[hz], sec = typeof Source !== 'undefined' && Source.mode === 'demo' ? sec0 / 15 : sec0;
-  const S = HYS[id] || (HYS[id] = { dir: null, pend: null, since: 0 }), now = Date.now(), raw = h.dir;
+  const [hold, sec0] = HYS_CFG[hz], sec = !SIM.on && typeof Source !== 'undefined' && Source.mode === 'demo' ? sec0 / 15 : sec0;
+  if (SIM.on) id = SIM.ns + id;
+  const S = HYS[id] || (HYS[id] = { dir: null, pend: null, since: 0 }), now = SIM.on ? SIM.t : Date.now(), raw = h.dir;
   const nm = (d) => (d === 'CE' ? 'CALL' : 'PUT');
   if (raw && raw === S.dir) { S.pend = null; return { dir: S.dir }; }
   if (raw && raw !== S.dir) {
