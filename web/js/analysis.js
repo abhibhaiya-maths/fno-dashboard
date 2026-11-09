@@ -2,19 +2,23 @@
 // Session windows, minutes from 09:15 IST: NSE/BSE 09:15–15:30, MCX 09:00–23:30
 const SESS = { NSE: { o: 0, c: 375 }, MCX: { o: -15, c: 870 } };
 // Engine settings (tuned by backtest on real Nifty / Bank Nifty / Sensex data)
-const ENG = { mode: 'v1', enterUp: 58, enterDn: 42, coreNeed: 3, rangeADX: 18, chase: [3, 2, 4], pbBlock: true, v2need: 3.5, v2flip: true, dailyFilter: 'soft', confirm1m: true, failATR: 1.5, coolMin: 30, lastEntryMin: 75, t1R: 1.5, t2R: 2.5, trailR: 1 };
+const ENG = { mode: 'v1', enterUp: 58, enterDn: 42, coreNeed: 3, rangeADX: 18, chase: [3, 2, 4], pbBlock: true, v2need: 3.5, v2flip: true, dailyFilter: 'soft', confirm1m: true, failATR: 1.5, coolMin: 30, lastEntryMin: 0, t1R: 1.5, t2R: 2.5, trailR: 1, cprMax: 0.15, tdMax: 3, itm: 0, exitTwap: false, tstop: 0, oppExit: true };
 // Two trading modes, both backtested on 54 days of Nifty / Bank Nifty / Sensex 1-minute data (costs included)
 const ENG_MODES = {
-  active: { name: 'Active', set: { dailyFilter: 'soft', t1R: 1.5, t2R: 2.5, trailR: 1 },
-    note: 'More trades (about 4–5 a day per index), about 45% right, catches nearly every big move of the day. Backtest profit factor: Nifty 1.39, Sensex 1.15, Bank Nifty 0.97.' },
-  safe: { name: 'Safe', set: { dailyFilter: true, t1R: 2, t2R: 4, trailR: 1.5 },
-    note: 'Fewer trades (about 2 a day per index), only with the daily trend, bigger targets. Highest profit in backtest: profit factor Nifty 1.64, Sensex 1.51, Bank Nifty 1.02.' },
+  graded: { name: 'Graded', set: { itm: 0, mode: 'v1', confirm1m: true, dailyFilter: 'soft', t1R: 1.5, t2R: 2.5, trailR: 1, exitTwap: false, tstop: 0, oppExit: true, lastEntryMin: 0 },
+    note: 'Recommended. Every setup runs side by side from 9:15 to 3:30 and the best one is shown with a grade that sets the size: ★ Prime (trend-day pullback, profitable over a full year: full size), A (intraday signal with the market context behind it: small size), B (context, daily trend or time of day against it: minimum size), S (1-minute scalp with the 5-minute trend: paper or 1 lot). Nothing is blocked by the clock.' },
+  trend: { name: 'Trend-Day', set: { itm: 2, mode: 'trend', confirm1m: false, dailyFilter: false, t1R: 2, t2R: 99, trailR: 1, exitTwap: true, tstop: 20, oppExit: false, lastEntryMin: 30 },
+    note: 'Only the ★ Prime setup, nothing else. Trades only on narrow-CPR (trend) days: pullback entries, exit on a TWAP break, a 20-minute time stop, the stop or the trail. 1-year backtest after costs: profitable in both half-years on Nifty and Sensex with futures (profit factor ~1.25) and slightly with 2-strike in-the-money options (~1.1); ATM options lose. About 1 trade a day per index. Bank Nifty is off (it lost money).' },
+  active: { name: 'Active', set: { itm: 0, mode: 'v1', confirm1m: true, dailyFilter: 'soft', t1R: 1.5, t2R: 2.5, trailR: 1, exitTwap: false, tstop: 0, oppExit: true, lastEntryMin: 0 },
+    note: 'For practice and reading the market only. Many signals (4–5 a day), but over 1 year it was break-even before option costs (profit factor 0.95–1.05) and loses money after them.' },
+  safe: { name: 'Safe', set: { itm: 0, mode: 'v1', confirm1m: true, dailyFilter: true, t1R: 2, t2R: 4, trailR: 1.5, exitTwap: false, tstop: 0, oppExit: true, lastEntryMin: 0 },
+    note: 'Only with the daily trend, bigger targets. Good on the 54-day test, but not proven over a full year. Use for practice.' },
 };
-let ENG_MODE = 'active';
+let ENG_MODE = 'graded';
 function setEngMode(m, quiet) {
   if (!ENG_MODES[m]) return; ENG_MODE = m; Object.assign(ENG, ENG_MODES[m].set);
   for (const id in SIGMEM) if (!id.startsWith(SIM.ns)) delete SIGMEM[id];
-  if (!quiet) { try { Store.setPref('engMode', m); } catch (e) { /* ignore */ } if (typeof refreshAll === 'function') refreshAll(); if (typeof toast === 'function') toast(`${ENG_MODES[m].name} mode: ${ENG_MODES[m].note}`); }
+  if (!quiet) { try { Store.setPref('engMode3', m); } catch (e) { /* ignore */ } if (typeof refreshAll === 'function') refreshAll(); if (typeof toast === 'function') toast(`${ENG_MODES[m].name} mode: ${ENG_MODES[m].note}`); }
 }
 // Special sessions on non-working days (Diwali Muhurat etc.). Minutes counted from 09:15 IST. Add a line here for future ones.
 const SPECIAL_SESS = {
@@ -268,6 +272,9 @@ function analyze(D) {
   try { refine(A0); } catch (e) { A0.pb = null; }
   try { studyAll(A0); } catch (e) { console.warn('structure', e); }
   if (ENG.mode === 'v2') { try { decideV2(A0); } catch (e) { console.warn('v2', e); } }
+  if (ENG.mode === 'trend') { try { decideTD(A0); } catch (e) { console.warn('trend', e); } }
+  try { A0.tdi = tdRead(A0); } catch (e) { A0.tdi = null; }
+  try { A0.brain = typeof brainOf === 'function' ? brainOf(A0) : null; } catch (e) { console.warn('brain', e); A0.brain = null; }
   return A0;
 }
 
@@ -300,6 +307,60 @@ function pullbackOf(a) {
 }
 /* v2: price-led direction. The 5-minute swing structure (closes beyond swings), VWAP side, fast EMAs, Supertrend and
    30-minute momentum vote; the slower score only grades strength. Flips as soon as structure breaks and VWAP is lost. */
+/* Trend-Day mode: the one setup that stayed profitable over a full year of Nifty and Sensex 1-minute data after
+   realistic costs (in-the-money option or futures, slippage, a human's reaction time):
+   only on narrow-CPR days, enter a pullback to the 5-minute 20-EMA when the trend state (above TWAP, Supertrend up,
+   EMA 9 above EMA 20) resumes; exit on a TWAP break, a 20-minute time stop, the stop or the trail. */
+function decideTD(a) {
+  a.td = { on: true };
+  if (!a.sessionLive) { a.dir = null; a.gate = 'Market closed. Trend-Day mode checks the CPR and trend at the next open.'; return; }
+  const K = a.I5.k, closedNow = (a.curMin + 1) % 5 === 0, i = closedNow ? K.length - 1 : K.length - 2;
+  const cprW = (Math.abs(a.tc - a.bc) / a.price) * 100, nm = (d) => (d > 0 ? (a.cf.opt ? 'CALL' : 'long') : a.cf.opt ? 'PUT' : 'short');
+  a.td.cpr = cprW; a.td.trendDay = cprW < ENG.cprMax;
+  if (/BANK/.test(a.key)) { a.gate = 'Trend-Day mode is off for Bank Nifty: the same rules lost money on it over the past year. Use Nifty or Sensex, or switch mode to practise.'; a.td.reason = 'bank'; return; }
+  a.dir = null; a.setupType = 'trend';
+  if (i < 2 || K[i].d !== 2) { a.gate = 'Trend-Day mode: waiting for the first 5-minute bars.'; return; }
+  const e9 = a.I5.ema9, e20 = a.I5.ema20, tw = a.I5.vwap, st = a.I5.st.dir, at = a.I5.atr;
+  const S = (j) => (K[j].c > tw[j] && st[j] > 0 && e9[j] > e20[j] ? 1 : K[j].c < tw[j] && st[j] < 0 && e9[j] < e20[j] ? -1 : 0);
+  const s = S(i); a.td.state = s;
+  if (!a.td.trendDay) { a.gate = `Not a trend day: yesterday's CPR is ${f2(cprW)}% wide (needs under ${ENG.cprMax}%). On wide-CPR days, trend trades lost money over the past year after costs. No trades today in Trend-Day mode.`; a.td.reason = 'cpr'; return; }
+  const ix = Math.floor(K[i].m / 5);
+  if (ix < 6) { a.gate = 'Trend day (narrow CPR). Entries start after 09:45.'; return; }
+  if (!s) { a.gate = `Trend day (CPR ${f2(cprW)}%), but price, TWAP, Supertrend and EMAs don't agree yet. Wait.`; return; }
+  const trig = (j) => { const sj = S(j); if (!sj || K[j].d !== 2 || Math.floor(K[j].m / 5) < 6) return 0; const x = K[j], p = K[j - 1];
+    const touched = sj > 0 ? p.l <= e20[j - 1] + 0.2 * at[j] : p.h >= e20[j - 1] - 0.2 * at[j];
+    return touched && (sj > 0 ? x.c > p.h : x.c < p.l) ? sj : 0; };
+  // at most ENG.tdMax entries a day (the backtest allowed 3): count earlier triggers today
+  let nTrig = 0; for (let j = 2; j < i; j++) if (K[j].d === 2 && trig(j)) nTrig++;
+  a.td.bar = K[i].m;
+  if (trig(i) && nTrig >= ENG.tdMax) { a.gate = `Trend day: ${ENG.tdMax} entries already today. The backtest stopped there; more trades added cost, not profit.`; return; }
+  if (trig(i)) { a.dir = s > 0 ? 'CE' : 'PE'; a.setupType = 'pullback'; a.pbNote = `Trend-day ${s > 0 ? 'buy the dip' : 'sell the rally'}: the ${s > 0 ? 'up' : 'down'}trend pulled back to its 5-minute 20-EMA and the last bar closed beyond the previous bar.`; a.td.entry = true; return; }
+  a.trendDir = s > 0 ? 'CE' : 'PE';
+  a.gate = `Trend day, ${s > 0 ? 'uptrend' : 'downtrend'}. Wait for a pullback to the 5-minute 20-EMA (about ${f0(e20[i])}) and a bar that closes back ${s > 0 ? 'above the previous high' : 'below the previous low'}, then ${nm(s)}.`;
+}
+
+/* The same Trend-Day setup, read in every mode without taking over the signal: gives the ★ Prime grade.
+   A trigger counts for 10 minutes after its 5-minute bar closes, while the trend state still holds. */
+function tdRead(a) {
+  const T = { cpr: null, trendDay: false, bank: /BANK/.test(a.key), star: null };
+  if (!a.sessionLive || !a.I5 || !ok(a.tc) || !ok(a.bc) || !a.cf.core && !a.cf.opt) return T;
+  const K = a.I5.k, closedNow = (a.curMin + 1) % 5 === 0, i = closedNow ? K.length - 1 : K.length - 2, SS = a.SS || SESS.NSE;
+  T.cpr = (Math.abs(a.tc - a.bc) / a.price) * 100; T.trendDay = T.cpr < ENG.cprMax;
+  if (i < 2 || K[i].d !== 2) return T;
+  const e9 = a.I5.ema9, e20 = a.I5.ema20, tw = a.I5.vwap, st = a.I5.st.dir, at = a.I5.atr;
+  const S = (j) => (K[j].c > tw[j] && st[j] > 0 && e9[j] > e20[j] ? 1 : K[j].c < tw[j] && st[j] < 0 && e9[j] < e20[j] ? -1 : 0);
+  const trig = (j) => { const sj = S(j); if (!sj || K[j].d !== 2 || Math.floor((K[j].m - SS.o) / 5) < 6 || K[j].m >= SS.c - 30) return 0; const x = K[j], p = K[j - 1];
+    const touched = sj > 0 ? p.l <= e20[j - 1] + 0.2 * at[j] : p.h >= e20[j - 1] - 0.2 * at[j];
+    return touched && (sj > 0 ? x.c > p.h : x.c < p.l) ? sj : 0; };
+  T.state = S(i); T.e20 = e20[i];
+  let n = 0, last = null;
+  for (let j = 2; j <= i; j++) { const t = trig(j); if (t) { n++; last = { j, m: K[j].m, dir: t, n, stop: t > 0 ? Math.min(K[j - 1].l, K[j].l) : Math.max(K[j - 1].h, K[j].h) }; } }
+  T.n = n; T.last = last;
+  if (T.trendDay && !T.bank && last && last.n <= ENG.tdMax && T.state === last.dir && a.curMin - (last.m + 4) <= 10 && (a.price - last.stop) * last.dir > 0)
+    T.star = { dir: last.dir > 0 ? 'CE' : 'PE', m: last.m, stop: last.stop, note: `Trend-day ${last.dir > 0 ? 'buy the dip' : 'sell the rally'}: narrow CPR (${f2(T.cpr)}%), the ${last.dir > 0 ? 'up' : 'down'}trend pulled back to its 5-minute 20-EMA and the ${hm(last.m)} bar closed beyond the previous bar.` };
+  return T;
+}
+
 function decideV2(a) {
   if (!a.sessionLive) return;
   const X = a.stx, c = a.I5.k.map((x) => x.c), L = c.length - 1, e9 = ema(c, 9)[L], e21 = ema(c, 21)[L];
@@ -369,14 +430,19 @@ function optQuote(a, K, type) {
   return { ltp: tick05(b.price), bid: 0, ask: 0, iv, delta: b.delta, theta: b.theta, gamma: b.gamma, vega: b.vega };
 }
 
-function setupFor(a, dir) {
+function setupFor(a, dir, o) {
+  o = o || {};
   const e = a.price, sd = dir === 'CE' ? 1 : -1;
   let risk = 1.5 * a.atr;
   // pullback entries: the stop goes just beyond the pullback's extreme (structure), not a fixed ATR distance
   if (a.setupType === 'pullback' && a.pb && a.pb.trend === dir) risk = clamp(Math.abs(e - a.pb.pullX) + 0.25 * a.atr, 0.8 * a.atr, 2 * a.atr);
-  const q = optQuote(a, a.ch.atm, dir), dl = Math.abs(q.delta || 0.5), P = q.ltp;
-  return { dir, e, sl: e - sd * risk, t1: e + sd * risk * ENG.t1R, t2: e + sd * risk * ENG.t2R, risk, K: a.ch.atm, P,
-    pSL: tick05(Math.max(0.05, P - dl * risk)), pT1: tick05(P + dl * risk * ENG.t1R), delta: q.delta, theta: q.theta };
+  if (ok(o.risk) && o.risk > 0) risk = o.risk;
+  const itm = o.itm != null ? o.itm : ENG.itm, t1R = o.t1R || ENG.t1R, t2R = o.t2R || ENG.t2R;
+  // Trend-Day mode suggests an in-the-money strike: less time decay per point of move (that is what the backtest assumed)
+  const K = itm && ok(a.ch.atm) && a.ch.step ? a.ch.atm - sd * a.ch.step * itm : a.ch.atm;
+  const q = optQuote(a, K, dir), dl = Math.abs(q.delta || 0.5), P = q.ltp;
+  return { dir, e, sl: e - sd * risk, t1: e + sd * risk * t1R, t2: e + sd * risk * t2R, risk, K, P, itm,
+    pSL: tick05(Math.max(0.05, P - dl * risk)), pT1: tick05(P + dl * risk * t1R), delta: q.delta, theta: q.theta };
 }
 
 function alertsFor(a, dir) {
@@ -406,30 +472,61 @@ function alertsFor(a, dir) {
 }
 
 // पेपर ट्रेडिंग का बड़ा सिग्नल: कॉल / पुट / रुको
+// Graded mode: every setup runs side by side from the open to the close; the best one is shown with a grade that sets the size.
+//   ★ Prime = Trend-Day pullback (profitable over a full year of Nifty/Sensex data)   A = intraday signal, context behind it
+//   B = intraday signal against the context, in the opening 15 minutes or late (half size)   S = 1-minute scalp (1 lot, quick exit)
+const GRADE_RANK = { '★': 4, A: 3, B: 2, S: 1 };
+const GRADE_INFO = {
+  '★': { name: 'Prime', size: 'Full size', mul: 1, hi: 'स्टार प्राइम सेटअप', why: 'Trend-day pullback. 1-year backtest: profitable on Nifty and Sensex (profit factor 1.3–1.4 on the index, ~1.2 with futures, ~1.05–1.1 with a 2-strike in-the-money option). About 1 a day on trend days.' },
+  A: { name: 'Grade A', size: 'Small size', mul: 0.5, hi: 'ग्रेड ए, छोटा साइज़', why: 'Intraday signal with the market context behind it. Over a year, intraday signals on their own were about break-even before costs; the Market Brain is meant to lift them. The grade scorecard will show if it does.' },
+  B: { name: 'Grade B', size: 'Minimum size', mul: 0, hi: 'ग्रेड बी, कम से कम साइज़', why: 'Intraday signal, but the context, the daily trend or the time of day disagrees. Minimum size.' },
+  S: { name: 'Scalp', size: 'Paper or 1 lot', mul: 0, hi: 'स्कैल्प, पेपर या एक लॉट', why: '1-minute move with the 5-minute trend. Over a year these lost after costs: practise on paper, or 1 lot with a quick exit.' },
+};
+// which 1-minute moves are worth a scalp: ENG.scalp = 'all' | 'align' (with the 5-minute lean and the VWAP side) | 'trend' (only with the 5-minute trend)
+function scalpOk(a, dir) {
+  const d = dir === 'CE' ? 1 : -1, m = ENG.scalp || 'trend';
+  if (m === 'all') return true;
+  const vw = !ok(a.vw) || (a.price - a.vw) * d > 0, lean = ((a.intra ? a.intra.score : a.score) - 50) * d;
+  if (m === 'align') return vw && lean >= 0;
+  return vw && (a.trendDir === dir || (a.stx && a.stx.trend === d)) && lean >= 5;
+}
+function gradeLots(g) { const L = typeof Paper !== 'undefined' && Paper.opts ? Paper.opts().lots : 1, I = GRADE_INFO[g]; return !I || !I.mul ? 1 : Math.max(1, Math.round(L * I.mul)); }
 function signalFor(a) {
   const pro = (d) => a.sigs.filter((x) => x.w > 0 && x.s * d > 0).sort((x, y) => y.w - x.w);
   const con = (d) => a.sigs.filter((x) => x.w > 0 && x.s * d < 0).sort((x, y) => y.w - x.w);
-  const SS = a.SS || SESS.NSE;
+  const SS = a.SS || SESS.NSE, graded = ENG_MODE === 'graded';
   if (!a.sessionLive && a.D.marketOpenNow) return { state: 'WAIT', title: "Waiting for today's data", sub: `Market is open, but today's candles haven't arrived from Upstox yet${a.D.todayErr ? ` (${a.D.todayErr})` : ''}. Signals pause instead of using yesterday's chart. They resume as soon as data or live ticks arrive.`, reasons: [], against: [] };
-  if (!a.sessionLive) return { state: 'WAIT', title: 'Market closed', sub: `Signals resume 15 minutes after the next open (${hm(SS.o + 15)})`, reasons: [], against: [] };
-  if (a.curMin < SS.o + 15) return { state: 'WAIT', title: 'Wait: opening range forming', sub: `No new signals in the first 15 minutes (till ${hm(SS.o + 15)})`, reasons: [], against: [] };
-  if (a.curMin >= SS.c - (a.isMCX || a.hz === 'long' || SS.special ? 30 : ENG.lastEntryMin)) return { state: 'WAIT', title: 'Wait: too late for new trades', sub: a.isMCX ? 'Last 30 minutes of the MCX session: new positions are risky.' : a.hz === 'long' ? 'New positions after 3:00 are risky.' : SS.special ? 'Last 30 minutes of the special session: new positions are risky.' : `No new intraday trades after ${hm(SS.c - ENG.lastEntryMin)}: in backtests the last hour's entries lost money. Open positions square off at 3:20.`, reasons: [], against: [] };
-  const s = a.score;
-  let state = a.dir || 'WAIT';
-  if (state === 'WAIT') return { state, title: a.trendDir && !a.dir ? `${a.trendDir === 'CE' ? '▲ CALL' : '▼ PUT'} trend: wait for 1-min entry` : a.gate ? (/signal failed|last .* signal failed/i.test(a.gate) ? 'Wait: last signal failed' : /daily trend/.test(a.gate) ? `Wait: ${a.blocked === 'CE' ? 'CALL' : a.blocked === 'PE' ? 'PUT' : 'trade'} against the daily trend` : /but price is/.test(a.gate) ? 'Wait: price and context disagree' : /Range-bound|Flat/.test(a.gate) ? 'Wait: no trend right now' : /Confirming/.test(a.gate) ? 'Wait: confirming new direction' : /^Extended/.test(a.gate) ? "Wait: don't chase" : /^Pullback in/.test(a.gate) ? 'Wait: pullback, not a reversal' : 'Wait: trend tools not aligned') : 'Wait: no clear setup', sub: a.gate || `Score ${s}: signals are mixed. Waiting is a position too.`, reasons: [...pro(1).slice(0, 2), ...pro(-1).slice(0, 2)], against: [] };
+  if (!a.sessionLive) return { state: 'WAIT', title: 'Market closed', sub: `Signals start again at the next open (${hm(SS.o)}).`, reasons: [], against: [] };
+  if (ENG.lastEntryMin && a.curMin >= SS.c - (SS.special ? 30 : ENG.lastEntryMin)) return { state: 'WAIT', title: 'Wait: too late for new trades', sub: `Trend-Day mode takes no new entries after ${hm(SS.c - ENG.lastEntryMin)} (that is how it was backtested). Switch to Graded mode to see every setup till the close.`, reasons: [], against: [] };
+  const s = a.score, early = a.curMin < SS.o + 15, late = a.curMin >= SS.c - (SS.special || a.isMCX ? 30 : 75);
+  let state = a.dir || 'WAIT', src = a.hz === 'short' ? 'scalp' : 'intra';
+  const star = graded && a.hz !== 'short' && a.tdi && a.tdi.star ? a.tdi.star : null;
+  if (star) { state = star.dir; src = 'star'; }
+  else if (graded && state === 'WAIT' && (a.hz || 'intra') === 'intra' && a.short && a.short.dir && scalpOk(a, a.short.dir)) { state = a.short.dir; src = 'scalp'; }
+  if (state === 'WAIT') return { state, title: a.td && a.td.reason === 'cpr' ? 'Wait: not a trend day' : a.td && a.td.reason === 'bank' ? 'Off for Bank Nifty' : a.trendDir && !a.dir ? `${a.trendDir === 'CE' ? '▲ CALL' : '▼ PUT'} trend: wait for ${a.td ? 'pullback' : '1-min'} entry` : a.gate ? (/signal failed|last .* signal failed/i.test(a.gate) ? 'Wait: last signal failed' : /daily trend/.test(a.gate) ? `Wait: ${a.blocked === 'CE' ? 'CALL' : a.blocked === 'PE' ? 'PUT' : 'trade'} against the daily trend` : /but price is/.test(a.gate) ? 'Wait: price and context disagree' : /Range-bound|Flat/.test(a.gate) ? 'Wait: no trend right now' : /Confirming/.test(a.gate) ? 'Wait: confirming new direction' : /^Extended/.test(a.gate) ? "Wait: don't chase" : /^Pullback in/.test(a.gate) ? 'Wait: pullback, not a reversal' : 'Wait: trend tools not aligned') : 'Wait: no clear setup', sub: a.gate || `Score ${s}: signals are mixed. Waiting is a position too.`, reasons: [...pro(1).slice(0, 2), ...pro(-1).slice(0, 2)], against: [] };
   const d = state === 'CE' ? 1 : -1, strength0 = d === 1 ? s : 100 - s, coreFor = d === 1 ? a.coreUp : a.coreDn;
-  let strength = a.hz && a.hz !== 'intra' ? a.hzStrength || 'mild' : strength0 >= 70 && coreFor >= 4 && ok(a.adx) && a.adx >= 25 ? 'strong' : 'mild';
-  const caveats = [];
-  if (ok(a.adx) && a.adx < 20) { strength = 'mild'; caveats.push('ADX below 20: weak trend'); }
-  if (coreFor < 4) caveats.push(`${coreFor} of ${a.coreN} trend tools agree`);
-  if (a.stD === -d) { strength = 'mild'; caveats.push('Supertrend still points the other way; better to wait for it to flip'); }
+  let strength = src === 'star' ? 'strong' : src === 'scalp' && a.hz !== 'short' ? (a.short && a.short.strength) || 'mild' : a.hz && a.hz !== 'intra' ? a.hzStrength || 'mild' : strength0 >= 70 && coreFor >= 4 && ok(a.adx) && a.adx >= 25 ? 'strong' : 'mild';
+  const caveats = [], soft = []; // soft = reasons that push an intraday signal down to grade B
+  const dailyDir = a.long && a.long.dir, against = !!(dailyDir && dailyDir !== state);
+  if (ok(a.adx) && a.adx < 20 && src !== 'star') { strength = 'mild'; caveats.push('ADX below 20: weak trend'); }
+  if (src === 'intra' && coreFor < 4) caveats.push(`${coreFor} of ${a.coreN} trend tools agree`);
+  if (a.stD === -d && src !== 'star') { strength = 'mild'; caveats.push('Supertrend still points the other way'); }
   if (a.vix && a.vix.v > 18 && !a.isMCX) caveats.push('High VIX: expensive premiums');
-  if (a.againstDaily) { strength = 'mild'; caveats.push('Against the daily trend: take smaller size (these were right less often in backtests)'); }
+  if (ENG.mode === 'trend' && /BANK/.test(a.key)) { strength = 'mild'; caveats.push('Bank Nifty: no edge found for this setup in the 1-year backtest. Paper trade only, or tiny size.'); }
+  if (against) { if (src !== 'star') strength = 'mild'; caveats.push('Against the daily trend (right less often in backtests)'); soft.push('against the daily trend'); }
+  if (early) { caveats.push('Opening 15 minutes: price discovery, fake moves are common'); soft.push('opening 15 minutes'); }
+  if (late) { caveats.push(`Late in the session: less time for the move, faster time decay${a.isMCX ? '' : '. Paper trades square off at ' + (APP_CONFIG.PAPER.SQUARE_OFF_TIME || '15:29')}`); soft.push('late in the session'); }
+  // the market context (world cues, heavyweights, breadth, news, FII, OI): never blocks, it grades
+  const br = a.brain;
+  if (br && ok(br.score)) {
+    if (br.score * d <= -25) { caveats.push(`Market Brain ${sgn(br.score)}${br.score} leans the other way (${br.lean})`); soft.push('market context against'); }
+    else if (br.score * d >= 25) caveats.unshift(`Market Brain ${sgn(br.score)}${br.score} agrees (${br.lean})`);
+  }
   // market structure: a fresh change of character against the setup, a level about to hold against it, a two-sided open
   const X = a.stx;
-  if (X && X.state === 'choch' && X.dir === -d) { strength = 'mild'; caveats.push(`5-minute change of character against this setup at ${f0(X.last.lvl)}`); }
+  if (X && X.state === 'choch' && X.dir === -d) { strength = 'mild'; caveats.push(`5-minute change of character against this setup at ${f0(X.last.lvl)}`); soft.push('fresh change of character against'); }
   if (X && X.state === 'testing' && X.trend === d) caveats.push(X.label);
-  else if (X && X.trend === -d && X.state !== 'choch') { strength = 'mild'; caveats.push(`5-minute swing structure points the other way (${X.trend > 0 ? 'up' : 'down'})`); }
+  else if (X && X.trend === -d && X.state !== 'choch' && src !== 'scalp') { strength = 'mild'; caveats.push(`5-minute swing structure points the other way (${X.trend > 0 ? 'up' : 'down'})`); }
   const lvA = a.lvw && (d === 1 ? a.lvw.above : a.lvw.below);
   if (lvA && lvA.near && lvA.verdict === 'hold') { strength = 'mild'; caveats.push(`${lvA.kind} ${f0(lvA.v)} is close and more likely to ${d === 1 ? 'reject' : 'bounce'}`); }
   if (a.oif && a.oif.ready && a.oif.bias * d <= -0.5) caveats.push('Option writers near the money lean the other way');
@@ -439,23 +536,39 @@ function signalFor(a) {
   if (a.vol && a.vol.ivp >= 80) caveats.push(`IV percentile ${a.vol.ivp}: rich premiums`);
   if (a.events && a.events.length) { strength = 'mild'; caveats.push('Event risk: ' + a.events[0].t); }
   if (a.D.geo && /High|Elevated/.test(a.D.geo.level || '')) { strength = 'mild'; caveats.push(`Geopolitical news ${a.D.geo.level.toLowerCase()} (${ok(a.D.geo.ratio) ? f1(a.D.geo.ratio) + '× normal' : 'many risk headlines'})`); }
+  // the setup for each kind of trade: ★ stops beyond the pullback bar with an in-the-money strike; scalps use the 1-minute range
+  const atr = a.intra ? a.intra.atr : a.atr;
+  const setup = src === 'star' ? setupFor(a, state, { risk: clamp(Math.abs(a.price - star.stop) + 0.1 * atr, 0.5 * atr, 2 * atr), itm: 2, t1R: 2, t2R: 3 })
+    : src === 'scalp' && a.hz !== 'short' && a.short ? setupFor(a, state, { risk: a.short.atr * 1.5, itm: 0, t1R: 1.5, t2R: 2.5 }) : setupFor(a, state);
   // costs: wide spreads and targets too small to beat charges
   if (a.cf.opt && a.ch.rows.length) {
-    const st0 = setupFor(a, state), q = optQuote(a, st0.K, state), lot = a.lot || 1;
+    const q = optQuote(a, setup.K, state), lot = a.lot || 1;
     const spread = q.ask > 0 && q.bid > 0 && q.ltp > 0 ? (q.ask - q.bid) / q.ltp : null;
     if (ok(spread) && spread > 0.04) { strength = 'mild'; caveats.push(`Wide bid-ask spread (${f1(spread * 100)}% of premium)`); }
-    const gain = (st0.pT1 - st0.P) * lot, cost = 47.2 + st0.P * lot * 0.00236;
+    const gain = (setup.pT1 - setup.P) * lot, cost = 47.2 + setup.P * lot * 0.00236;
     if (gain > 0 && gain < 3 * cost) { strength = 'mild'; caveats.push(`Target only ₹${f0(gain)}/lot vs ~₹${f0(cost)} charges`); }
   }
-  const St = strength === 'strong' ? 'Strong' : 'Mild';
+  const grade = !graded ? null : src === 'star' ? '★' : src === 'scalp' ? 'S' : soft.length ? 'B' : 'A';
+  const St = strength === 'strong' ? 'Strong' : 'Mild', CALL = a.cf.opt ? 'CALL' : 'long', PUT = a.cf.opt ? 'PUT' : 'short';
+  const base = a.setupType === 'pullback' && src === 'intra' ? (state === 'CE' ? `▲ Buy the dip: ${St} ${CALL}` : `▼ Sell the rally: ${St} ${PUT}`)
+    : a.cf.opt ? (state === 'CE' ? `▲ ${St} CALL setup` : `▼ ${St} PUT setup`) : (state === 'CE' ? `▲ ${St} bullish setup` : `▼ ${St} bearish setup`);
+  const title = src === 'star' ? `★ Prime: ${state === 'CE' ? '▲ Buy the dip, ' + CALL : '▼ Sell the rally, ' + PUT}` : src === 'scalp' && a.hz !== 'short' ? `S · Scalp ${state === 'CE' ? '▲ ' + CALL : '▼ ' + PUT} (1-minute)` : grade ? `${grade} · ${base}` : base;
+  const sh = a.short;
+  const sub = src === 'star' ? `${star.note} Exit on a 5-minute close back through TWAP (${f0(a.vw)}), if it hasn't moved in 20 minutes, or at the stop.`
+    : src === 'scalp' && a.hz !== 'short' ? `The 1-minute engine says ${state === 'CE' ? CALL : PUT} (short score ${sh ? sh.score : '–'}), while the 5-minute picture ${a.trendDir ? 'is ' + (a.trendDir === 'CE' ? 'up' : 'down') + ' but not confirmed' : 'has no clear trend'}. Quick trade: 1 lot, exit within 5–15 minutes or at the stop.`
+    : (a.hz || 'intra') === 'intra' ? `${a.setupType === 'pullback' && a.pbNote ? a.pbNote + ' ' : ''}Score ${s}/100. Price action ${a.paScore ?? '–'}, context ${a.cxScore ?? '–'}. ${coreFor} of ${a.coreN} trend tools and ${pro(d).length} of ${a.active} signals agree.`
+      : `Score ${s}/100 on the ${HZ_INFO[a.hz].tf} engine. ${coreFor} of ${a.coreN} core tools and ${pro(d).length} of ${a.active} signals agree.${a.hz === 'long' ? ' Paper trades still square off at the close (intraday only).' : ''}`;
   return {
-    state, strength, dirScore: strength0, noOpt: !a.cf.opt,
-    title: a.setupType === 'pullback' ? (state === 'CE' ? `▲ Buy the dip: ${St} ${a.cf.opt ? 'CALL' : 'long'}` : `▼ Sell the rally: ${St} ${a.cf.opt ? 'PUT' : 'short'}`)
-      : a.cf.opt ? (state === 'CE' ? `▲ ${St} CALL setup` : `▼ ${St} PUT setup`) : (state === 'CE' ? `▲ ${St} bullish setup` : `▼ ${St} bearish setup`),
-    sub: (a.hz || 'intra') === 'intra' ? `${a.setupType === 'pullback' && a.pbNote ? a.pbNote + ' ' : ''}Score ${s}/100. Price action ${a.paScore ?? '–'}, context ${a.cxScore ?? '–'}. ${coreFor} of ${a.coreN} trend tools and ${pro(d).length} of ${a.active} signals agree.`
-      : `Score ${s}/100 on the ${HZ_INFO[a.hz].tf} engine. ${coreFor} of ${a.coreN} core tools and ${pro(d).length} of ${a.active} signals agree.${a.hz === 'long' ? ' Paper trades still square off at 3:20 (intraday only).' : ''}`,
-    reasons: pro(d).slice(0, 3), against: con(d).slice(0, 2), caveats, setup: setupFor(a, state),
+    state, strength, dirScore: strength0, noOpt: !a.cf.opt, grade, src, gradeWhy: soft, lots: grade ? gradeLots(grade) : null,
+    exitNote: src === 'star' ? `Exit: 5-min close through TWAP ${f0(a.vw)}, no move in 20 min, or the stop` : src === 'scalp' ? 'Exit: within 5–15 minutes, at target 1 or the stop' : null,
+    title, sub, reasons: pro(d).slice(0, 3), against: con(d).slice(0, 2), caveats, setup,
   };
+}
+// every instrument's current best trade, best grade first (for the "other live suggestions" list)
+function bestTrades() {
+  const out = [];
+  for (const k of KEYS) { const a = A[k]; if (!a) continue; let s; try { s = signalFor(a); } catch (e) { continue; } if (s.state === 'CE' || s.state === 'PE') out.push({ k, a, s }); }
+  return out.sort((x, y) => (GRADE_RANK[y.s.grade] || 0) - (GRADE_RANK[x.s.grade] || 0) || y.s.dirScore - x.s.dirScore);
 }
 
 // बोलने के लिए हिंदी (स्क्रीन English में है)
@@ -463,8 +576,9 @@ const HI = { strong: 'मज़बूत', mild: 'हल्का', CE: 'कॉ�
 function signalHi(a) {
   const s = signalFor(a);
   if (s.state === 'WAIT') return `${a.cf.voice}: अभी कोई साफ़ सेटअप नहीं, स्कोर ${a.score}।`;
-  if (s.noOpt) return `${a.cf.voice}: ${s.state === 'CE' ? 'तेज़ी' : 'मंदी'} का ${HI[s.strength]} सेटअप, स्कोर ${a.score}।`;
-  return `${a.cf.voice}: ${HI[s.state]} का ${HI[s.strength]} सेटअप, स्कोर ${a.score}।`;
+  const g = s.grade ? `${GRADE_INFO[s.grade].hi}: ` : '';
+  if (s.noOpt) return `${a.cf.voice}: ${g}${s.state === 'CE' ? 'तेज़ी' : 'मंदी'} का ${HI[s.strength]} सेटअप, स्कोर ${a.score}।`;
+  return `${a.cf.voice}: ${g}${HI[s.state]} का ${HI[s.strength]} सेटअप, स्कोर ${a.score}।`;
 }
 
 /* ===== Three horizons: SHORT (1-minute, next 5–15 min), INTRADAY (5-minute, main engine), LONG RUN (daily, next days) =====
@@ -508,7 +622,7 @@ function stick(id, hz, h) {
 }
 function applyHz(a) {
   if (!a) return a;
-  { const r = stick(a.key + ':intra', 'intra', { dir: a.dir, score: a.score, up: a.coreUp, dn: a.coreDn, coreN: a.coreN }); a.dir = r.dir; if (!r.dir && r.note) a.gate = r.note; a.dirHeld = !!r.held; }
+  if (ENG.mode !== 'trend') { const r = stick(a.key + ':intra', 'intra', { dir: a.dir, score: a.score, up: a.coreUp, dn: a.coreDn, coreN: a.coreN }); a.dir = r.dir; if (!r.dir && r.note) a.gate = r.note; a.dirHeld = !!r.held; }
   for (const k of ['short', 'long']) {
     const h = a[k]; if (!h) continue;
     const r = stick(a.key + ':' + k, k, h); h.dir = r.dir; h.held = !!r.held;
@@ -533,12 +647,12 @@ function applyHz(a) {
   const dailyDir = a.long && a.long.dir;
   const daily = (h) => { if (h.dir && dailyDir && dailyDir !== h.dir) { h.againstDaily = true; if (ENG.dailyFilter === 'soft') return; }
     if (ENG.dailyFilter === true && h.dir && dailyDir && dailyDir !== h.dir) { h.gate = `Intraday points ${nmD(h.dir)}, but that is against the daily trend (the long-run engine says ${nmD(dailyDir)}). In backtests, trades against the daily trend were right only 37% of the time. Wait.`; h.blocked = h.dir; h.dir = null; } };
-  { const h = { dir: a.dir, gate: a.gate }; daily(h); guard(a.key + ':intra', h, a.atr); a.dir = h.dir; a.gate = h.gate || a.gate; a.blocked = h.blocked || null; }
+  if (ENG.mode !== 'trend') { const h = { dir: a.dir, gate: a.gate }; daily(h); guard(a.key + ':intra', h, a.atr); a.dir = h.dir; a.gate = h.gate || a.gate; a.blocked = h.blocked || null; }
   if (a.short) { daily(a.short); guard(a.key + ':short', a.short, a.short.atr * 1.5); if (!a.short.dir) a.short.strength = null; }
   // 3. Entry timing: the intraday direction is traded only when the 1-minute engine agrees (backtest: same profit as the
   //    daily-trend block, ~30% more trades, and every index profitable in both test periods). The trend stays visible.
   a.againstDaily = !!(a.dir && dailyDir && dailyDir !== a.dir);
-  if (ENG.confirm1m && a.dir && a.short && a.short.dir !== a.dir) { a.trendDir = a.dir; a.gate = `Intraday trend is ${nmD(a.dir)}, but the 1-minute is not confirming yet. Enter when it turns ${nmD(a.dir)} (usually after a small dip).`; a.dir = null; }
+  if (ENG.mode !== 'trend' && ENG.confirm1m && a.dir && a.short && a.short.dir !== a.dir) { a.trendDir = a.dir; a.gate = `Intraday trend is ${nmD(a.dir)}, but the 1-minute is not confirming yet. Enter when it turns ${nmD(a.dir)} (usually after a small dip).`; a.dir = null; }
   a.intra = { score: a.score, dir: a.dir, gate: a.gate, sigs: a.sigs, coreUp: a.coreUp, coreDn: a.coreDn, coreN: a.coreN, atr: a.atr, adx: a.adx, stD: a.stD, paScore: a.paScore, cxScore: a.cxScore, active: a.active };
   a.hz = 'intra'; a.hzWanted = HZ;
   const h = HZ === 'short' ? a.short : HZ === 'long' ? a.long : null;

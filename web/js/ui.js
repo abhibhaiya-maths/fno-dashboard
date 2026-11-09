@@ -382,7 +382,7 @@ function renderGlobal() {
   if (Gx) {
     const lc = { High: 'down', Elevated: 'warn', Normal: '', Low: 'up', Easing: 'up', Unknown: 'mut' }[Gx.level] || '';
     h += `</div><div class="g-d"><div class="geo-h"><span class="sec" style="margin:0">Geopolitical risk (${esc(Gx.via || 'GDELT')})</span><span class="geo-lv ${lc}">${esc(Gx.level || '–')}${ok(Gx.ratio) ? ` · ${f1(Gx.ratio)}× 3-day avg` : ''}</span></div>
-      <div class="geo-list">${(Gx.items || []).slice(0, 6).map((n) => `<div class="geo-i ${n.tone || ''}"><span class="mut">${esc(String(n.src || '').replace(/^www\./, ''))}${n.ts ? ' · ' + esc(new Date(n.ts).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' })) : ''}${n.tone === 'risk' ? ' · <span class="down">risk</span>' : n.tone === 'calm' ? ' · <span class="up">easing</span>' : ''}</span>${n.link ? `<a href="${esc(n.link)}" target="_blank" rel="noopener">${esc(n.t)}</a>` : esc(n.t)}</div>`).join('') || '<span class="mut">No major headlines from trusted outlets in the last 12 hours.</span>'}</div>${ok(Gx.esc) ? `<div class="srcline">${Gx.esc} risk headlines, ${Gx.calm} easing headlines</div>` : ''}`;
+      <div class="geo-list">${(Gx.items || []).slice(0, 6).map((n) => `<div class="geo-i ${n.tone || ''}"><span class="mut">${esc(String(n.src || '').replace(/^www\./, ''))}${n.ts ? ' · ' + esc(new Date(n.ts).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' })) : ''}${n.tone === 'risk' ? ' · <span class="down">risk</span>' : n.tone === 'calm' ? ' · <span class="up">easing</span>' : ''}</span>${n.link ? `<a href="${esc(n.link)}" target="_blank" rel="noopener">${esc(n.t)}</a>` : esc(n.t)}</div>`).join('') || '<span class="mut">No major world headlines from trusted outlets in the last 24 hours.</span>'}</div>${ok(Gx.esc) ? `<div class="srcline">${Gx.esc} risk headlines, ${Gx.calm} easing headlines</div>` : ''}`;
   }
   $('globalBody').innerHTML = h + '</div>';
 }
@@ -394,20 +394,21 @@ function prepCanvas(c) { const ctx = c.getContext('2d'), dpr = window.devicePixe
 function drawChart() {
   const a = A[cur]; if (!a) return;
   CI = tf === 5 ? a.I5 : ind(agg(a.D.candles, tf), a.hasVol);
-  const I = CI, k = I.k, n = VIEW[tf], s0 = Math.max(0, k.length - n), view = k.slice(s0);
+  const I = CI, k = I.k, n = ZM.n || VIEW[tf], e = Math.max(Math.min(n, k.length), k.length - ZM.off), s0 = Math.max(0, e - n), view = k.slice(s0, e), live = e >= k.length;
+  const zb = $('zoomLive'); if (zb) zb.style.display = live && !ZM.n ? 'none' : '';
   const { ctx, W, H } = prepCanvas($('chart'));
   const padR = 62, volH = a.hasVol ? H * 0.12 : 0, top = 10, bot = H - volH - 20, pw = W - padR;
   const lines = [];
   if (OV.vwap) lines.push([I.vwap, COL.vwap]); if (OV.ema20) lines.push([I.ema20, COL.ema20]); if (OV.ema50) lines.push([I.ema50, COL.ema50]);
   if (OV.bb) lines.push([I.bb.up, COL.bb], [I.bb.mid, COL.grid], [I.bb.lo, COL.bb]);
   let mx = -Infinity, mn = Infinity; view.forEach((x) => { mx = Math.max(mx, x.h); mn = Math.min(mn, x.l); });
-  const inc = (arr) => { for (let i = s0; i < k.length; i++) if (arr[i] != null) { mx = Math.max(mx, arr[i]); mn = Math.min(mn, arr[i]); } };
+  const inc = (arr) => { for (let i = s0; i < e; i++) if (arr[i] != null) { mx = Math.max(mx, arr[i]); mn = Math.min(mn, arr[i]); } };
   lines.forEach((l) => inc(l[0])); if (OV.st) inc(I.st.st);
   // दाईं तरफ़ अगले 30 मिनट का अनुमान (कोन) दिखाने की जगह
   const PJ = Engine.projection(a), lastC = view[view.length - 1].c, per = PJ.perCandle * Math.sqrt(tf / 5), steps = Math.max(1, Math.round(30 / tf));
   const cone = per * Math.sqrt(steps);
-  mx = Math.max(mx, lastC + cone); mn = Math.min(mn, lastC - cone);
-  if (PJ.dir) { mx = Math.max(mx, PJ.t1, PJ.sl); mn = Math.min(mn, PJ.t1, PJ.sl); }
+  if (live) { mx = Math.max(mx, lastC + cone); mn = Math.min(mn, lastC - cone); }
+  if (PJ.dir && live) { mx = Math.max(mx, PJ.t1, PJ.sl); mn = Math.min(mn, PJ.t1, PJ.sl); }
   const pd = (mx - mn) * 0.05 || 1; mx += pd; mn -= pd;
   const projW = Math.round(pw * 0.15), cpw = pw - projW;
   const y = (v) => top + ((mx - v) / (mx - mn)) * (bot - top), cw = cpw / view.length, X = (i) => i * cw + cw / 2;
@@ -440,10 +441,10 @@ function drawChart() {
   ctx.lineWidth = 1;
   view.forEach((q, i) => { const x = Math.round(X(i)) + 0.5, col = q.c >= q.o ? COL.call : COL.put; ctx.strokeStyle = col; ctx.beginPath(); ctx.moveTo(x, y(q.h)); ctx.lineTo(x, y(q.l)); ctx.stroke(); ctx.fillStyle = col; ctx.fillRect(x - cw * 0.34, y(Math.max(q.o, q.c)), Math.max(1, cw * 0.68), Math.max(1, Math.abs(y(q.o) - y(q.c)))); });
   ctx.lineWidth = 1.6;
-  lines.forEach(([arr, c]) => { ctx.strokeStyle = c; ctx.beginPath(); let s = false; for (let i = s0; i < k.length; i++) { if (arr[i] == null) { s = false; continue; } const x = X(i - s0), yy = y(arr[i]); if (!s) { ctx.moveTo(x, yy); s = true; } else ctx.lineTo(x, yy); } ctx.stroke(); });
-  if (OV.st) { ctx.lineWidth = 2; for (let i = s0 + 1; i < k.length; i++) { if (I.st.st[i] == null || I.st.st[i - 1] == null || I.st.dir[i] !== I.st.dir[i - 1]) continue; ctx.strokeStyle = I.st.dir[i] === 1 ? COL.call : COL.put; ctx.beginPath(); ctx.moveTo(X(i - 1 - s0), y(I.st.st[i - 1])); ctx.lineTo(X(i - s0), y(I.st.st[i])); ctx.stroke(); } }
+  lines.forEach(([arr, c]) => { ctx.strokeStyle = c; ctx.beginPath(); let s = false; for (let i = s0; i < e; i++) { if (arr[i] == null) { s = false; continue; } const x = X(i - s0), yy = y(arr[i]); if (!s) { ctx.moveTo(x, yy); s = true; } else ctx.lineTo(x, yy); } ctx.stroke(); });
+  if (OV.st) { ctx.lineWidth = 2; for (let i = s0 + 1; i < e; i++) { if (I.st.st[i] == null || I.st.st[i - 1] == null || I.st.dir[i] !== I.st.dir[i - 1]) continue; ctx.strokeStyle = I.st.dir[i] === 1 ? COL.call : COL.put; ctx.beginPath(); ctx.moveTo(X(i - 1 - s0), y(I.st.st[i - 1])); ctx.lineTo(X(i - s0), y(I.st.st[i])); ctx.stroke(); } }
   ctx.lineWidth = 1;
-  {
+  if (live) {
     const x0 = X(view.length - 1), x1 = pw - 6, xs = (i) => x0 + ((x1 - x0) * i) / steps;
     const cc = PJ.dir === 'CE' ? '0,245,160' : PJ.dir === 'PE' ? '255,59,107' : '0,229,255';
     ctx.fillStyle = 'rgba(0,229,255,.035)'; ctx.fillRect(cpw + cw / 2, top, pw - cpw - cw / 2, bot - top);
@@ -467,24 +468,32 @@ function drawChart() {
   ctx.strokeStyle = lc; ctx.setLineDash([2, 3]); ctx.beginPath(); ctx.moveTo(0, ly); ctx.lineTo(pw, ly); ctx.stroke(); ctx.setLineDash([]);
   ctx.fillStyle = lc; ctx.fillRect(pw, ly - 10, padR, 20); ctx.fillStyle = '#021018'; ctx.font = '600 ' + FONT; ctx.fillText(f0(lp), pw + 6, ly + 4); ctx.font = FONT;
   ctx.fillStyle = COL.muted; const stp = Math.max(1, Math.ceil(view.length / 6)); for (let i = 0; i < view.length; i += stp) ctx.fillText(hm(view[i].m), X(i) - 14, H - 3);
-  drawSub(I, s0);
+  // crosshair: the candle under the mouse, with its time and OHLC
+  if (ok(ZM.hover) && ZM.hover < cpw) {
+    const i = clamp(Math.floor(ZM.hover / cw), 0, view.length - 1), q = view[i], xx = Math.round(X(i)) + 0.5;
+    ctx.strokeStyle = 'rgba(230,241,255,.35)'; ctx.setLineDash([3, 3]); ctx.beginPath(); ctx.moveTo(xx, top); ctx.lineTo(xx, H - 16); ctx.stroke(); ctx.setLineDash([]);
+    const t = `${a.dayLabels[q.d] || ''} ${hm(q.m)}  O ${f1(q.o)}  H ${f1(q.h)}  L ${f1(q.l)}  C ${f1(q.c)}  ${sgn(q.c - q.o)}${f1(q.c - q.o)}`, tw = ctx.measureText(t).width;
+    ctx.fillStyle = COL.panel; ctx.fillRect(4, top, tw + 12, 18); ctx.fillStyle = q.c >= q.o ? COL.call : COL.put; ctx.fillText(t, 10, top + 13);
+  }
+  drawSub(I, s0, e);
 }
-function drawSub(I, s0) {
-  const { ctx, W, H } = prepCanvas($('sub')), k = I.k, pw = W - 62, n = k.length - s0, cw = (pw - Math.round(pw * 0.15)) / n, X = (i) => i * cw + cw / 2;
-  ctx.font = FONT; const L = k.length - 1; let mn, mx, txt = '', y;
-  const plot = (arr, c, w = 1.5) => { ctx.strokeStyle = c; ctx.lineWidth = w; ctx.beginPath(); let s = false; for (let i = s0; i < k.length; i++) { if (arr[i] == null) { s = false; continue; } const x = X(i - s0), yy = y(arr[i]); if (!s) { ctx.moveTo(x, yy); s = true; } else ctx.lineTo(x, yy); } ctx.stroke(); };
+function drawSub(I, s0, e) {
+  e = e || I.k.length;
+  const { ctx, W, H } = prepCanvas($('sub')), k = I.k, pw = W - 62, n = e - s0, cw = (pw - Math.round(pw * 0.15)) / n, X = (i) => i * cw + cw / 2;
+  ctx.font = FONT; const L = e - 1; let mn, mx, txt = '', y;
+  const plot = (arr, c, w = 1.5) => { ctx.strokeStyle = c; ctx.lineWidth = w; ctx.beginPath(); let s = false; for (let i = s0; i < e; i++) { if (arr[i] == null) { s = false; continue; } const x = X(i - s0), yy = y(arr[i]); if (!s) { ctx.moveTo(x, yy); s = true; } else ctx.lineTo(x, yy); } ctx.stroke(); };
   const hl = (v, c) => { const yy = Math.round(y(v)) + 0.5; ctx.strokeStyle = c; ctx.lineWidth = 1; ctx.setLineDash([3, 4]); ctx.beginPath(); ctx.moveTo(0, yy); ctx.lineTo(pw, yy); ctx.stroke(); ctx.setLineDash([]); ctx.fillStyle = COL.muted; ctx.fillText(String(v), pw + 6, yy + 4); };
   if (sub === 'rsi') {
     mn = 0; mx = 100; y = (v) => 4 + ((mx - v) / (mx - mn)) * (H - 8);
     ctx.fillStyle = 'rgba(0,229,255,.04)'; ctx.fillRect(0, y(70), pw, y(30) - y(70));
     hl(70, COL.put); hl(50, COL.line); hl(30, COL.call); plot(I.rsi, COL.ema20); txt = `RSI (14): ${f1(I.rsi[L])}`;
   } else if (sub === 'macd') {
-    let m = 0; for (let i = s0; i < k.length; i++) [I.macd.line[i], I.macd.sig[i], I.macd.hist[i]].forEach((v) => { if (v != null) m = Math.max(m, Math.abs(v)); });
+    let m = 0; for (let i = s0; i < e; i++) [I.macd.line[i], I.macd.sig[i], I.macd.hist[i]].forEach((v) => { if (v != null) m = Math.max(m, Math.abs(v)); });
     m = m || 1; mn = -m * 1.1; mx = m * 1.1; y = (v) => 4 + ((mx - v) / (mx - mn)) * (H - 8);
-    for (let i = s0; i < k.length; i++) { const v = I.macd.hist[i]; if (v == null) continue; ctx.fillStyle = v >= 0 ? 'rgba(0,245,160,.45)' : 'rgba(255,59,107,.45)'; ctx.fillRect(X(i - s0) - cw * 0.34, Math.min(y(0), y(v)), Math.max(1, cw * 0.68), Math.abs(y(v) - y(0))); }
+    for (let i = s0; i < e; i++) { const v = I.macd.hist[i]; if (v == null) continue; ctx.fillStyle = v >= 0 ? 'rgba(0,245,160,.45)' : 'rgba(255,59,107,.45)'; ctx.fillRect(X(i - s0) - cw * 0.34, Math.min(y(0), y(v)), Math.max(1, cw * 0.68), Math.abs(y(v) - y(0))); }
     hl(0, COL.line); plot(I.macd.line, COL.vwap); plot(I.macd.sig, COL.brass); txt = `MACD ${f2(I.macd.line[L])}, signal ${f2(I.macd.sig[L])}, hist ${f2(I.macd.hist[L])}`;
   } else {
-    mn = 0; mx = 60; for (let i = s0; i < k.length; i++) [I.adx.adx[i], I.adx.pdi[i], I.adx.mdi[i]].forEach((v) => { if (v != null) mx = Math.max(mx, v + 5); });
+    mn = 0; mx = 60; for (let i = s0; i < e; i++) [I.adx.adx[i], I.adx.pdi[i], I.adx.mdi[i]].forEach((v) => { if (v != null) mx = Math.max(mx, v + 5); });
     y = (v) => 4 + ((mx - v) / (mx - mn)) * (H - 8); hl(20, COL.line); plot(I.adx.pdi, COL.call, 1.2); plot(I.adx.mdi, COL.put, 1.2); plot(I.adx.adx, COL.text, 2);
     txt = `ADX ${f1(I.adx.adx[L])}, +DI ${f1(I.adx.pdi[L])}, −DI ${f1(I.adx.mdi[L])}`;
   }
@@ -640,3 +649,82 @@ function premarketChecklist() {
   const good = out.filter((x) => x.st === 'ok').length, bad = out.filter((x) => x.st === 'bad').length;
   return { items: out, good, bad, W };
 }
+
+/* ---------- Market Brain strip, setups side by side, who is moving the index, best trades across the watchlist ---------- */
+const GCLS = (g) => (g === '★' ? 'P' : g || 'n');
+function renderBrain() {
+  const a = A[cur], el = $('brain'); if (!el) return;
+  const B = a && a.brain;
+  if (!B || !ok(B.score)) { el.innerHTML = ''; el.style.display = 'none'; return; }
+  el.style.display = '';
+  const r = (k) => B.rows.find((x) => x.k === k), cl = (s) => (s > 0.15 ? 'up' : s < -0.15 ? 'down' : '');
+  const cell = (k, lbl) => { const x = r(k); return x ? `<div class="bi"><small>${lbl}</small><b class="${cl(x.s)}">${esc(x.val)}</b></div>` : ''; };
+  const D = B.day;
+  el.innerHTML = `<div class="bs ${B.score >= 15 ? 'up' : B.score <= -15 ? 'down' : ''}"><b>${sgn(B.score)}${B.score}</b><small>Market Brain · ${esc(B.lean)}</small></div>
+    ${D ? `<div class="bi" title="${esc(D.why + '. ' + D.tip)}"><small>Day Type</small><b>${esc(D.name)}</b></div>` : ''}
+    ${cell('pull', `Heavyweights On ${esc(a.cf.label)}`)}${cell('breadth', 'Breadth')}${cell('world', 'World Cues')}${cell('news', 'News, 7 Days')}${cell('fii', 'FII Futures')}${cell('oi', 'Option Writers')}`;
+}
+function setupCells(a) {
+  const T = a.tdi || {}, I = a.intra || {}, S = a.short, nm = (d) => (d === 'CE' ? (a.cf.opt ? 'CALL' : 'Long') : a.cf.opt ? 'PUT' : 'Short');
+  const dot = (d) => `<span class="dot ${d === 'CE' ? 'up' : d === 'PE' ? 'dn' : ''}"></span>`;
+  const star = !a.sessionLive ? 'Market closed' : T.bank ? 'Off for Bank Nifty (no edge in backtest)' : T.star ? `${dot(T.star.dir)}${nm(T.star.dir)} fired ${hm(T.star.m)}` : !ok(T.cpr) ? 'Waiting for data' : !T.trendDay ? `Not a trend day (CPR ${f2(T.cpr)}%)` : T.state ? `${dot(T.state > 0 ? 'CE' : 'PE')}Trend ${T.state > 0 ? 'up' : 'down'}: waiting for a pullback to ${f0(T.e20)}` : 'Trend day, no clear trend yet';
+  const intra = I.dir ? `${dot(I.dir)}${nm(I.dir)}, score ${I.score}` : a.trendDir ? `${dot(a.trendDir)}${nm(a.trendDir)} trend, waiting for 1-min` : `Wait (score ${I.score ?? '–'})`;
+  const sc = S && S.dir ? `${dot(S.dir)}${nm(S.dir)}, short score ${S.score}` : `Wait${S ? ` (score ${S.score})` : ''}`;
+  const X = a.stx, st = X ? ({ choch: 'Change of character', bos: 'Break of structure', testing: 'Testing a key swing', pullback: 'Pullback in trend', noise: 'Noise in trend', micro: '1-min turn inside trend', range: 'Range' }[X.state] || X.state) + (X.trend ? (X.trend > 0 ? ' · up' : ' · down') : '') : '–';
+  const L = a.long, lg = L && L.dir ? `${dot(L.dir)}${L.dir === 'CE' ? 'Up' : 'Down'} (score ${L.score})` : L ? `No clear trend (score ${L.score})` : '–';
+  return [['★ Trend-Day pullback', star], ['Intraday 5-min (A / B)', intra], ['Scalp 1-min (S)', sc], ['Structure 5-min', st], ['Daily trend', lg]];
+}
+function renderBrainPanel() {
+  const a = A[cur], el = $('brainBody'); if (!el || !a) return;
+  const B = a.brain;
+  let h = `<div class="eng5">${setupCells(a).map(([k, v]) => `<div class="e5"><small>${k}</small><b>${v}</b></div>`).join('')}</div>`;
+  if (B) {
+    const mv = B.movers || [], mx = Math.max(1, ...mv.map((x) => Math.abs(x.pts)));
+    h += `<div class="bp-grid"><div><div class="sec" style="margin-top:0">Who Is Moving ${esc(a.cf.label)}${B.mapAt ? '' : ' <span class="mut">(top weights)</span>'}</div>${mv.length ? mv.map((x) => `<div class="hvr"><span>${esc(x.n)}</span><span class="hvb"><i class="${x.pts >= 0 ? 'up' : 'dn'}" style="${x.pts >= 0 ? 'left' : 'right'}:50%;width:${(Math.abs(x.pts) / mx) * 50}%"></i></span><b class="${x.pts >= 0 ? 'up' : 'down'}">${sgn(x.pts)}${f1(x.pts)}</b></div>`).join('') : '<div class="mut">Only for Nifty, Bank Nifty and Sensex.</div>'}
+      ${ok(B.up) ? `<div class="mut" style="font-size:12px;margin-top:6px">Breadth ${B.up} up, ${B.dn} down${ok(B.pts) ? `. Members add up to ${sgn(B.pts)}${f0(B.pts)} pts today` : ''}.</div>` : ''}</div>
+      <div><div class="sec" style="margin-top:0">What The Brain Sees (${sgn(B.score)}${B.score})</div>${B.rows.map((r) => `<div class="brow"><span class="bl">${esc(r.label)}</span><span class="bbar"><i class="${r.s >= 0 ? 'up' : 'dn'}" style="${r.s >= 0 ? 'left' : 'right'}:50%;width:${Math.abs(r.s) * 50}%"></i></span><span class="bt" title="${esc(r.txt)}">${esc(r.val)}</span></div><div class="btxt">${esc(r.txt)}</div>`).join('')}
+      ${B.day ? `<div class="alert i" style="margin-top:8px"><b>${esc(B.day.name)}</b> (${esc(B.day.why)}). ${esc(B.day.tip)}</div>` : ''}</div></div>`;
+  }
+  el.innerHTML = h;
+}
+function renderBest() {
+  const el = $('best'); if (!el) return;
+  if (ENG_MODE !== 'graded') { el.parentElement.style.display = 'none'; return; }
+  el.parentElement.style.display = '';
+  const L = bestTrades();
+  if (!L.length) { el.innerHTML = '<div class="mut" style="padding:6px 0">No trade on any instrument right now. Every setup keeps checking each tick.</div>'; return; }
+  el.innerHTML = L.slice(0, 7).map(({ k, a, s }) => `<div class="bq${k === cur ? ' cur' : ''}" onclick="pick('${k}')"><span class="gb g-${GCLS(s.grade)}">${s.grade || ''}</span>
+    <div><b class="${s.state === 'CE' ? 'up' : 'down'}">${s.state === 'CE' ? (a.cf.opt ? 'CALL' : 'LONG') : a.cf.opt ? 'PUT' : 'SHORT'}</b> ${esc(a.cf.label)}${s.setup && a.cf.opt ? ` ${s.setup.K} ${s.state}` : ''}<small>${esc(GRADE_INFO[s.grade] ? GRADE_INFO[s.grade].name + ' · ' + GRADE_INFO[s.grade].size : '')}${s.gradeWhy && s.gradeWhy.length ? ' · ' + esc(s.gradeWhy[0]) : ''}</small></div>
+    ${s.setup && a.cf.opt ? `<button class="btn-ghost bq-go" onclick="event.stopPropagation();Paper.takeBest('${k}')" title="Paper trade ${s.lots} lot">₹${f0(s.setup.P)}</button>` : ''}</div>`).join('');
+}
+
+/* ---------- Chart zoom and pan (like trading apps): wheel or pinch zooms the candles, drag scrolls back in time, double-tap returns to live ---------- */
+const ZM = { n: null, off: 0 };
+function zoomReset() { ZM.n = null; ZM.off = 0; drawChart(); }
+(function chartGestures() {
+  const c = $('chart'); if (!c) return;
+  const bars = () => (CI ? CI.k.length : 0), view = () => ZM.n || VIEW[tf];
+  const cw = () => (c.clientWidth - 62) * 0.85 / view();
+  const clampZ = () => { const N = bars(); ZM.n = clamp(Math.round(view()), 12, Math.max(12, N)); ZM.off = clamp(Math.round(ZM.off), 0, Math.max(0, N - ZM.n)); };
+  const zoomAt = (f, x) => {
+    const n0 = view(), n1 = clamp(n0 * f, 12, Math.max(12, bars()));
+    // keep the candle under the cursor/fingers in place
+    const pw = (c.clientWidth - 62) * 0.85, frac = clamp(x / pw, 0, 1), right = n0 * (1 - frac);
+    ZM.off = ZM.off + right - n1 * (1 - frac); ZM.n = n1; clampZ(); drawChart();
+  };
+  c.addEventListener('wheel', (e) => { e.preventDefault(); const r = c.getBoundingClientRect(); if (Math.abs(e.deltaX) > Math.abs(e.deltaY) && !e.ctrlKey) { ZM.n = view(); ZM.off += e.deltaX / cw() / 3; clampZ(); drawChart(); return; } zoomAt(e.deltaY > 0 ? 1.12 : 1 / 1.12, e.clientX - r.left); }, { passive: false });
+  const P = new Map(); let pinch0 = null, drag = null, lastTap = 0;
+  c.addEventListener('pointerdown', (e) => { c.setPointerCapture(e.pointerId); P.set(e.pointerId, e.clientX); ZM.n = view();
+    if (P.size === 2) { const [x1, x2] = [...P.values()]; pinch0 = { d: Math.abs(x2 - x1) || 1, n: ZM.n, off: ZM.off, mid: (x1 + x2) / 2 - c.getBoundingClientRect().left }; drag = null; }
+    else { drag = { x: e.clientX, off: ZM.off }; const t = Date.now(); if (t - lastTap < 300) zoomReset(); lastTap = t; } });
+  c.addEventListener('pointermove', (e) => {
+    if (P.has(e.pointerId)) P.set(e.pointerId, e.clientX);
+    if (pinch0 && P.size === 2) { const [x1, x2] = [...P.values()], d = Math.abs(x2 - x1) || 1; ZM.n = pinch0.n; ZM.off = pinch0.off; zoomAt(pinch0.d / d, pinch0.mid); return; }
+    if (drag && P.size === 1) { ZM.off = drag.off + (e.clientX - drag.x) / cw(); clampZ(); drawChart(); return; }
+    if (!P.size) { ZM.hover = e.clientX - c.getBoundingClientRect().left; drawChart(); }
+  });
+  const up = (e) => { P.delete(e.pointerId); if (P.size < 2) pinch0 = null; if (!P.size) drag = null; };
+  c.addEventListener('pointerup', up); c.addEventListener('pointercancel', up);
+  c.addEventListener('pointerleave', () => { ZM.hover = null; if (!P.size) drawChart(); });
+  c.addEventListener('dblclick', zoomReset);
+})();

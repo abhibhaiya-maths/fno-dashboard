@@ -263,7 +263,7 @@ function gapDriver(a, T) {
 function openingType(a) {
   const SS = a.SS, t = a.D.candles.filter((x) => x.d === 2), mins = a.curMin - SS.o, at = a.atr;
   if (!t.length || !a.sessionLive && !t.length) return null;
-  if (mins < 10) return { type: 'forming', name: 'Opening forming', note: 'The first minutes are price discovery: overnight orders, stop orders and option hedges all hit at once. Signals stay locked till ' + hm(SS.o + 15) + '.' };
+  if (mins < 10) return { type: 'forming', name: 'Opening forming', note: 'The first minutes are price discovery: overnight orders, stop orders and option hedges all hit at once. Signals in this window are graded B: trade small or wait for ' + hm(SS.o + 15) + '.' };
   const f = t.filter((x) => x.m < SS.o + 30), o = t[0].o;
   let hi = -Infinity, lo = Infinity, iH = 0, iL = 0;
   f.forEach((x, i) => { if (x.h > hi) { hi = x.h; iH = i; } if (x.l < lo) { lo = x.l; iL = i; } });

@@ -1,7 +1,7 @@
 /* ===== शुरुआत और लूप ===== */
 let cur = Store.pref('index', 'NIFTY');
 HZ = Store.pref('hz', 'intra');
-setEngMode(Store.pref('engMode', 'active'), true); // analysis.js loads before store.js, so read the saved horizon here
+setEngMode(Store.pref('engMode3', 'graded'), true); // analysis.js loads before store.js, so read the saved horizon here
 const A = {};
 const DEMO = !APP_CONFIG.WORKER_URL || new URLSearchParams(location.search).has('demo');
 const Source = DEMO ? DemoSource : LiveSource;
@@ -22,7 +22,7 @@ function renderAll() {
   $('orb').style.display = a ? '' : 'none';
   $('below').style.display = a ? '' : 'none';
   if (!a) return;
-  renderControls(); renderHorizons(); renderStx(); renderCues(); renderScore(); renderSetup(); renderLevels(); renderTab(); renderNews(); renderGlobal(); renderOrb(); Engine.renderProjection(); Engine.renderFeed(); Engine.renderTicker(); Engine.renderStatus(); drawChart(); Paper.render();
+  renderControls(); renderHorizons(); renderStx(); renderCues(); renderBrain(); renderBrainPanel(); renderBest(); renderScore(); renderSetup(); renderLevels(); renderTab(); renderNews(); renderGlobal(); renderOrb(); Engine.renderProjection(); Engine.renderFeed(); Engine.renderTicker(); Engine.renderStatus(); drawChart(); Paper.render();
   $('orderDrawer').style.display = a.cf.opt ? '' : 'none';
   if (orderFor !== cur || !$('oStrike').value) { orderFor = cur; Paper.renderOrderForm(); } else Paper.updateEstimate();
 }
@@ -53,7 +53,7 @@ function pick(k) {
   if (!DEMO && CFG[k] && !CFG[k].core) Promise.all([LiveSource.refreshChains(k), LiveSource.refreshFut(k)]).then(refreshAll);
 }
 function setHz(h) { if (!HZ_INFO[h] || HZ === h) return; HZ = h; Store.setPref('hz', h); orderFor = null; refreshAll(); toast(`Signals now on the ${HZ_INFO[h].name} engine (${HZ_INFO[h].tf}, ${HZ_INFO[h].horizon})`); }
-function setTF(t) { tf = t; renderControls(); drawChart(); }
+function setTF(t) { tf = t; ZM.n = null; ZM.off = 0; renderControls(); drawChart(); }
 function togOV(k) { OV[k] = !OV[k]; Store.setPref('overlays', OV); renderControls(); drawChart(); }
 function setSub(k) { sub = k; renderControls(); if (CI) drawSub(CI, Math.max(0, CI.k.length - VIEW[tf])); }
 function setTab(k) { tab = k; renderControls(); renderTab(); }
@@ -118,6 +118,11 @@ async function startLive() {
   const worldLoop = () => { const m = istMin(); LiveSource.refreshWorld().then(refreshAll); setTimeout(worldLoop, m < 60 ? 60000 : 180000); };
   setTimeout(worldLoop, 63000);
   setInterval(() => LiveSource.refreshParticipant().then(refreshAll), 60 * 60000);
+  // Market Brain: index maps every 2 minutes while the market is open (15 when closed), heavyweights' news every 30 minutes
+  const mapLoop = async () => { await LiveSource.refreshMaps(); refreshAll(); setTimeout(mapLoop, anyOpen() ? 120000 : 900000); };
+  setTimeout(mapLoop, 12000);
+  setTimeout(() => LiveSource.refreshHvNews().then(refreshAll), 40000);
+  setInterval(() => LiveSource.refreshHvNews().then(refreshAll), 30 * 60000);
   setInterval(() => LiveSource.refreshGeo().then(refreshAll), 30 * 60000);
   LiveSource.refreshNews().then(refreshAll);
   LiveSource.refreshResults().then(refreshAll);

@@ -67,10 +67,16 @@ const BT = (() => {
         const sd = o.dir === 'CE' ? 1 : -1, fav = sd > 0 ? bar.h : bar.l, adv = sd > 0 ? bar.l : bar.h;
         o.mfe = Math.max(o.mfe, (fav - o.e) * sd); o.mae = Math.max(o.mae, (o.e - adv) * sd);
         let exit = null;
+        // each grade keeps the exits it was designed with: ★ = Trend-Day exits, S = quick scalp exits, A/B = the intraday exits
+        const g = o.grade, td = g === '★' || (!g && ENG.exitTwap), sc = g === 'S';
         if ((adv - o.sl) * sd <= 0) exit = [o.sl, o.sl === o.e ? 'Breakeven stop' : o.trail ? 'Trailing stop' : 'Stop-loss'];
         else if ((fav - o.t2) * sd >= 0) exit = [o.t2, 'Target 2'];
-        else if (m >= 365) exit = [bar.c, '15:20 square-off'];
-        else if (s && (s.state === 'CE' || s.state === 'PE') && s.state !== o.dir && m - o.m >= 5) exit = [bar.c, 'Opposite signal'];
+        else if (m >= 374) exit = [bar.c, 'Square-off'];
+        else if (sc && a && a.short && a.short.dir && a.short.dir !== o.dir && m - o.m >= 2) exit = [bar.c, '1-min turned'];
+        else if (sc && m - o.m >= 15 && (bar.c - o.e) * sd < 0.5 * o.risk) exit = [bar.c, 'Scalp time limit'];
+        else if (!td && !sc && ENG.oppExit !== false && s && (s.state === 'CE' || s.state === 'PE') && s.state !== o.dir && m - o.m >= 5) exit = [bar.c, 'Opposite signal'];
+        else if (td && (m + 1) % 5 === 0 && a && ok(a.vw) && (bar.c - a.vw) * sd < 0) exit = [bar.c, 'TWAP break'];
+        else if (td && (g === '★' ? 20 : ENG.tstop) && m - o.m >= (g === '★' ? 20 : ENG.tstop) && !o.be && (bar.c - o.e) * sd < 0.5 * o.risk) exit = [bar.c, 'Time stop'];
         if (!exit) {
           const gain = (bar.c - o.e) * sd;
           if (gain >= o.risk && !o.be) { o.be = true; o.sl = o.e; }
@@ -78,9 +84,15 @@ const BT = (() => {
         }
         if (exit) { const pts = (exit[0] - o.e) * sd - costOf(o.e); T.trades.push({ ...o, x: exit[0], xm: m, why: exit[1], pts, win: pts > 0 }); T.open = null; }
       }
-      if (!T.open && s && (s.state === 'CE' || s.state === 'PE') && m < 345) {
-        const st = setupFor(a, s.state);
-        T.open = { dir: s.state, strength: s.strength || '', title: s.title, m, e: bar.c, sl: st.sl, t2: st.t2, risk: st.risk, mfe: 0, mae: 0, be: false, trail: false, n: T.trades.length };
+      const starM = s && s.src === 'star' && a.tdi && a.tdi.star ? a.tdi.star.m : null;
+      // a fresh ★ setup replaces a lower-grade trade that is still open (a trader switches to the better setup)
+      if (T.open && starM != null && starM !== T.lastStar && T.open.grade !== '★') { const o = T.open, sd = o.dir === 'CE' ? 1 : -1, pts = (bar.c - o.e) * sd - costOf(o.e); T.trades.push({ ...o, x: bar.c, xm: m, why: 'Switched to ★', pts, win: pts > 0 }); T.open = null; }
+      if (!T.open && s && (s.state === 'CE' || s.state === 'PE') && m < 373 && !(a.td && a.td.bar != null && a.td.bar === T.lastBar) && !(starM != null && starM === T.lastStar)) {
+        if (a.td) T.lastBar = a.td.bar;
+        if (starM != null) T.lastStar = starM;
+        const st = s.setup || setupFor(a, s.state), sd = s.state === 'CE' ? 1 : -1;
+        const t2 = s.grade === '★' ? bar.c + sd * 99 * st.risk : s.grade === 'S' ? bar.c + sd * 1.5 * st.risk : st.t2;
+        T.open = { dir: s.state, strength: s.strength || '', grade: s.grade || null, title: s.title, m, e: bar.c, sl: st.sl, t2, risk: st.risk, mfe: 0, mae: 0, be: false, trail: false, n: T.trades.length };
       }
     };
     return T;
@@ -149,6 +161,6 @@ const BT = (() => {
       exits: t.reduce((o, x) => ((o[x.why] = (o[x.why] || 0) + 1), o), {}) };
   }
 
-  return { INST, COST_PTS, costOf, parse, parseDaily, dates, buildD, step, runDay, summary, resetMemory };
+  return { INST, COST_PTS, costOf, parse, parseDaily, dates, buildD, step, runDay, summary, resetMemory, tradeSim };
 })();
 if (typeof module !== 'undefined') module.exports = BT;

@@ -167,26 +167,13 @@ const Replay = (() => {
     R = { k, date, hz: $r('rpHz').value, bars, i: 0, shown: [], sig: [], last: null, prevSt: 'WAIT', me: null, mine: [], eng: [], engOpen: null, hide: $r('rpHide').checked, ended: false,
       sim: null, pc: (() => { const all = BT.dates(data, k), p = data.inst[k].m1[all[all.indexOf(date) - 1]]; return p[p.length - 1][4]; })() };
     R.sim = engineTrader();
-    // skip the first 15 minutes quickly (engine is locked then anyway)
-    while (R.i < bars.length && bars[R.i][0] < 15) stepOne(true);
+    while (R.i < bars.length && bars[R.i][0] < 1) stepOne(true);
     draw(); side(); if (!paused) play();
   }
   function engineTrader() {
-    // same rules as the backtest: shows where the engine itself would have entered and exited
-    const T = { open: null };
-    T.on = (m, bar, a, s) => {
-      const o = T.open;
-      if (o) {
-        const sd = o.dir === 'CE' ? 1 : -1, adv = sd > 0 ? bar.l : bar.h, fav = sd > 0 ? bar.h : bar.l; let ex = null;
-        if ((adv - o.sl) * sd <= 0) ex = [o.sl, o.be ? 'Trailing/breakeven stop' : 'Stop-loss'];
-        else if ((fav - o.t2) * sd >= 0) ex = [o.t2, 'Target 2'];
-        else if (m >= 365) ex = [bar.c, '15:20 square-off'];
-        else if ((s.state === 'CE' || s.state === 'PE') && s.state !== o.dir && m - o.m >= 5) ex = [bar.c, 'Opposite signal'];
-        if (!ex) { const g = (bar.c - o.e) * sd; if (g >= o.risk) o.be = true; if (o.be) { const tr = bar.c - sd * ENG.trailR * o.risk; if ((tr - o.sl) * sd > 0) o.sl = tr; if ((o.e - o.sl) * sd > 0) o.sl = o.e; } }
-        if (ex) { R.eng.push({ ...o, x: ex[0], xm: m, why: ex[1], pts: (ex[0] - o.e) * sd - BT.costOf(o.e) }); T.open = null; }
-      }
-      if (!T.open && (s.state === 'CE' || s.state === 'PE') && m < 345) { const st = setupFor(a, s.state); T.open = { dir: s.state, strength: s.strength || '', m, e: bar.c, sl: st.sl, t2: st.t2, risk: st.risk, be: false }; }
-    };
+    // exactly the backtest's trader (grade-aware exits), so Replay shows where the engine itself would have entered and exited
+    const T = BT.tradeSim();
+    T.on = (m, bar, a, s) => { const n = T.trades.length; T.onBar(m, bar, a, s); if (T.trades.length > n) R.eng.push(T.trades[T.trades.length - 1]); };
     return T;
   }
   function stepOne(quiet) {

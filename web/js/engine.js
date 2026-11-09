@@ -14,12 +14,12 @@ const Engine = (() => {
     // expected move over the selected horizon: 15 × 1-min, 6 × 5-min, or 5 daily candles
     const hz = a.hz || 'intra', base = (a.intra && a.intra.atr) || a.atr || a.price * 0.001;
     const exp30 = hz === 'short' && a.short ? a.short.atr * Math.sqrt(15) : hz === 'long' && a.long ? a.long.atr * Math.sqrt(5) : base * Math.sqrt(6), atr = base;
-    const dir = a.dir;
+    const sg = signalFor(a), dir = sg.state === 'CE' || sg.state === 'PE' ? sg.state : null;
     // the score is a weighted lean, not a probability: map it to a realistic 15–85% band
     const upP = Math.round(clamp(50 + (a.score - 50) * 0.7, 15, 85));
     const p = { up: upP, dn: 100 - upP, dir, exp30, lo: a.price - exp30, hi: a.price + exp30, perCandle: atr };
     if (dir) {
-      const st = setupFor(a, dir), d = dir === 'CE' ? 1 : -1;
+      const st = sg.setup || setupFor(a, dir), d = dir === 'CE' ? 1 : -1;
       Object.assign(p, { entryLo: a.price - (d === 1 ? 0.25 : 0.1) * atr, entryHi: a.price + (d === 1 ? 0.1 : 0.25) * atr, sl: st.sl, t1: st.t1, t2: st.t2, K: st.K, P: st.P, pSL: st.pSL, pT1: st.pT1, block: d === 1 ? a.res : a.sup });
     }
     return p;
@@ -48,8 +48,9 @@ const Engine = (() => {
       if (p && p.m !== undefined && a.sessionLive !== false) {
         const why = s.reasons && s.reasons.length ? ` ${s.reasons.slice(0, 2).map((x) => SHORT(x.n)).join(' and ')} in favour.` : '';
         if (now.state !== p.state) {
-          if (now.state === 'CE') fire('state', 'call', `${s.strength === 'strong' ? 'Strong' : 'Mild'} CALL setup formed. Score ${a.score}.${why}`, 3);
-          else if (now.state === 'PE') fire('state', 'put', `${s.strength === 'strong' ? 'Strong' : 'Mild'} PUT setup formed. Score ${a.score}.${why}`, 3);
+          const gtx = s.grade ? `${s.grade === '★' ? '★ Prime' : s.grade === 'S' ? 'Scalp' : 'Grade ' + s.grade} ` : '';
+          if (now.state === 'CE') fire('state', 'call', `${gtx}${s.strength === 'strong' ? 'Strong' : 'Mild'} CALL setup formed. Score ${a.score}.${why}`, 3);
+          else if (now.state === 'PE') fire('state', 'put', `${gtx}${s.strength === 'strong' ? 'Strong' : 'Mild'} PUT setup formed. Score ${a.score}.${why}`, 3);
           else if (p.state !== 'WAIT') fire('state', 'warn', `${p.state === 'CE' ? 'CALL' : 'PUT'} setup ended. No clear direction now (score ${a.score}).`, 3);
         }
         if (now.strong !== p.strong && now.strong) fire('strong', now.strong > 0 ? 'call' : 'put', `Score ${a.score}: ${now.strong > 0 ? 'upside' : 'downside'} bias is now strong.`);

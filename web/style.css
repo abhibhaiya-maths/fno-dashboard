@@ -688,3 +688,39 @@ h1,h2,h3,.ph h2,.sec,.sigt,.sig-k,.dirbox,.btn,.btn-solid,.big,.rpbtn,.lnk,.seg 
 .rp-span{font-size:12.5px;color:var(--muted);display:flex;align-items:center;gap:6px}
 .rp-span select,.rp-custom input{background:var(--inset);color:var(--text);border:1px solid var(--line2);border-radius:var(--r-sm);padding:5px 8px;font:13px var(--sans);color-scheme:dark}
 .rp-custom{align-items:center;gap:6px;font-size:12.5px;color:var(--muted)}
+
+/* ===== Market Brain strip, grades, setups side by side, best trades, chart zoom ===== */
+.brain{display:flex;gap:1px;margin:10px 20px 0;background:rgba(139,108,255,.35);border:1px solid rgba(139,108,255,.45);border-radius:var(--r);overflow-x:auto;scrollbar-width:thin}
+.brain>div{flex:1 0 auto;min-width:118px;padding:7px 12px;background:linear-gradient(180deg,rgba(26,20,52,.95),rgba(10,18,32,.95))}
+.brain .bs{flex:0 0 auto;min-width:150px;display:flex;flex-direction:column;justify-content:center}
+.brain .bs b{font-family:var(--disp);font-size:26px;line-height:1;color:var(--text)}.brain .bs.up b{color:var(--call)}.brain .bs.down b{color:var(--put)}
+.brain .bs small{font-size:11.5px;color:var(--muted);margin-top:3px}
+.brain .bi small{display:block;font-size:11px;color:var(--muted);white-space:nowrap}.brain .bi b{font-family:var(--disp);font-size:15px;white-space:nowrap}
+.gline{font-size:12.5px;margin:2px 0 4px;padding:4px 8px;border-radius:var(--r-sm);background:var(--inset);border-left:3px solid var(--wait)}
+.gline.g-P{border-left-color:#FFD24A;background:rgba(255,210,74,.08)}.gline.g-P b{color:#FFD24A}
+.gline.g-A{border-left-color:var(--call)}.gline.g-A b{color:var(--call)}.gline.g-B{border-left-color:var(--warn)}.gline.g-B b{color:var(--warn)}.gline.g-S{border-left-color:var(--cyan)}.gline.g-S b{color:var(--cyan)}
+.gb{display:inline-grid;place-items:center;min-width:26px;height:26px;padding:0 4px;border-radius:7px;font-family:var(--disp);font-weight:700;font-size:15px;background:var(--wait-soft);color:var(--wait)}
+.gb.g-P{background:rgba(255,210,74,.16);color:#FFD24A}.gb.g-A{background:var(--call-soft);color:var(--call)}.gb.g-B{background:var(--warn-soft);color:var(--warn)}.gb.g-S{background:var(--cyan-soft);color:var(--cyan)}
+.tbl .gb{min-width:22px;height:20px;font-size:13px}
+.eng5{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px}
+.e5{border:1px solid var(--line);border-radius:var(--r-sm);padding:7px 9px;background:var(--inset);min-width:0}
+.e5 small{display:block;font-size:11px;color:var(--muted)}.e5 b{font-size:12.5px;font-weight:600;display:block}
+.dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--wait);margin-right:6px;vertical-align:1px}.dot.up{background:var(--call)}.dot.dn{background:var(--put)}
+.bp-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.2fr);gap:18px;margin-top:12px}
+.hvr{display:grid;grid-template-columns:110px 1fr 52px;gap:8px;align-items:center;font-size:12.5px;margin:5px 0}
+.hvr span:first-child{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.hvr b{text-align:right}
+.hvb,.bbar{position:relative;height:8px;border-radius:4px;background:rgba(255,255,255,.06)}
+.hvb i,.bbar i{position:absolute;top:0;bottom:0;border-radius:4px}.hvb i.up,.bbar i.up{background:var(--call)}.hvb i.dn,.bbar i.dn{background:var(--put)}
+.brow{display:grid;grid-template-columns:150px 1fr 110px;gap:8px;align-items:center;font-size:12.5px;margin-top:6px}
+.brow .bt{text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.btxt{font-size:11.5px;color:var(--muted);margin:1px 0 0;line-height:1.35}
+.bq{display:grid;grid-template-columns:30px minmax(0,1fr) auto;gap:10px;align-items:center;padding:8px 4px;border-top:1px solid var(--line);cursor:pointer}
+.bq:first-child{border-top:0}.bq.cur{background:var(--cyan-soft);border-radius:var(--r-sm)}
+.bq small{display:block;font-size:11.5px;color:var(--muted)}.bq-go{padding:4px 10px;font-size:12px}
+.chartwrap{position:relative}
+#chart{touch-action:pan-y;cursor:crosshair}
+.zoom-live{position:absolute;right:70px;top:8px;background:var(--panel-solid);color:var(--cyan);border:1px solid var(--line2);border-radius:var(--r-sm);padding:3px 10px;font-size:12px;cursor:pointer}
+.chart-hint{font-size:11px;color:var(--dim);text-align:right;margin-top:2px}
+@media (max-width:860px){
+  .brain{margin:8px 12px 0}.eng5{grid-template-columns:repeat(2,minmax(0,1fr))}.bp-grid{grid-template-columns:1fr}.brow{grid-template-columns:120px 1fr 90px}
+  .chart-hint{text-align:left}
+}

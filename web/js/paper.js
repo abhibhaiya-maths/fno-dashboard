@@ -64,7 +64,7 @@ const Paper = (() => {
     const q = optQuote(a, K, type), px = buyPx(q), qty = lots * a.lot, ch = charges('BUY', px, qty, a.cf.exch);
     return { px, qty, ch, cost: px * qty + ch.total, q };
   }
-  async function open({ key, K, type, lots, sl, tgt, src }) {
+  async function open({ key, K, type, lots, sl, tgt, src, risk, grade }) {
     const a = A[key];
     if (!ready || !a) return toast('Data is not ready yet');
     if (!a.cf.opt) return toast(`${a.cf.label} has no options on Upstox, so it can't be paper traded here.`);
@@ -72,12 +72,13 @@ const Paper = (() => {
     const e = estimate(key, K, type, lots);
     if (e.cost > acc.cash) return toast(`Not enough cash: need ${rs(e.cost)}, have ${rs(acc.cash)}`);
     const st = setupFor(a, type), dl = Math.abs(e.q.delta || 0.5);
+    if (ok(risk) && risk > 0) st.risk = risk;
     const slv = ok(sl) && sl > 0 && sl < e.px ? sl : tick05(Math.max(0.05, e.px - dl * st.risk));
     const tgv = ok(tgt) && tgt > e.px ? tgt : tick05(e.px + dl * st.risk * ENG.t1R);
     acc.cash -= e.cost;
     const t = { id: uid(), key, label: a.cf.label, K, type, lots, lot: a.lot, qty: e.qty, exch: a.cf.exch, entry: e.px, entryCh: e.ch, sl: slv, sl0: slv, tgt: tgv,
       risk0: e.px - slv, high: e.px, ltp: e.px, status: 'open', openedTs: Date.now(), openedDate: dateKey(), openedMin: a.curMin, openIdx: a.price,
-      score: a.score, st0: a.stD, src: src || 'manual', advice: null, exitSigPx: null, log: [],
+      score: a.score, st0: a.stD, src: src || 'manual', grade: grade || null, advice: null, exitSigPx: null, log: [],
       slMode: opts().slMode, slUser: ok(sl) && sl > 0 && sl < e.px ? slv : null, slAuto: tick05(Math.max(0.05, e.px - dl * st.risk)) };
     t.sl = effSL(t);
     trades.unshift(t);
@@ -104,11 +105,33 @@ const Paper = (() => {
     const d = t.type === 'CE' ? 1 : -1, ds = d === 1 ? a.score : 100 - a.score;
     const R = (t.ltp - t.entry) / (t.risk0 || 1), mh = a.I5.macd.hist[a.I5.k.length - 1];
     const exit = [], book = [], warn = [];
+    if (t.grade === 'S') {
+      // scalps: 1-minute in, 1-minute out. Exit when the 1-minute turns, after 15 minutes without progress, or at square-off
+      const held = a.curMin - t.openedMin;
+      if (a.short && a.short.dir === (d === 1 ? 'PE' : 'CE') && held >= 2) exit.push('1-minute turned against the scalp');
+      if (held >= 15 && R < 0.5) exit.push(`Scalp time limit: ${held} min without a real move`);
+      if (a.curMin >= a.SS.c - 10) exit.push('Square-off time');
+      if (R >= 1.5) book.push(`Scalp target reached (${R.toFixed(1)}R)`);
+      const mk1 = (state, why) => ({ state, title: ADV[state][0], hi: ADV[state][1], why, ds, R });
+      return exit.length ? mk1('EXIT', exit) : book.length ? mk1('BOOK', book) : mk1('HOLD', ['Scalp running: 1-minute still with you']);
+    }
+    if (ENG.mode === 'trend' || t.grade === '★') {
+      // Trend-Day mode uses exactly the exits that were backtested: TWAP break on a closed 5-minute bar, 20-minute time stop, stop/trail
+      const held = a.curMin - t.openedMin, iR = ((a.price - (t.openIdx || a.price)) * d) / (1.5 * a.atr || 1), closed = (a.curMin + 1) % 5 === 0;
+      if (closed && ok(a.vw) && (a.price - a.vw) * d < 0) exit.push(`5-minute bar closed on the wrong side of ${a.hasVol ? 'VWAP' : 'TWAP'} (${f0(a.vw)})`);
+      if (ENG.tstop && held >= ENG.tstop && iR < 0.5 && R < 1) exit.push(`Time stop: ${held} min and the trade has not moved (theta is eating the premium)`);
+      if (a.curMin >= a.SS.c - 10) exit.push('Square-off time');
+      if (ds < 45) warn.push(`Signals weakening (${ds}/100)`);
+      const mk0 = (state, why) => ({ state, title: ADV[state][0], hi: ADV[state][1], why, ds, R });
+      if (exit.length) return mk0('EXIT', exit);
+      return mk0(warn.length ? 'WARN' : 'HOLD', warn.length ? warn : ['Trend-day rules intact: above the stop, right side of TWAP']);
+    }
     if (ds <= 42) exit.push(`Score turned against you (${ds}/100 in your direction)`);
     if (a.stD === -d && t.st0 !== -d) exit.push('Supertrend flipped against you');
     else if (a.stD === -d) warn.push('Supertrend has been against you since entry');
     if ((a.price - a.vw) * d < 0 && ok(mh) && mh * d < 0) exit.push(`Price on the wrong side of ${a.hasVol ? 'VWAP' : 'TWAP'} and MACD reversed`);
-    if (a.curMin >= a.SS.c - 30) exit.push('Last 30 minutes: theta and sudden-swing risk');
+    if (a.curMin >= a.SS.c - 10) exit.push('Last 10 minutes: square-off time');
+    else if (a.curMin >= a.SS.c - 30) warn.push('Last 30 minutes: faster time decay, sudden swings');
     if (R >= 1.5) book.push(`Profit is already ${R.toFixed(1)}R`);
     if (t.tgt && t.ltp >= t.tgt * 0.97) book.push('Right at the target');
     if (R > 0.5 && ((d === 1 && a.rsi > 72) || (d === -1 && a.rsi < 28))) book.push(`RSI ${f1(a.rsi)}: the move may be tiring`);
@@ -125,7 +148,7 @@ const Paper = (() => {
     if (R >= 1 && t.sl < t.entry) warn.push('Profit above 1R: move SL to entry');
     // Signal exits wait a few minutes after entry (your SL protects meanwhile), unless the loss is already 0.5R+
     const held = a.curMin - t.openedMin, minHold = { short: 3, intra: 5, long: 10 }[a.hz || 'intra'];
-    if (exit.length && held < minHold && R > -0.5 && !(a.curMin >= a.SS.c - 30)) {
+    if (exit.length && held < minHold && R > -0.5 && !(a.curMin >= a.SS.c - 10)) {
       warn.unshift(...exit.map((x) => `${x} (signal exits start ${minHold} min after entry; SL protects until then)`)); exit.length = 0;
     }
     const mk = (state, why) => ({ state, title: ADV[state][0], hi: ADV[state][1], why, ds, R });
@@ -209,7 +232,7 @@ const Paper = (() => {
   // Records every Short (1-min) and Intraday (5-min) signal separately, whichever card you are viewing, and checks
   // where price went afterwards: Short after 5 and 15 min, Intraday after 15 and 30 min. The long run is judged over
   // days, so it isn't scored here.
-  const HZC = { short: { chk: [5, 15], tol: 0.5, gap: 10 }, intra: { chk: [15, 30], tol: 0.25, gap: 30 } };
+  const HZC = { short: { chk: [5, 15], tol: 0.5, gap: 10 }, intra: { chk: [15, 30], tol: 0.25, gap: 30 }, star: { chk: [15, 30], tol: 0.25, gap: 30 } };
   const lastHz = {};
   function trackSignals() {
     const dk = dateKey();
@@ -217,17 +240,19 @@ const Paper = (() => {
       const a = A[k]; if (!a) continue;
       const s = signalFor(a), prev = lastState[k];
       lastState[k] = s.state;
-      if ((s.state === 'CE' || s.state === 'PE') && k === cur && prev !== undefined && prev !== s.state) { beep(740); speak('imp', 'sig' + k + s.state, signalHi(a)); }
-      for (const hz of ['intra', 'short']) {
-        const h = hz === 'intra' ? a.intra : a.short; if (!h || !a.sessionLive) continue;
+      if ((s.state === 'CE' || s.state === 'PE') && k === cur && prev !== undefined && prev !== s.state) { if (s.grade !== 'S') beep(740); speak(s.grade === 'S' ? 'all' : 'imp', 'sig' + k + s.state, signalHi(a)); }
+      const starH = { dir: a.tdi && a.tdi.star ? a.tdi.star.dir : null, score: a.intra ? a.intra.score : a.score, atr: a.intra ? a.intra.atr : a.atr };
+      for (const hz of ['intra', 'short', 'star']) {
+        const h = hz === 'intra' ? a.intra : hz === 'short' ? a.short : starH; if (!h || !a.sessionLive) continue;
         const st = h.dir || 'WAIT', pk = k + hz, pv = lastHz[pk]; lastHz[pk] = st;
         if (st === 'WAIT' || pv === undefined) continue;
         const lastSig = signals.find((x) => x.key === k && x.date === dk && (x.hz || 'intra') === hz);
         if (!(pv !== st || !lastSig || a.curMin - lastSig.min >= HZC[hz].gap) || (lastSig && lastSig.min === a.curMin)) continue;
         const ds = st === 'CE' ? h.score : 100 - h.score;
-        const strength = hz === 'short' ? h.strength || 'mild'
+        const grade = hz === 'star' ? '★' : hz === 'short' ? 'S' : s.src === 'intra' && s.state === st && s.grade ? s.grade : 'A';
+        const strength = hz === 'star' ? 'strong' : hz === 'short' ? h.strength || 'mild'
           : ds >= 70 && (st === 'CE' ? h.coreUp : h.coreDn) >= 4 && ok(h.adx) && h.adx >= 25 && !(a.events && a.events.length) ? 'strong' : 'mild';
-        const x = { id: uid(), key: k, hz, dir: st, strength, score: h.score, date: dk, min: a.curMin, price: a.price, atr: h.atr, chk: HZC[hz].chk, ts: Date.now() };
+        const x = { id: uid(), key: k, hz, grade, dir: st, strength, score: h.score, date: dk, min: a.curMin, price: a.price, atr: h.atr, chk: HZC[hz].chk, ts: Date.now() };
         signals.unshift(x); Store.saveSignal(x);
       }
       const today = a.D.candles.filter((c) => c.d === 2);
@@ -262,6 +287,16 @@ const Paper = (() => {
     return { n: cl.length, wins: w.length, pct: cl.length ? Math.round((w.length / cl.length) * 100) : null, net, chg, avgW: w.length ? gw / w.length : null, avgL: l.length ? -gl / l.length : null,
       pf: gl ? gw / gl : null, today, sigFollowN: sigFollow.length, better };
   }
+  // by grade: your closed paper trades (after charges) and the signal record (right after 30 minutes)
+  function gradeStats() {
+    const G = ['★', 'A', 'B', 'S'];
+    return G.map((g) => {
+      const tr = closedTrades().filter((t) => t.grade === g), w = tr.filter((t) => t.net > 0), net = tr.reduce((x, t) => x + t.net, 0);
+      const gw = w.reduce((x, t) => x + t.net, 0), gl = -tr.filter((t) => t.net <= 0).reduce((x, t) => x + t.net, 0);
+      const sg = sigStats(signals.filter((x) => x.grade === g));
+      return { g, n: tr.length, win: tr.length ? Math.round((w.length / tr.length) * 100) : null, net, pf: gl ? gw / gl : null, sig: sg };
+    });
+  }
   const equity = () => acc.cash + openTrades().reduce((s, t) => s + t.ltp * t.qty, 0);
 
   // ===== UI =====
@@ -276,7 +311,7 @@ const Paper = (() => {
   function renderBanner() {
     const a = A[cur], s = signalFor(a), o = opts();
     const cls = s.state === 'CE' ? 'b' : s.state === 'PE' ? 's' : 'n';
-    let h = `<div class="sig ${cls}"><div class="sig-k">${a.cf.label} live signal · ${HZ_INFO[a.hz || 'intra'].name} (${HZ_INFO[a.hz || 'intra'].tf}) · ${Source.clock().label}</div><div class="sigt">${s.title}</div><div class="sigs">${esc(s.sub)}</div>`;
+    let h = `<div class="sig ${cls}"><div class="sig-k">${a.cf.label} live signal · ${HZ_INFO[a.hz || 'intra'].name} (${HZ_INFO[a.hz || 'intra'].tf}) · ${Source.clock().label}</div><div class="sigt">${s.title}</div>${s.grade ? `<div class="gline g-${s.grade === '★' ? 'P' : s.grade}"><b>${GRADE_INFO[s.grade].name}</b> · ${GRADE_INFO[s.grade].size}${a.cf.opt ? ` · ${s.lots} lot` : ''}${s.setup && s.setup.itm ? ` · ${s.setup.itm} strikes in the money` : ''}${s.gradeWhy && s.gradeWhy.length ? ` · <span class="mut">B because: ${esc(s.gradeWhy.join(', '))}</span>` : ''}<div class="mut" style="font-size:11.5px;margin-top:2px">${esc(GRADE_INFO[s.grade].why)}</div></div>` : ''}<div class="sigs">${esc(s.sub)}</div>`;
     if (s.reasons && s.reasons.length) h += `<div class="sigr">${s.reasons.map((x) => `<span class="pill ${x.s > 0 ? 'b' : x.s < 0 ? 's' : 'n'}">✓ ${esc(x.n)}</span>`).join('')}${(s.against || []).map((x) => `<span class="pill s">✗ ${esc(x.n)}</span>`).join('')}</div>`;
     if (s.caveats && s.caveats.length) h += `<div class="alert" style="margin-top:10px">${s.caveats.join('. ')}.</div>`;
     if (s.setup && s.noOpt) {
@@ -284,9 +319,9 @@ const Paper = (() => {
       h += `<div class="lv"><div><small>${s.state === 'CE' ? 'Long' : 'Short'} around</small><b>${f1(st.e)}</b></div><div><small>Stop-loss</small><b class="down">${f1(st.sl)}</b></div><div><small>Target 1 / 2</small><b class="up">${f1(st.t1)} / ${f1(st.t2)}</b></div></div>
         <div class="mut" style="font-size:12px;margin-top:6px">${esc(a.cf.label)} has no option chain on Upstox, so paper trading is off. Levels are for the ${a.isMCX ? 'futures contract' : 'stock price'}.</div>`;
     } else if (s.setup) {
-      const st = s.setup, e = estimate(cur, st.K, st.dir, o.lots);
+      const st = s.setup, L = s.lots || o.lots, e = estimate(cur, st.K, st.dir, L);
       h += `<div class="lv"><div><small>Strike</small><b>${st.K} ${st.dir}</b></div><div><small>Buy price</small><b>${rs(e.px)}</b></div><div><small>SL / target</small><b><span class="down">${f1(st.pSL)}</span> / <span class="up">${f1(st.pT1)}</span></b></div></div>
-        <button class="big ${cls}" onclick="Paper.takeSignal()">Take paper trade: ${o.lots} lot (${e.qty}), total ${rs(e.cost)}</button>`;
+        ${s.exitNote ? `<div class="mut" style="font-size:12px;margin-top:6px">${esc(s.exitNote)}</div>` : ''}<button class="big ${cls}" onclick="Paper.takeSignal()">Take paper trade: ${L} lot (${e.qty}), total ${rs(e.cost)}</button>`;
     }
     const hzR = a.hz === 'short' ? 'short' : 'intra', ss = sigStats(signals.filter((x) => x.key === cur && (x.hz || 'intra') === hzR)), aft = hzR === 'short' ? 15 : 30;
     h += `<div class="sig-foot">${ss.n} ${a.cf.label} ${hzR === 'short' ? 'Short (1-min)' : 'Intraday'} signals so far. ${ss.pct == null ? `No ${aft}-minute results yet.` : `${ss.pct}% were right after ${aft} minutes (${ss.win} of ${ss.dec}).`}</div></div>`;
@@ -339,12 +374,14 @@ const Paper = (() => {
     $('oEst').innerHTML = `Buy price ${rs(e.px)} × ${e.qty} = ${rs(e.px * e.qty)} + charges ${rs(e.ch.total)} = <b>${rs(e.cost)}</b><br><span class="mut">Brokerage ${rs(e.ch.brk)}, transaction ${rs(e.ch.txn)}, stamp ${rs(e.ch.stamp)}, GST ${rs(e.ch.gst)}. STT of 0.15% applies when you sell.</span>`;
   }
   function renderRecord() {
+    const GS = gradeStats();
+    const gTbl = `<div class="sec">Which grade earns? (your paper trades after charges, and signals right after 30 min)</div><div class="tbl" style="margin:6px 0 12px"><table><thead><tr><th class="l">Grade</th><th>Trades</th><th>Won</th><th>Net</th><th>PF</th><th>Signals right</th></tr></thead><tbody>${GS.map((r) => `<tr><td class="l"><span class="gb g-${r.g === '★' ? 'P' : r.g}">${r.g}</span> ${GRADE_INFO[r.g].name}</td><td>${r.n}</td><td>${r.win == null ? '–' : r.win + '%'}</td><td class="${r.net >= 0 ? 'up' : 'down'}">${r.n ? sgn(r.net) + rs(r.net) : '–'}</td><td>${r.pf == null ? '–' : f2(r.pf)}</td><td>${r.sig.pct == null ? '–' : r.sig.pct + '%'} <small class="mut">(${r.sig.dec})</small></td></tr>`).join('')}</tbody></table></div>`;
     const mine = signals.filter((x) => x.key === cur).slice(0, 12), all = sigStats(signals), st = tradeStats();
     const by = (f) => sigStats(signals.filter(f));
     const strong = by(isStrong), weak = by(isMild);
     const pc = (o) => (o.pct == null ? '–' : `${o.pct}%`) + `<br><small>${o.win || 0} of ${o.dec || 0}</small>`;
     const iS = by((x) => (x.hz || 'intra') === 'intra'), sS = by((x) => x.hz === 'short'), iSt = by((x) => (x.hz || 'intra') === 'intra' && isStrong(x)), sSt = by((x) => x.hz === 'short' && isStrong(x));
-    let h = `<div class="sec">Which engine is more accurate? (all instruments)</div><div class="stats" style="margin:6px 0 12px">
+    let h = gTbl + `<div class="sec">Which engine is more accurate? (all instruments)</div><div class="stats" style="margin:6px 0 12px">
       <div><small>Intraday (5-min) right after 30 min</small><b>${pc(iS)}</b></div><div><small>Intraday strong only</small><b>${pc(iSt)}</b></div>
       <div><small>Short (1-min) right after 15 min</small><b>${pc(sS)}</b></div><div><small>Short strong only</small><b>${pc(sSt)}</b></div></div>
       <div class="stats" style="margin-top:0"><div><small>Total signals (all indices)</small><b>${all.n}</b></div><div><small>Right after 30 min</small><b>${all.pct == null ? '–' : all.pct + '%'}</b></div>
@@ -367,7 +404,8 @@ const Paper = (() => {
   }
 
   // ===== Actions =====
-  function takeSignal() { const a = A[cur], s = signalFor(a); if (!s.setup) return; open({ key: cur, K: s.setup.K, type: s.setup.dir, lots: opts().lots, src: 'signal' }); }
+  function takeSignal() { const a = A[cur], s = signalFor(a); if (!s.setup) return; open({ key: cur, K: s.setup.K, type: s.setup.dir, lots: s.lots || opts().lots, src: 'signal', risk: s.setup.risk, grade: s.grade }); }
+  function takeBest(k) { const a = A[k], s = a && signalFor(a); if (!s || !s.setup) return; if (k !== cur) { pick(k); } open({ key: k, K: s.setup.K, type: s.setup.dir, lots: s.lots || opts().lots, src: 'signal', risk: s.setup.risk, grade: s.grade }); }
   function placeManual() {
     const K = +$('oStrike').value, type = $('oType').value, lots = Math.max(1, Math.floor(+$('oLots').value || 1));
     open({ key: cur, K, type, lots, sl: +$('oSL').value || null, tgt: +$('oTgt').value || null, src: 'manual' });
@@ -445,7 +483,7 @@ const Paper = (() => {
     await Store.resetAll(); acc = { cash: c, start: c, created: Date.now() }; trades = []; signals = [];
     await Store.saveAccount(acc); toast('Account reset'); render();
   }
-  return { speak, load, onTick, render, renderOrderForm, updateEstimate, takeSignal, placeManual, closeId, openFromAsk, setSL, setSLMode, setTgt, setOpt, setLots, reset, opts, charges, addFunds, withdraw, resetTo, openFunds, renderFunds, fset,
+  return { speak, load, onTick, render, renderOrderForm, updateEstimate, takeSignal, takeBest, gradeStats, placeManual, closeId, openFromAsk, setSL, setSLMode, setTgt, setOpt, setLots, reset, opts, charges, addFunds, withdraw, resetTo, openFunds, renderFunds, fset,
     get ready() { return ready; }, openTrades };
 })();
 

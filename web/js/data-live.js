@@ -9,7 +9,7 @@ const LiveSource = (() => {
   let rateUntil = 0;
   const rateLimited = () => Date.now() < rateUntil;
   async function api(path, opts = {}) {
-    if (rateLimited() && /\/api\/(snapshot|chain|candles|fut|daily|global|search|inst)/.test(path)) { const e = new Error(`Upstox rate limit: data requests paused, retry in ${Math.ceil((rateUntil - Date.now()) / 1000)} s`); e.code = 'UPSTOX_RATE'; throw e; }
+    if (rateLimited() && /\/api\/(snapshot|chain|candles|fut|daily|global|search|inst|map)/.test(path)) { const e = new Error(`Upstox rate limit: data requests paused, retry in ${Math.ceil((rateUntil - Date.now()) / 1000)} s`); e.code = 'UPSTOX_RATE'; throw e; }
     const t = await Store.idToken();
     const r = await fetch(APP_CONFIG.WORKER_URL.replace(/\/$/, '') + path, { ...opts, headers: { ...(opts.headers || {}), Authorization: 'Bearer ' + t, 'Content-Type': 'application/json' } });
     const j = await r.json().catch(() => ({ error: 'Bad response from Worker (' + r.status + ')' }));
@@ -78,7 +78,7 @@ const LiveSource = (() => {
       const cf = CFG[k];
       try {
         const j = await api(cf.core ? '/api/news?index=' + k : `/api/news?id=${enc(k)}&name=${enc(cf.name || cf.label)}`);
-        R(k).newsAI = j.ai; R(k).sources = j.sources || null;
+        R(k).newsAI = j.ai; R(k).sources = j.sources || null; R(k).newsMem = (j.mem || []).map((n) => ({ t: n.t, s: n.s, imp: n.imp, ts: n.ts, src: n.src }));
         R(k).news = (j.items || []).map((n) => ({ t: n.t, s: n.s, imp: n.imp, link: n.link, src: n.src, ts: n.ts, n: n.n, alsoBy: n.alsoBy, ago: agoText(n.ts) }));
       } catch (e) { cf.core ? fail(e) : soft(e); }
     }));
@@ -89,7 +89,20 @@ const LiveSource = (() => {
   async function refreshGlobal() { try { glob = (await api('/api/global')).items || []; } catch (e) { soft(e); } }
   async function refreshCalendar() { try { cal = await api('/api/calendar'); } catch (e) { soft(e); } }
   async function refreshFII() { try { const j = await api('/api/fiidii'); fii = j.none ? null : j; } catch (e) { soft(e); } }
-  let world = { items: [] }, part = null;
+  let world = { items: [] }, part = null, maps = {}, hvNews = {};
+  // market maps of the three indices (all members: weight, change, points added): feeds the Market Brain
+  async function refreshMaps() {
+    for (const idx of ['NIFTY50', 'BANKNIFTY', 'SENSEX']) { if (rateLimited()) return; try { maps[idx] = await api('/api/map?idx=' + idx); } catch (e) { soft(e); } }
+  }
+  // company news of the biggest index members (top 5 by weight in each index), for the 7-day news pressure
+  async function refreshHvNews() {
+    const want = new Map();
+    Object.values(maps).forEach((M) => (M.items || []).slice().sort((x, y) => y.w - x.w).slice(0, 5).forEach((x) => want.set(x.sym, x.name || x.sym)));
+    for (const [sym, name] of want) {
+      try { const j = await api(`/api/news?id=${enc(sym)}&name=${enc(String(name).replace(/\s+(Ltd|Limited)\.?$/i, ''))}`); hvNews[sym] = (j.items || []).map((n) => ({ t: n.t, s: n.s, imp: n.imp, ts: n.ts, src: n.src })); } catch (e) { soft(e); }
+      await new Promise((r) => setTimeout(r, 1500)); // gentle on the news sources and the AI quota
+    }
+  }
   async function refreshWorld() { try { world = await api('/api/world'); } catch (e) { soft(e); } }
   async function refreshParticipant() { try { const j = await api('/api/participant'); part = j.none ? null : j; } catch (e) { soft(e); } }
   async function refreshGeo() { try { const j = await api('/api/geo'); geo = { ...j, items: (j.items || []).map((n) => ({ ...n, ago: agoText(n.ts) })) }; } catch (e) { soft(e); } }
@@ -305,7 +318,7 @@ const LiveSource = (() => {
     return {
       key, candles, price, prevClose: q && ok(q.prevClose) ? q.prevClose : null, sessionLive, dayLabels: labels, dayDates, chain, marketOpenNow, fromTicks, todayErr: r.todayErr,
       vix: snap.vix, fii: F ? F.fii : null, dii: F ? F.dii : null, fiiSrc: auto ? (auto.stale ? 'NSE, ' + auto.date : 'NSE') : man ? 'manual' : null,
-      hv: cf.core ? (snap.hv && snap.hv[key]) || [] : [], news: r.news,
+      hv: cf.core ? (snap.hv && snap.hv[key]) || [] : [], news: r.news, newsMem: r.newsMem || [],
       fut: r.fut, daily: r.daily, vixDaily, geo, prevOi: dly.length ? dly[dly.length - 1][6] : null, glob, events: cal.items || [],
       mkt: key !== 'NIFTY' && nifty ? { chg: nifty.chg, score: nifty.score } : null,
     };
@@ -322,6 +335,6 @@ const LiveSource = (() => {
   function connectUrl(idToken) { return APP_CONFIG.WORKER_URL.replace(/\/$/, '') + '/auth/login?id_token=' + encodeURIComponent(idToken); }
   return { mode: 'live', raw: (p) => api(p), init, refreshSnapshot, refreshChains, refreshCandles, refreshFut, refreshDaily, refreshNews, refreshResults, refreshGlobal, refreshCalendar, refreshFII, refreshOfficial,
     search, instInfo, get, clock, rateLimited, rateWait: () => Math.max(0, Math.ceil((rateUntil - Date.now()) / 1000)), ask, connectUrl, results: () => resultsData, stream: Stream, drop: (k) => { delete raw[k]; },
-    global: () => glob, calendar: () => cal, official: () => off, fiiAuto: () => fii, geo: () => geo, refreshGeo, world: () => world, participant: () => part, refreshWorld, refreshParticipant,
+    global: () => glob, calendar: () => cal, official: () => off, fiiAuto: () => fii, geo: () => geo, refreshGeo, world: () => world, maps: () => maps, hvNews: () => hvNews, refreshMaps, refreshHvNews, participant: () => part, refreshWorld, refreshParticipant,
     get status() { return status; }, get error() { return lastErr; }, newsAI: (k) => R(k).newsAI, newsSources: (k) => R(k).sources };
 })();

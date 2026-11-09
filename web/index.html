@@ -11,7 +11,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css?v=20261110f">
+<link rel="stylesheet" href="style.css?v=20261110h">
 </head>
 <body>
 
@@ -52,6 +52,7 @@
 </div>
 
 <div class="cues" id="cues" aria-label="World cues"></div>
+<div class="brain" id="brain" aria-label="Market Brain" style="display:none"></div>
 
 <main id="main" style="display:none">
   <div class="col col-main">
@@ -61,9 +62,15 @@
         <div class="seg" id="tfBtns"></div>
       </div>
       <div class="chips" id="ovChips"></div>
-      <canvas id="chart"></canvas>
+      <div class="chartwrap"><canvas id="chart" aria-label="Price chart: scroll or pinch to zoom, drag to move back in time, double-tap to return to live"></canvas><button class="zoom-live" id="zoomLive" onclick="zoomReset()" style="display:none">⟲ Live</button></div>
+      <div class="chart-hint">Scroll or pinch to zoom · drag to go back · double-tap for live</div>
       <div class="subbar"><div class="seg" id="subBtns"></div><span class="subval" id="subVal"></span></div>
       <canvas id="sub"></canvas>
+    </section>
+
+    <section class="panel p-brain">
+      <div class="ph"><h2>All Setups Side By Side</h2><span class="ph-note">Every engine checks every instrument each tick, 9:15–3:30</span></div>
+      <div id="brainBody"></div>
     </section>
 
     <section class="panel p-paper">
@@ -118,6 +125,11 @@
       </div>
       <div class="counts" id="counts"></div>
       <span id="needle" hidden></span>
+    </section>
+
+    <section class="panel p-best">
+      <div class="ph"><h2>Other Live Suggestions</h2><span class="ph-note">All instruments, best grade first</span></div>
+      <div id="best"></div>
     </section>
 
     <section class="panel p-feed">
@@ -184,21 +196,22 @@ For analysis and practice only, not investment advice. No signal is a guarantee.
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
-<script src="js/config.js?v=20261110f"></script>
-<script src="js/indicators.js?v=20261110f"></script>
-<script src="js/analysis.js?v=20261110f"></script>
-<script src="js/structure.js?v=20261110f"></script>
-<script src="js/backtest.js?v=20261110f"></script>
-<script src="js/replay.js?v=20261110f"></script>
-<script src="js/markets.js?v=20261110f"></script>
-<script src="js/store.js?v=20261110f"></script>
-<script src="js/data-demo.js?v=20261110f"></script>
-<script src="js/data-live.js?v=20261110f"></script>
-<script src="js/paper.js?v=20261110f"></script>
-<script src="js/voice.js?v=20261110f"></script>
-<script src="js/ui.js?v=20261110f"></script>
-<script src="js/engine.js?v=20261110f"></script>
-<script src="js/main.js?v=20261110f"></script>
+<script src="js/config.js?v=20261110h"></script>
+<script src="js/indicators.js?v=20261110h"></script>
+<script src="js/analysis.js?v=20261110h"></script>
+<script src="js/structure.js?v=20261110h"></script>
+<script src="js/brain.js?v=20261110h"></script>
+<script src="js/backtest.js?v=20261110h"></script>
+<script src="js/replay.js?v=20261110h"></script>
+<script src="js/markets.js?v=20261110h"></script>
+<script src="js/store.js?v=20261110h"></script>
+<script src="js/data-demo.js?v=20261110h"></script>
+<script src="js/data-live.js?v=20261110h"></script>
+<script src="js/paper.js?v=20261110h"></script>
+<script src="js/voice.js?v=20261110h"></script>
+<script src="js/ui.js?v=20261110h"></script>
+<script src="js/engine.js?v=20261110h"></script>
+<script src="js/main.js?v=20261110h"></script>
 <script>$('pLots').value = Paper.opts().lots;</script>
 </body>
 </html>
