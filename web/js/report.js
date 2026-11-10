@@ -78,7 +78,14 @@ const Report = (() => {
         `Target 1 is about ₹${f0(gain)} per lot against roughly ₹${f0(cost)} of charges.`, 'चार्ज');
       if (ok(a.ch.dte) && a.ch.dte <= 1) add('expiry', 0.75, 'warn', 'Is expiry close?', `Expiry in ${a.ch.dte < 1 ? 'less than a day' : '1 day'}: the premium melts fast if price stalls.`, 'एक्सपायरी');
     }
-    // 12. how this grade has really done for you
+    // 12. today's news for this instrument (from the News Impact page; advice only)
+    const NI = typeof Impact !== 'undefined' && Impact.forInstrument ? Impact.forInstrument(a) : null;
+    if (NI && ok(NI.s)) {
+      const c = NI.s * d;
+      add('news', 1, c >= 0.12 ? 'ok' : c <= -0.25 ? 'bad' : 'warn', 'Is today\'s news with you?',
+        `News leans ${NI.lean} for ${a.cf.label} (${NI.n} stor${NI.n === 1 ? 'y' : 'ies'})${NI.top ? `. Biggest: "${String(NI.top.t).slice(0, 90)}"` : ''}.`, 'आज की ख़बरें');
+    }
+    // 13. how this grade has really done for you
     if (s.grade && typeof Paper !== 'undefined' && Paper.gradeStats) {
       const g = Paper.gradeStats().find((x) => x.g === s.grade), n = g ? g.sig.dec : 0, pct = g ? g.sig.pct : null;
       add('record', 1, n < 20 ? 'info' : pct >= 55 ? 'ok' : pct >= 45 ? 'warn' : 'bad', `How has grade ${s.grade} really done?`,

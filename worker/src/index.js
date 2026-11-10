@@ -1257,6 +1257,122 @@ async function resultsCalendar(env) {
   } catch (e) { if (c) return c; return { ts: Date.now(), items: [], error: 'NSE event calendar not reachable right now' }; }
 }
 
+/* ---------------- News impact: which sectors and companies each big headline helps or hurts ----------------
+   Read-only, advice only. The dashboard's call/put engine never reads this. One AI call per 30 minutes at most
+   (cached in KV), so it stays well inside the free quotas. */
+const IMPACT_SECTORS = ['Banks', 'PSU Banks', 'NBFC & Finance', 'Insurance', 'IT', 'Pharma & Healthcare', 'FMCG', 'Auto', 'Tyres & Auto parts', 'Metals & Mining',
+  'Oil marketing (OMCs)', 'Upstream oil & gas', 'Gas utilities', 'Power', 'Capital goods & Infra', 'Defence', 'Railways', 'Cement', 'Realty', 'Telecom', 'Aviation',
+  'Paints & Chemicals', 'Consumer durables', 'Retail & Consumer', 'Media', 'Logistics & Shipping', 'Hotels & Travel', 'Fertilisers & Agri', 'Textiles', 'Jewellery & Gold'];
+// AI for the impact jobs: Gemini's lighter free models first (better JSON), then Workers AI. Never throws a quota error to the page.
+async function aiJSON(env, prompt, maxTokens) {
+  const steps = [];
+  if (env.GEMINI_API_KEY) steps.push(() => gemini(env, prompt, maxTokens, ['gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemma-3-27b-it']));
+  if (env.AI) steps.push(() => workersAI(env, prompt, maxTokens));
+  if (env.ANTHROPIC_API_KEY) steps.push(() => anthropic(env, prompt, maxTokens));
+  let last = new Error('No AI configured');
+  for (const fn of steps) { try { return parseAIArray(await fn()); } catch (e) { last = e; } }
+  throw last;
+}
+// F&O symbols (from the NSE list the Screener already uses), to keep only real tickers
+async function fnoSymbols(env) {
+  try { const u = await universe(env); const m = {}; (u.items || []).forEach((x) => (m[x.sym] = x)); return m; } catch (e) { return {}; }
+}
+const sectorOf = (n) => { const s = String(n || '').toLowerCase(); return IMPACT_SECTORS.find((x) => x.toLowerCase() === s) || IMPACT_SECTORS.find((x) => x.toLowerCase().split(/[ &()]+/).some((w) => w.length > 3 && s.includes(w))) || null; };
+const clamp1 = (v) => (typeof v === 'number' && isFinite(v) ? Math.max(-1, Math.min(1, v)) : 0);
+
+async function newsImpact(env) {
+  const ck = 'impact:v1', c = memGet(ck) || (await env.KV.get(ck, 'json'));
+  if (c && c.ts > Date.now() - 30 * 60e3) { memSet(ck, c, 10 * 60e3); return c; }
+  if (!hasAI(env)) return { ts: Date.now(), ai: false, items: [], note: 'AI is off: add GEMINI_API_KEY or the Workers AI binding (AI) in the Worker.' };
+  // market news + the macro and policy stories that move sectors (crude, rates, tariffs, government policy, commodities)
+  const [feed, macroIn, macroW] = await Promise.all([
+    allFeeds(env),
+    fetchFeed(gnews(`(RBI OR "repo rate" OR GST OR "excise duty" OR "import duty" OR "export duty" OR subsidy OR budget OR monsoon OR "fuel price" OR ATF OR "windfall tax" OR PLI OR SEBI) India when:2d (${TRUSTED_SITES})`)),
+    fetchFeed(gnews('("crude oil" OR Brent OR OPEC OR "Federal Reserve" OR "Fed rate" OR tariff OR "trade deal" OR "US yields" OR dollar OR "China stimulus" OR "steel prices" OR "copper prices" OR "gold prices") when:2d')),
+  ]);
+  const pool = mergeDupes([...macroIn, ...macroW, ...feed.items].filter((i) => i.ts > Date.now() - 36 * 3600e3 && !RESULT_RE.test(i.t)).sort((a, b) => b.ts - a.ts)).slice(0, 36);
+  if (!pool.length) return { ts: Date.now(), ai: true, items: [], note: 'No fresh headlines right now.' };
+  const prompt = `You are a senior Indian equity strategist. For each headline, judge its likely effect on Indian stock-market sectors and listed companies.
+Use ONLY these sector names: ${IMPACT_SECTORS.join('; ')}.
+For companies use NSE symbols (e.g. INDIGO, BPCL, ONGC, HDFCBANK, TATASTEEL). Think about second-order effects (e.g. cheaper crude helps airlines, paints, tyres and OMCs, hurts upstream oil producers).
+Return ONLY a JSON array with one object per headline that matters for Indian stocks (skip headlines with no clear effect):
+{"i": headline number, "nifty": -1..1 effect on the Nifty overall, "str": 1 (small) | 2 (medium) | 3 (big), "hz": "d" (today) | "w" (days to weeks) | "m" (months), "sec": [["sector name", 1 or -1], ...] (max 4), "co": [["NSE symbol", 1 or -1], ...] (max 4), "why": "one short plain-English line"}
+Headlines:
+${pool.map((x, i) => `${i}. ${x.t}`).join('\n')}`;
+  let arr;
+  try { arr = await aiJSON(env, prompt, 3000); } catch (e) { if (c) return { ...c, stale: true }; return { ts: Date.now(), ai: false, items: [], note: 'AI could not read the news right now: ' + String(e.message || e).slice(0, 120) }; }
+  const SYM = await fnoSymbols(env);
+  const items = [];
+  (Array.isArray(arr) ? arr : []).forEach((a) => {
+    const h = pool[a && a.i]; if (!h) return;
+    const sec = (Array.isArray(a.sec) ? a.sec : []).map(([n, d]) => [sectorOf(n), d > 0 ? 1 : -1]).filter((x) => x[0]).slice(0, 4);
+    const co = (Array.isArray(a.co) ? a.co : []).map(([s, d]) => { const sym = String(s || '').toUpperCase().replace(/^NSE:/, '').replace(/[^A-Z0-9&-]/g, ''); return { sym, d: d > 0 ? 1 : -1, fo: !!SYM[sym], key: SYM[sym] ? SYM[sym].key : null, name: SYM[sym] ? SYM[sym].name : null, lot: SYM[sym] ? SYM[sym].lot : null }; }).filter((x) => x.sym.length >= 2).slice(0, 4);
+    if (!sec.length && !co.length && !a.nifty) return;
+    items.push({ t: h.t, src: h.src, link: h.link, ts: h.ts, n: h.n || 1, nifty: clamp1(a.nifty), str: [1, 2, 3].includes(a.str) ? a.str : 1, hz: ['d', 'w', 'm'].includes(a.hz) ? a.hz : 'd', sec, co, why: String(a.why || '').slice(0, 200) });
+  });
+  const res = { ts: Date.now(), ai: true, items, read: pool.length };
+  await env.KV.put(ck, JSON.stringify(res), { expirationTtl: 6 * 3600 }); memSet(ck, res, 10 * 60e3);
+  return res;
+}
+
+/* ---------------- Results radar: profit and revenue growth pulled from results headlines ----------------
+   Headlines from trusted business sites over the last 3 weeks; the AI reads the numbers that are IN the headline
+   (it must leave a number empty rather than guess). Not official filings: check the company's results before trading. */
+async function earningsRadar(env) {
+  const ck = 'earnings:v1', c = memGet(ck) || (await env.KV.get(ck, 'json'));
+  if (c && c.ts > Date.now() - 3 * 3600e3) { memSet(ck, c, 30 * 60e3); return c; }
+  if (!hasAI(env)) return { ts: Date.now(), ai: false, items: [], note: 'AI is off: add GEMINI_API_KEY or the Workers AI binding (AI) in the Worker.' };
+  const [feed, g1, g2, g3] = await Promise.all([
+    allFeeds(env),
+    fetchFeed(gnews(`("Q2 results" OR "Q2 FY27" OR "September quarter") ("net profit" OR PAT) (jumps OR rises OR surges OR grows OR up) YoY when:21d (${TRUSTED_SITES})`)),
+    fetchFeed(gnews(`("Q2 results" OR "Q2 FY27" OR "September quarter") ("net profit" OR PAT OR loss) (falls OR declines OR drops OR plunges OR down OR misses) when:21d (${TRUSTED_SITES})`)),
+    fetchFeed(gnews(`("quarterly results" OR "Q2 earnings") revenue profit "year-on-year" when:21d (${TRUSTED_SITES})`)),
+  ]);
+  const pool = mergeDupes([...g1, ...g2, ...g3, ...feed.items.filter((i) => RESULT_RE.test(i.t))].filter((i) => i.ts > Date.now() - 21 * 864e5 && /profit|loss|revenue|pat|ebitda|earnings|results/i.test(i.t)).sort((a, b) => b.ts - a.ts)).slice(0, 90);
+  if (!pool.length) return { ts: Date.now(), ai: true, items: [], note: 'No results headlines found in the last 3 weeks.' };
+  const out = [];
+  for (let s = 0; s < pool.length; s += 30) {
+    const part = pool.slice(s, s + 30);
+    const prompt = `You read Indian listed-company quarterly results headlines. For each headline about ONE listed Indian company's results, return:
+{"i": headline number, "sym": NSE symbol (e.g. "TATAMOTORS"), "co": short company name, "q": quarter like "Q2 FY27", "pat": net profit change year-on-year in % as a number, or null if the headline does not state it, "rev": revenue change year-on-year in % or null, "s": -1 (clearly weak / missed / loss) to 1 (clearly strong / beat)}
+Rules: use only numbers written in the headline (a headline saying "profit doubles" means 100; "profit triples" means 200). Never guess a number. If a headline turned a loss into a profit, pat = null and s = 1. Skip headlines that are not one company's quarterly results.
+Return ONLY a JSON array.
+Headlines:
+${part.map((x, i) => `${s + i}. ${x.t}`).join('\n')}`;
+    try { const arr = await aiJSON(env, prompt, 2500); if (Array.isArray(arr)) out.push(...arr); } catch (e) { if (!out.length && s === 0) { if (c) return { ...c, stale: true }; return { ts: Date.now(), ai: false, items: [], note: 'AI could not read the results right now: ' + String(e.message || e).slice(0, 120) }; } }
+  }
+  const SYM = await fnoSymbols(env), by = {};
+  const num = (v) => (typeof v === 'number' && isFinite(v) && Math.abs(v) < 5000 ? Math.round(v * 10) / 10 : null);
+  out.forEach((a) => {
+    const h = pool[a && a.i]; if (!h || !a.sym) return;
+    const sym = String(a.sym).toUpperCase().replace(/^NSE:/, '').replace(/[^A-Z0-9&-]/g, ''); if (sym.length < 2) return;
+    const x = { sym, co: String(a.co || SYM[sym] && SYM[sym].name || sym).slice(0, 60), q: String(a.q || '').slice(0, 12), pat: num(a.pat), rev: num(a.rev), s: clamp1(a.s), t: h.t, src: h.src, link: h.link, ts: h.ts,
+      fo: !!SYM[sym], key: SYM[sym] ? SYM[sym].key : null, lot: SYM[sym] ? SYM[sym].lot : null };
+    const p = by[sym], info = (y) => (y.pat != null ? 2 : 0) + (y.rev != null ? 1 : 0);
+    if (!p || info(x) > info(p) || (info(x) === info(p) && x.ts > p.ts)) by[sym] = { ...x, more: p ? (p.more || 0) + 1 : 0 };
+    else p.more = (p.more || 0) + 1;
+  });
+  const res = { ts: Date.now(), ai: true, items: Object.values(by).sort((a, b) => b.ts - a.ts), read: pool.length };
+  await env.KV.put(ck, JSON.stringify(res), { expirationTtl: 12 * 3600 }); memSet(ck, res, 30 * 60e3);
+  return res;
+}
+
+/* ---------------- End-of-day quotes: every F&O stock + the 3 indices, for the Overnight page ----------------
+   Two or three Upstox calls (150 instruments each), shared for 20 seconds. Read-only. */
+const EOD_IDX = [['NIFTY', 'NSE_INDEX|Nifty 50', 'Nifty 50'], ['BANKNIFTY', 'NSE_INDEX|Nifty Bank', 'Nifty Bank'], ['SENSEX', 'BSE_INDEX|SENSEX', 'Sensex']];
+async function eodQuotes(env, only) {
+  const U = await universe(env);
+  let list = [...EOD_IDX.map(([sym, key, name]) => ({ sym, key, name, idx: true })), ...(U.items || [])];
+  if (only && only.length) list = list.filter((x) => only.includes(x.sym));
+  const out = {};
+  for (let i = 0; i < list.length; i += 150) {
+    const part = list.slice(i, i + 150);
+    const m = quoteMap(await up(env, '/v2/market-quote/quotes?instrument_key=' + part.map((x) => enc(x.key)).join(',')));
+    part.forEach((x) => { const q = m[x.key]; if (q && ok(q.price)) out[x.sym] = { key: x.key, name: x.name, lot: x.lot || null, idx: !!x.idx, o: q.open, h: q.hi, l: q.lo, c: q.price, pc: q.prevClose, v: q.vol, ts: q.ts }; });
+  }
+  return { ts: Date.now(), n: Object.keys(out).length, q: out };
+}
+
 /* ---------------- Backtest data: historical candles passed straight through ----------------
    No parsing here, so a month of 1-minute candles stays well inside the free plan's CPU limit.
    Upstox v3 allows up to one month of 1-minute candles per request; the dashboard asks month by month. */
@@ -1332,6 +1448,12 @@ async function route(req, env, url) {
       return R(await newsFor(env, id, url.searchParams.get('name')));
     }
     case '/api/results': return json(await results(env), 200, req, env);
+    case '/api/impact': return R(await shared('impact', 30e3, () => newsImpact(env)));
+    case '/api/eod': {
+      const only = (url.searchParams.get('syms') || '').toUpperCase().split(',').map((x) => x.replace(/[^A-Z0-9&-]/g, '')).filter(Boolean).slice(0, 60);
+      return R(await shared('eod:' + only.join(','), 20e3, () => eodQuotes(env, only)));
+    }
+    case '/api/earnings': return R(await shared('earnings', 30e3, () => earningsRadar(env)));
     case '/api/stt': {
       if (req.method !== 'POST') throw new HttpError(405, 'POST required');
       return json(await stt(env, await req.json()), 200, req, env);
