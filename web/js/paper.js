@@ -324,6 +324,7 @@ const Paper = (() => {
         ${s.exitNote ? `<div class="mut" style="font-size:12px;margin-top:6px">${esc(s.exitNote)}</div>` : ''}<button class="big ${cls}" onclick="Paper.takeSignal()">Take paper trade: ${L} lot (${e.qty}), total ${rs(e.cost)}</button>`;
     }
     const hzR = a.hz === 'short' ? 'short' : 'intra', ss = sigStats(signals.filter((x) => x.key === cur && (x.hz || 'intra') === hzR)), aft = hzR === 'short' ? 15 : 30;
+    h += `<button class="btn-ghost rc-open" onclick="Report.open(cur)">📋 Full report card: every tool, in plain words</button>`;
     h += `<div class="sig-foot">${ss.n} ${a.cf.label} ${hzR === 'short' ? 'Short (1-min)' : 'Intraday'} signals so far. ${ss.pct == null ? `No ${aft}-minute results yet.` : `${ss.pct}% were right after ${aft} minutes (${ss.win} of ${ss.dec}).`}</div></div>`;
     $('pBanner').innerHTML = h;
   }
@@ -483,8 +484,16 @@ const Paper = (() => {
     await Store.resetAll(); acc = { cash: c, start: c, created: Date.now() }; trades = []; signals = [];
     await Store.saveAccount(acc); toast('Account reset'); render();
   }
+  // read-only summary of today for the report card's advice (nothing here changes a trade)
+  function dayInfo() {
+    const dk = dateKey(), cl = closedTrades().filter((t) => t.openedDate === dk).sort((x, y) => (y.closedTs || 0) - (x.closedTs || 0));
+    let lossRun = 0; for (const t of cl) { if (t.net <= 0) lossRun++; else break; }
+    const lastLoss = cl.find((t) => t.net <= 0);
+    return { count: cl.length + openTrades().filter((t) => t.openedDate === dk).length, net: cl.reduce((x, t) => x + t.net, 0), lossRun,
+      lastLossMin: lastLoss && lastLoss.closedTs ? Math.round((Date.now() - lastLoss.closedTs) / 60000) : null, open: openTrades(), put: invested() };
+  }
   return { speak, load, onTick, render, renderOrderForm, updateEstimate, takeSignal, takeBest, gradeStats, placeManual, closeId, openFromAsk, setSL, setSLMode, setTgt, setOpt, setLots, reset, opts, charges, addFunds, withdraw, resetTo, openFunds, renderFunds, fset,
-    get ready() { return ready; }, openTrades };
+    get ready() { return ready; }, openTrades, dayInfo, get account() { return acc; } };
 })();
 
 /* Small helpers: beep and toast */
