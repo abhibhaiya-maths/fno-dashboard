@@ -202,7 +202,7 @@ const Voice = (() => {
       optionOIFlow15m: a.oif && a.oif.ready ? { read: a.oif.read, callOIchg: a.oif.ce15, putOIchg: a.oif.pe15, callWall: a.oif.cw && a.oif.cw[0], putWall: a.oif.pw && a.oif.pw[0], notes: a.oif.notes.map((x) => x[2]) } : 'not enough live history yet',
       openingType: a.open ? { type: a.open.name, note: a.open.note, trap: a.open.trap || null } : null,
       gap: a.gap && a.gap.today ? { pts: r0(a.gap.today.pts), pct: r0(a.gap.today.pct), filled: a.gap.today.filled, fillPct: r0((a.gap.today.fillPct || 0) * 100), pastYearSimilar: a.gap.today.base || null, cause: a.gap.driver && { verdict: a.gap.driver.verdict, items: a.gap.driver.items.map((x) => x[1]) } } : null,
-      worldCues: (() => { const W = worldRead(a); return W ? { leanForNifty: W.lean, score: W.score, markets: W.rows.map((x) => ({ name: x.name, price: r0(x.price), chgPct: r0(x.chg), effectOnNifty: x.imp > 0 ? 'positive' : x.imp < 0 ? 'negative' : 'neutral' })) } : null; })(),
+      worldCues: (() => { const W = worldReadFor(a); return W ? { forInstrument: W.label, lean: W.lean, score: W.score, howToRead: W.prof ? W.prof.tip : 'Index-level read', markets: W.rows.filter((x) => !x.off).map((x) => ({ name: x.name, price: r0(x.price), chgPct: r0(x.chg), effect: x.imp > 0 ? 'positive' : x.imp < 0 ? 'negative' : 'neutral' })) } : null; })(),
       fiiIndexFutures: fiiPositions(),
       marketBrain: a.brain ? { score: a.brain.score, lean: a.brain.lean, dayType: a.brain.day && a.brain.day.name, components: a.brain.rows.map((r) => ({ name: r.label, value: r.val, lean: Math.round(r.s * 100), detail: r.txt })), heavyweightsMovingIndex: (a.brain.movers || []).map((x) => ({ stock: x.n, indexPoints: r0(x.pts), chgPct: r0(x.chg) })), breadth: ok(a.brain.up) ? { up: a.brain.up, down: a.brain.dn } : null } : null,
       gradedSignal: (() => { const s = signalFor(a); return s.grade ? { grade: s.grade, gradeName: GRADE_INFO[s.grade].name, size: GRADE_INFO[s.grade].size, lots: s.lots, whyB: s.gradeWhy, exit: s.exitNote } : null; })(),
@@ -288,6 +288,8 @@ const Voice = (() => {
   async function ask() {
     stop();
     const raw = $('q').value.trim(); if (!raw) return hint('Type or speak a question first.');
+    // results-date questions ("11 तारीख को किसके रिजल्ट आने हैं", "Reliance ka result kab hai") go to the results calendar
+    if (typeof ResultsAsk !== 'undefined' && ResultsAsk.match(raw) && !/\b(ce|pe|call|put)\b|कॉल|पुट|hold|exit|position|पोज़िशन/i.test(raw)) return ResultsAsk.answer(raw, show, say);
     const q = parseQ(raw);
     if (!q.key && q.other) {
       // asked about something not on the watchlist: find it and add it, then answer
@@ -338,5 +340,5 @@ const Voice = (() => {
     show(html, useAI ? '' : sayTxt);
     if (useAI) { const done = await askAI(raw, a, 'aiAns'); if (!done) say(sayTxt); }
   }
-  return { say, stop, pause, play, togglePause, mute, toggleSound, toggleMic, ask, ctx: (a) => fullCtx(a) };
+  return { say, stop, pause, play, togglePause, mute, toggleSound, toggleMic, ask, ctx: (a) => fullCtx(a), nameIn };
 })();

@@ -146,6 +146,8 @@ const Report = (() => {
       const same = D.open.filter((t) => t.key === a.key);
       if (same.length) out.push(['i', `You already hold ${same.length} position${same.length > 1 ? 's' : ''} on ${a.cf.label} (${same.map((t) => `${t.K} ${t.type}`).join(', ')}). A new one adds to the same bet.`, 'इसी पर पहले से पोज़िशन है।']);
     }
+    // your own Journal: weak spots you asked to be warned about
+    try { if (typeof Journal !== 'undefined') Journal.warnings(a, s).forEach((t) => out.push(['w', `From your Journal: ${t}`, 'आपके जर्नल के हिसाब से इस हालत में आपके ट्रेड अक्सर हारे हैं, सावधान।'])); } catch (e) { /* journal not ready */ }
     return out;
   }
 

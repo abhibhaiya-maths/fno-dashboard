@@ -1240,21 +1240,53 @@ async function brokerCalls(env) {
   return res;
 }
 // upcoming board meetings for results (NSE event calendar, best effort)
+// Results calendar: board meetings for results, 20 days back to 30 days ahead.
+// 1) NSE event calendar (official). 2) If NSE blocks the cloud server: results-date headlines from trusted
+//    business sites, read by the AI (marked as "news", so the page and the AI say it is not official).
 async function resultsCalendar(env) {
-  const ck = 'rescal:v1', c = memGet(ck) || (await env.KV.get(ck, 'json'));
-  if (c && c.ts > Date.now() - 6 * 3600e3) { memSet(ck, c, 3600e3); return c; }
+  const ck = 'rescal:v2', c = memGet(ck) || (await env.KV.get(ck, 'json'));
+  if (c && c.ts > Date.now() - 6 * 3600e3 && c.items && c.items.length) { memSet(ck, c, 3600e3); return c; }
+  const M = { Jan: '01', Feb: '02', Mar: '03', Apr: '04', May: '05', Jun: '06', Jul: '07', Aug: '08', Sep: '09', Oct: '10', Nov: '11', Dec: '12' };
+  const dmy = (d) => `${String(d.getUTCDate()).padStart(2, '0')}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${d.getUTCFullYear()}`;
+  const parse = (j) => (Array.isArray(j) ? j : j.data || []).filter((x) => /result/i.test((x.purpose || '') + ' ' + (x.bm_desc || ''))).map((x) => {
+    const m = String(x.date || '').match(/(\d{1,2})-([A-Za-z]{3})-(\d{4})/); return { sym: x.symbol, co: x.company, date: m ? `${m[3]}-${M[m[2]] || '01'}-${m[1].padStart(2, '0')}` : null, what: x.purpose || 'Financial Results', src: 'NSE' };
+  }).filter((x) => x.date && x.sym);
+  let items = [], src = null, err = null;
   try {
-    const cookie = await nseCookie();
-    const r = await fetch('https://www.nseindia.com/api/event-calendar', { headers: { 'User-Agent': UA_BROWSER, Accept: 'application/json', Referer: 'https://www.nseindia.com/', Cookie: cookie } });
-    if (!r.ok) throw new Error('HTTP ' + r.status);
-    const j = await r.json(), M = { Jan: '01', Feb: '02', Mar: '03', Apr: '04', May: '05', Jun: '06', Jul: '07', Aug: '08', Sep: '09', Oct: '10', Nov: '11', Dec: '12' };
-    const items = (Array.isArray(j) ? j : j.data || []).filter((x) => /result/i.test((x.purpose || '') + ' ' + (x.bm_desc || ''))).map((x) => {
-      const m = String(x.date || '').match(/(\d{1,2})-([A-Za-z]{3})-(\d{4})/); return { sym: x.symbol, co: x.company, date: m ? `${m[3]}-${M[m[2]] || '01'}-${m[1].padStart(2, '0')}` : null, what: x.purpose || 'Financial Results' };
-    }).filter((x) => x.date && x.sym);
-    const res = { ts: Date.now(), items, src: 'NSE event calendar' };
-    await env.KV.put(ck, JSON.stringify(res), { expirationTtl: 2 * 86400 }); memSet(ck, res, 3600e3);
-    return res;
-  } catch (e) { if (c) return c; return { ts: Date.now(), items: [], error: 'NSE event calendar not reachable right now' }; }
+    const cookie = await nseCookie(), H = { headers: { 'User-Agent': UA_BROWSER, Accept: 'application/json', Referer: 'https://www.nseindia.com/', Cookie: cookie } };
+    const n = istNow(), from = dmy(addDays(n, -20)), to = dmy(addDays(n, 30));
+    const [r1, r2] = await Promise.all([
+      fetch(`https://www.nseindia.com/api/event-calendar?index=equities&from_date=${from}&to_date=${to}`, H).then((r) => (r.ok ? r.json() : null)).catch(() => null),
+      fetch('https://www.nseindia.com/api/event-calendar', H).then((r) => (r.ok ? r.json() : null)).catch(() => null),
+    ]);
+    const seen = new Set();
+    [...(r1 ? parse(r1) : []), ...(r2 ? parse(r2) : [])].forEach((x) => { const k = x.sym + x.date; if (!seen.has(k)) { seen.add(k); items.push(x); } });
+    if (items.length) src = 'NSE event calendar'; else err = r1 || r2 ? 'NSE returned no results dates' : 'NSE event calendar not reachable (NSE often blocks cloud servers)';
+  } catch (e) { err = 'NSE event calendar not reachable'; }
+  if (!items.length && hasAI(env)) {
+    try {
+      const pool = mergeDupes([
+        ...(await fetchFeed(gnews(`("results date" OR "to announce" OR "board meeting" OR "will announce") (Q2 OR Q3 OR "quarterly results" OR earnings) when:14d (${TRUSTED_SITES})`))),
+        ...(await fetchFeed(gnews(`("Q2 results today" OR "Q3 results today" OR "results today" OR "earnings this week" OR "results calendar") when:7d (${TRUSTED_SITES})`))),
+      ]).slice(0, 50);
+      if (pool.length) {
+        const today = ymd(istNow());
+        const arr = await aiJSON(env, `Today is ${today} (India). From these Indian business-news headlines, list every listed company whose quarterly-results date (board meeting for results) is stated or clearly implied ("today", "tomorrow", a weekday or a date).
+Return ONLY a JSON array: {"sym": NSE symbol, "co": short company name, "date": "YYYY-MM-DD"}. Skip anything without a clear date. Never guess a date.
+Headlines (with publication dates):
+${pool.map((x, i) => `${i}. [${ymd(new Date(x.ts + 5.5 * 3600e3))}] ${x.t}`).join('\n')}`, 2500);
+        const seen = new Set();
+        (Array.isArray(arr) ? arr : []).forEach((x) => { const sym = String(x.sym || '').toUpperCase().replace(/[^A-Z0-9&-]/g, ''), d = String(x.date || '').slice(0, 10); if (sym && /^\d{4}-\d{2}-\d{2}$/.test(d) && !seen.has(sym + d)) { seen.add(sym + d); items.push({ sym, co: String(x.co || sym).slice(0, 60), date: d, what: 'Financial Results', src: 'news' }); } });
+        if (items.length) src = 'news headlines (not official)';
+      }
+    } catch (e) { /* AI or news unavailable */ }
+  }
+  if (!items.length) { if (c && c.items && c.items.length) return { ...c, stale: true }; return { ts: Date.now(), items: [], error: err || 'No results dates found' }; }
+  const U = await fnoSymbols(env);
+  items = items.map((x) => ({ ...x, fo: !!U[x.sym] })).sort((p, q) => (p.date < q.date ? -1 : p.date > q.date ? 1 : (q.fo - p.fo)));
+  const res = { ts: Date.now(), items, src };
+  await env.KV.put(ck, JSON.stringify(res), { expirationTtl: 2 * 86400 }); memSet(ck, res, 3600e3);
+  return res;
 }
 
 /* ---------------- News impact: which sectors and companies each big headline helps or hurts ----------------

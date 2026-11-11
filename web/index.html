@@ -11,7 +11,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css?v=20261111c">
+<link rel="stylesheet" href="style.css?v=20261111e">
 </head>
 <body>
 
@@ -31,6 +31,8 @@
     <button class="rpbtn" onclick="Replay.open()" title="Replay past days and backtest the engine">Replay</button>
     <button class="rpbtn" onclick="Overnight.open()" title="BTST and next-day gap radar: what happened the next day after days like today">Overnight</button>
     <button class="rpbtn" onclick="Impact.open()" title="Which sectors and companies today's news helps or hurts, and the results radar">Impact</button>
+    <button class="rpbtn" onclick="Journal.open()" title="Learn from your own record: where you win and where you lose">Journal</button>
+    <button class="rpbtn" onclick="Alerts.open()" title="Your price alerts and the shock detector">Alerts</button>
     <button class="snd" id="sndBtn" onclick="Voice.toggleSound()" aria-label="Voice alerts on or off" aria-pressed="true">🔊</button>
   </nav>
   <div class="status" id="statusBar"></div>
@@ -203,7 +205,7 @@ For analysis and practice only, not investment advice. No signal is a guarantee.
 <script src="js/config.js?v=20261111c"></script>
 <script src="js/indicators.js?v=20261110n"></script>
 <script src="js/analysis.js?v=20261110n"></script>
-<script src="js/structure.js?v=20261110n"></script>
+<script src="js/structure.js?v=20261111d"></script>
 <script src="js/brain.js?v=20261110n"></script>
 <script src="js/backtest.js?v=20261110n"></script>
 <script src="js/replay.js?v=20261110n"></script>
@@ -211,14 +213,17 @@ For analysis and practice only, not investment advice. No signal is a guarantee.
 <script src="js/store.js?v=20261110n"></script>
 <script src="js/data-demo.js?v=20261110n"></script>
 <script src="js/data-live.js?v=20261110n"></script>
-<script src="js/paper.js?v=20261111a"></script>
-<script src="js/voice.js?v=20261110n"></script>
-<script src="js/ui.js?v=20261110n"></script>
+<script src="js/paper.js?v=20261111e"></script>
+<script src="js/voice.js?v=20261111d"></script>
+<script src="js/ui.js?v=20261111d"></script>
 <script src="js/engine.js?v=20261110n"></script>
-<script src="js/impact.js?v=20261111c"></script>
+<script src="js/impact.js?v=20261111d"></script>
+<script src="js/askresults.js?v=20261111d"></script>
+<script src="js/journal.js?v=20261111e"></script>
+<script src="js/alerts.js?v=20261111e"></script>
 <script src="js/overnight-model.js?v=20261111c"></script>
-<script src="js/overnight.js?v=20261111c"></script>
-<script src="js/report.js?v=20261111c"></script>
+<script src="js/overnight.js?v=20261111d"></script>
+<script src="js/report.js?v=20261111e"></script>
 <script src="js/main.js?v=20261110n"></script>
 <script>$('pLots').value = Paper.opts().lots;</script>
 </body>

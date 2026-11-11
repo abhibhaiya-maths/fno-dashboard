@@ -268,6 +268,7 @@ const Overnight = (() => {
   const chargesOf = (amt) => cost() * amt - (2 * ((B().SLIP_PCT || 0.05) / 100)) * amt; // costs without the slippage (slippage is in the fill prices)
   async function buy(sym) {
     const t0 = todayRow(sym); if (!t0) return toast('No price for ' + sym + ' yet.');
+    if (!t0.L || !t0.L.best) return toast(`${sym}: INSUFFICIENT DATA for days like today, so there is no plan to paper-trade.`);
     if (live() && !marketOpen()) return toast('BTST paper buys work during market hours (9:15–3:30).');
     if (trades.some((x) => x.sym === sym && x.status === 'open')) return toast(`You already hold a BTST paper position in ${sym}.`);
     const slip = (B().SLIP_PCT || 0.05) / 100, px = t0.q.c * (1 + slip), qty = Math.max(1, Math.floor(B().AMOUNT / px)), lv = levels(t0), st = t0.L.best.st;

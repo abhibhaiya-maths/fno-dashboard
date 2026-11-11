@@ -81,6 +81,7 @@ const Paper = (() => {
       score: a.score, st0: a.stD, src: src || 'manual', grade: grade || null, advice: null, exitSigPx: null, log: [],
       slMode: opts().slMode, slUser: ok(sl) && sl > 0 && sl < e.px ? slv : null, slAuto: tick05(Math.max(0.05, e.px - dl * st.risk)) };
     t.sl = effSL(t);
+    try { t.ctx = typeof Journal !== 'undefined' ? Journal.snap(a, type) : null; } catch (e) { t.ctx = null; } // for the Journal: the market at entry
     trades.unshift(t);
     await Promise.all([Store.saveTrade(t), Store.saveAccount(acc)]);
     beep(660); toast(`Paper buy: ${t.label} ${K} ${type}, ${lots} lot at ${rs(e.px)}`);
@@ -253,6 +254,7 @@ const Paper = (() => {
         const strength = hz === 'star' ? 'strong' : hz === 'short' ? h.strength || 'mild'
           : ds >= 70 && (st === 'CE' ? h.coreUp : h.coreDn) >= 4 && ok(h.adx) && h.adx >= 25 && !(a.events && a.events.length) ? 'strong' : 'mild';
         const x = { id: uid(), key: k, hz, grade, dir: st, strength, score: h.score, date: dk, min: a.curMin, price: a.price, atr: h.atr, chk: HZC[hz].chk, ts: Date.now() };
+        try { x.ctx = typeof Journal !== 'undefined' ? Journal.snap(a, st) : null; } catch (e) { x.ctx = null; }
         signals.unshift(x); Store.saveSignal(x);
       }
       const today = a.D.candles.filter((c) => c.d === 2);
@@ -493,7 +495,10 @@ const Paper = (() => {
       lastLossMin: lastLoss && lastLoss.closedTs ? Math.round((Date.now() - lastLoss.closedTs) / 60000) : null, open: openTrades(), put: invested() };
   }
   return { speak, load, onTick, render, renderOrderForm, updateEstimate, takeSignal, takeBest, gradeStats, placeManual, closeId, openFromAsk, setSL, setSLMode, setTgt, setOpt, setLots, reset, opts, charges, addFunds, withdraw, resetTo, openFunds, renderFunds, fset,
-    get ready() { return ready; }, openTrades, dayInfo, get account() { return acc; } };
+    get ready() { return ready; }, openTrades, dayInfo, get account() { return acc; },
+    // read-only lists for the Journal, and saving your tags/notes on a trade
+    allTrades: () => trades, allSignals: () => signals,
+    tagTrade: (id, tags, note) => { const t = trades.find((x) => x.id === id); if (!t) return; t.tags = tags; if (note != null) t.note = String(note).slice(0, 300); return Store.saveTrade(t); } };
 })();
 
 /* Small helpers: beep and toast */
