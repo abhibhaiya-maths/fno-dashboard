@@ -1532,19 +1532,20 @@ function nameMatcher(name, sym) {
   const keys = [String(sym || '').toLowerCase(), words.slice(0, 2).join(' '), words[0] && words[0].length >= 5 ? words[0] : null].filter((x) => x && x.length >= 3);
   return (t) => { const s = String(t || '').toLowerCase(); return keys.some((k) => s.includes(k)); };
 }
-function checkNews(items, offItems, isMine) {
+function checkNews(items, offItems, isMine, resDate) {
   const off = (offItems || []).filter((o) => isMine(o.co + ' ' + o.t) && o.ts > Date.now() - 7 * 864e5).slice(0, 6);
   const offW = off.map((o) => normWords(o.t + ' ' + (o.sub || '')));
   const out = items.slice(0, 10).map((n) => {
     const pubs = [...new Set([n.src, ...(n.alsoBy || [])].filter(Boolean))], trusted = pubs.filter((p) => TRUSTED_PUB.test(p)).length;
     const w = normWords(n.t), offHit = offW.some((ow) => overlap(w, ow) >= 0.25) || (RESULT_RE.test(n.t) && off.some((o) => /result/i.test(o.t + ' ' + o.sub)));
     const rumour = RUMOUR_RE.test(n.t);
-    const status = offHit ? 'official' : rumour ? 'report' : trusted >= 2 || pubs.length >= 3 ? 'confirmed' : 'single';
+    const resHit = !offHit && resDate && RESULT_RE.test(n.t) && Math.abs(n.ts - Date.parse(resDate)) <= 4 * 864e5; // results day confirmed on NSE's calendar
+    const status = offHit ? 'official' : resHit && !rumour ? 'results' : rumour ? 'report' : trusted >= 2 || pubs.length >= 3 ? 'confirmed' : 'single';
     return { t: n.t, link: n.link, src: n.src, pubs, ts: n.ts, s: n.s, imp: n.imp, status };
   });
   return { items: out, official: off.map((o) => ({ t: o.t, co: o.co, src: o.src, ts: o.ts, link: o.link })) };
 }
-const NEWS_W = { official: 1, confirmed: 1, single: 0.6, report: 0.3 };
+const NEWS_W = { official: 1, confirmed: 1, results: 0.9, single: 0.6, report: 0.3 };
 
 /* ---------- one stock ---------- */
 function pctFrom(rows, price, back) { const r = rows[rows.length - back]; return r && r[4] ? ((price - r[4]) / r[4]) * 100 : null; }
@@ -1570,9 +1571,60 @@ async function resolveStock(env, b) {
   }
   return { key, sym: sym || key.split('|')[1], name: name || sym };
 }
+/* ---------- extra facts a professional desk looks at ---------- */
+// F&O ban list (stocks above 95% of market-wide position limit: no fresh positions allowed)
+async function secBan(env) {
+  return shared('secban', 30 * 60e3, async () => {
+    const ck = 'secban:v1', c = await env.KV.get(ck, 'json').catch(() => null);
+    if (c && c.ts > Date.now() - 3 * 3600e3) return c;
+    try {
+      const r = await fetch('https://nsearchives.nseindia.com/content/fo/fo_secban.csv', { headers: { 'User-Agent': UA_BROWSER, Accept: 'text/csv,*/*' } });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const t = await r.text(), m = t.match(/(\d{2}-[A-Z]{3}-\d{4})/i), syms = [];
+      t.split(/\r?\n/).forEach((l) => { const x = l.split(',').map((s) => s.trim()); if (x.length >= 2 && /^\d+$/.test(x[0]) && /^[A-Z0-9&-]+$/.test(x[1])) syms.push(x[1]); });
+      const res = { ts: Date.now(), date: m ? m[1] : null, syms };
+      await env.KV.put(ck, JSON.stringify(res), { expirationTtl: 86400 }).catch(() => {});
+      return res;
+    } catch (e) { return c || { ts: Date.now(), date: null, syms: [], err: e.message }; }
+  });
+}
+// one session from 1-minute candles: VWAP, where it closed in the day's range, last-hour move
+function sessionRead(day) {
+  if (!day || !day.c || day.c.length < 30) return null;
+  const c = day.c; let pv = 0, v = 0, hi = -Infinity, lo = Infinity;
+  for (const k of c) { const tp = (k[2] + k[3] + k[4]) / 3; pv += tp * (k[5] || 0); v += k[5] || 0; if (k[2] > hi) hi = k[2]; if (k[3] < lo) lo = k[3]; }
+  const close = c[c.length - 1][4], open = c[0][1], lastM = c[c.length - 1][0];
+  const vwap = v > 0 ? pv / v : null, clv = hi > lo ? (close - lo) / (hi - lo) : null;
+  let lastHour = null, lastHourVol = null;
+  if (lastM >= 355) {                       // a full or nearly full session (14:30 = minute 315)
+    const before = c.filter((k) => k[0] < 315), after = c.filter((k) => k[0] >= 315);
+    if (before.length && after.length >= 20) {
+      const ref = before[before.length - 1][4]; lastHour = ref ? ((close - ref) / ref) * 100 : null;
+      const va = after.reduce((s, k) => s + (k[5] || 0), 0); lastHourVol = v > 0 ? (va / v) * 100 : null; // normal share is about 17%
+    }
+  }
+  return { date: day.date, open: r2(open), hi: r2(hi), lo: r2(lo), close: r2(close), vwap: r2(vwap), clv: r2(clv), lastHour: r2(lastHour), lastHourVol: r2(lastHourVol), complete: lastM >= 355 };
+}
+// option walls: where call writers and put writers sit, and who added more today
+function optionRead(ch, price) {
+  if (!ch || !ch.rows || !ch.rows.length || !ok(price)) return null;
+  const near = ch.rows.filter((r) => Math.abs(r.K - price) / price <= 0.1);
+  if (near.length < 4) return null;
+  let ce = 0, pe = 0, ceAdd = 0, peAdd = 0, cw = null, pw = null;
+  for (const r of near) {
+    ce += r.ce.oi; pe += r.pe.oi;
+    if (Math.abs(r.K - price) / price <= 0.05) { ceAdd += r.ce.oi - (r.ce.poi || r.ce.oi); peAdd += r.pe.oi - (r.pe.poi || r.pe.oi); }
+    if (r.K >= price && (!cw || r.ce.oi > cw.oi)) cw = { K: r.K, oi: r.ce.oi };
+    if (r.K <= price && (!pw || r.pe.oi > pw.oi)) pw = { K: r.K, oi: r.pe.oi };
+  }
+  if (!ce || !pe) return null;
+  return { expiry: ch.expiry, pcr: r2(pe / ce), callWall: cw && cw.oi ? cw.K : null, putWall: pw && pw.oi ? pw.K : null, ceAdd, peAdd };
+}
+const withTimeout = (p, ms, fb) => Promise.race([p, new Promise((res) => setTimeout(() => res(fb), ms))]);
+
 async function pulseFacts(env, S) {
   const { key, sym, name } = S, phase = phaseNow(), today = ymd(istNow());
-  const [qm, D, F, B, P, N, O, RS] = await Promise.all([
+  const [qm, D, F, B, P, N, O, RS, CD, CH, BAN, CAL, BRK, EARN] = await Promise.all([
     shared('pq:' + key, 15000, () => up(env, '/v2/market-quote/quotes?instrument_key=' + enc(key))).then(quoteMap).catch(() => ({})),
     daily(env, key).catch(() => ({ rows: [] })),
     futFor(env, key, sym, 'NSE').catch(() => null),
@@ -1581,6 +1633,12 @@ async function pulseFacts(env, S) {
     newsFor(env, sym, name).catch(() => ({ items: [] })),
     official(env).catch(() => ({ items: [] })),
     results(env).catch(() => ({ items: [] })),
+    candles(env, key, 'NSE').catch(() => null),
+    chain(env, key).catch(() => null),
+    secBan(env).catch(() => null),
+    withTimeout(resultsCalendar(env).catch(() => null), 5000, null),
+    withTimeout(brokerCalls(env).catch(() => null), 5000, null),
+    (async () => memGet('earnings:v1') || (await env.KV.get('earnings:v1', 'json').catch(() => null)))(),
   ]);
   const q = qm[key] || null, rows = D.rows || [], closes = rows.map((r) => r[4]);
   const last = rows[rows.length - 1] || null, qms = q && q.ts ? (+q.ts || Date.parse(q.ts)) : NaN, qDate = ok(qms) ? ymd(new Date(qms + 5.5 * 3600e3)) : null;
@@ -1600,6 +1658,12 @@ async function pulseFacts(env, S) {
     volX: vol20 && volNow ? r2(volNow / vol20) : null };
   px.gap = liveDay && ok(px.open) && pc ? r2(((px.open - pc) / pc) * 100) : null;
   const lev = lv ? { from: lv[0], pdh: r2(lv[2]), pdl: r2(lv[3]), pdc: r2(lv[4]), p: r2(piv), r1: r2(2 * piv - lv[3]), s1: r2(2 * piv - lv[2]) } : null;
+
+  // the session the price belongs to, read from 1-minute candles (today when live, else the last session)
+  const days = (CD && CD.days) || [], sessDate = liveDay ? today : last && last[0];
+  const sess = sessionRead(days.find((d) => d.date === sessDate)) || null;
+  if (!sess && !liveDay && last && last[2] > last[3]) px.clvDaily = r2((last[4] - last[3]) / (last[2] - last[3]));
+  if (liveDay && sess) sess.clv = null; // "where it closed" only means something once the day is over
 
   // futures: live (today vs yesterday) and last completed session (yesterday vs day before), plus NSE's own all-expiry figure
   const fut = { live: null, last: null, nse: null, expiry: F && F.expiry, lot: F && F.lot };
@@ -1626,81 +1690,281 @@ async function pulseFacts(env, S) {
     const f = P.latest.p.FII, pv = P.prev && P.prev.p && P.prev.p.FII, lp = (f.futL / (f.futL + f.futS || 1)) * 100;
     fii = { date: P.latest.date, longPct: r2(lp), net: f.futL - f.futS, netChg: pv ? f.futL - f.futS - (pv.futL - pv.futS) : null };
   }
+
+  // results: date (NSE calendar), how the stock reacted since, the numbers (profit / revenue YoY from headlines), or an upcoming date
   const isMine = nameMatcher(name, sym);
-  const news = checkNews(N.items || [], O.items || [], isMine);
+  let resEv = null;
+  const cal = ((CAL && CAL.items) || []).filter((x) => x.sym === sym && x.date).sort((a, b) => (a.date < b.date ? -1 : 1));
+  const past = cal.filter((x) => x.date <= today && x.date >= ymd(addDays(istNow(), -15))).pop(), next = cal.find((x) => x.date > today && x.date <= ymd(addDays(istNow(), 10)));
+  if (past) {
+    const i = rows.findIndex((r) => r[0] >= past.date), baseC = i > 0 ? rows[i - 1][4] : null;
+    const sessions = i >= 0 ? rows.length - i + (liveDay ? 1 : 0) : liveDay ? 1 : 0;
+    resEv = { kind: 'past', date: past.date, src: past.src, sinceBase: r2(baseC), react: baseC && ok(price) ? r2(((price - baseC) / baseC) * 100) : null, sessions };
+  } else if (next) resEv = { kind: 'next', date: next.date, src: next.src, inDays: Math.round((Date.parse(next.date) - Date.parse(today)) / 864e5) };
+  const er = ((EARN && EARN.items) || []).find((x) => x.sym === sym && x.ts > Date.now() - 21 * 864e5);
+  if (er) (resEv = resEv || { kind: 'news' }).nums = { q: er.q, pat: er.pat, rev: er.rev, s: er.s, t: er.t, src: er.src, link: er.link };
+
+  const news = checkNews(N.items || [], O.items || [], isMine, resEv && resEv.kind === 'past' && resEv.src === 'NSE' ? resEv.date : null);
   const res = (RS.items || []).filter((x) => isMine(x.t + ' ' + (x.co || ''))).slice(0, 3).map((x) => ({ t: x.t, q: x.q, s: x.s, src: x.src, ts: x.ts, link: x.link }));
-  return { ts: Date.now(), sym, name, key, phase, liveDay, px, lev, fut, fii, news, results: res };
+  const brk = BRK ? [...(BRK.up || []), ...(BRK.down || [])].filter((x) => isMine(x.t) && x.ts > Date.now() - 7 * 864e5).slice(0, 4).map((x) => ({ t: x.t, kind: x.kind, src: x.src, ts: x.ts, link: x.link })) : [];
+  const opt = optionRead(CH, price);
+  const ban = BAN && (BAN.syms || []).includes(sym) ? { date: BAN.date } : null;
+  return { v: 2, ts: Date.now(), sym, name, key, phase, liveDay, px, lev, sess, fut, fii, news, results: res, resEv, brokers: brk, opt, ban };
 }
 
-// rule-based lean: every point is visible to the user, the AI only explains it in words
+// Rule-based lean, the way a careful desk trader reads a stock: positioning first (futures OI), then how the day
+// closed and who traded the last hour, then trend, results reaction, news quality, market. Every point is shown.
+const LABEL = { 'STRONG CALL': 'Strong CALL side', 'LEANS CALL': 'Leans CALL side', WAIT: 'No clear side: WAIT', 'LEANS PUT': 'Leans PUT side', 'STRONG PUT': 'Strong PUT side' };
 function pulseLean(f, mkt) {
-  const why = [], add = (pts, txt) => { if (pts) why.push({ pts: r2(pts), txt }); };
+  const why = [], add = (pts, txt, tag) => { if (pts) why.push({ pts: r2(pts), txt, tag }); };
+  const sgn = (x) => (x > 0 ? '+' : '') + x;
   const fb = f.fut.live || f.fut.nse || f.fut.last, src = f.fut.live ? 'today, live' : f.fut.nse ? `last session, NSE ${f.fut.nse.date}` : f.fut.last ? `last session ${f.fut.last.date}` : '';
+  let futStrength = 0; // 1 = clear confirmation, 0.5 = weak, 0 = none
   if (fb && fb.b) {
-    const big = Math.abs(fb.doiPct || 0) >= 2 && Math.abs(fb.dp || 0) >= 0.5 ? 1 : 0.5;
-    add({ LB: 2, SB: -2, SC: 1, LU: -1 }[fb.b] * big, `Futures ${BUILD[fb.b].toLowerCase()} (${src}: price ${fb.dp > 0 ? '+' : ''}${fb.dp}%, OI ${fb.doiPct > 0 ? '+' : ''}${fb.doiPct}%)${big < 1 ? ', weak' : ''}`);
+    const clear = Math.abs(fb.doiPct || 0) >= 2 && Math.abs(fb.dp || 0) >= 0.5;
+    futStrength = clear ? 1 : 0.5;
+    add({ LB: 2, SB: -2, SC: 1, LU: -1 }[fb.b] * futStrength, `Futures ${BUILD[fb.b].toLowerCase()} (${src}: price ${sgn(fb.dp)}%, OI ${sgn(fb.doiPct)}%)${clear ? '' : ', weak'}`, 'fut');
   }
-  const p = f.px;
+  const p = f.px, s = f.sess;
+  // how the day closed and who traded the last hour (finished sessions only)
+  const clv = s && ok(s.clv) ? s.clv : p.clvDaily;
+  if (!f.liveDay && ok(clv) && ok(p.chg)) {
+    if (clv >= 0.8 && p.chg > 0) add(0.5, `Closed near the day's high (top ${Math.round((1 - clv) * 100) || 1}% of the range)`, 'day');
+    else if (clv <= 0.2 && p.chg < 0) add(-0.5, `Closed near the day's low (bottom ${Math.round(clv * 100) || 1}% of the range)`, 'day');
+    else if (clv <= 0.3 && p.chg > 0.5) add(-0.5, 'Up on the day but closed in the lower part of the range: selling into the rise', 'day');
+    else if (clv >= 0.7 && p.chg < -0.5) add(0.5, 'Down on the day but closed in the upper part of the range: buying on the dip', 'day');
+  }
+  if (s && s.complete && ok(s.lastHour) && Math.abs(s.lastHour) >= 0.4) {
+    const heavy = ok(s.lastHourVol) && s.lastHourVol >= 22;
+    add((s.lastHour > 0 ? 0.5 : -0.5) * (heavy ? 1 : 0.6), `${s.lastHour > 0 ? 'Buying' : 'Selling'} in the last hour (${sgn(s.lastHour)}% after 2:30${heavy ? `, ${Math.round(s.lastHourVol)}% of the day's volume` : ''})`, 'day');
+  }
+  if (s && ok(s.vwap) && ok(p.price)) {
+    const d = ((p.price - s.vwap) / s.vwap) * 100;
+    if (Math.abs(d) >= 0.2) add(d > 0 ? 0.5 : -0.5, `${f.liveDay ? 'Trading' : 'Closed'} ${d > 0 ? 'above' : 'below'} the day's VWAP ${s.vwap} (average price paid)`, 'day');
+  }
+  // trend
   if (ok(p.dma20) && ok(p.dma50)) {
-    if (p.price > p.dma20 && p.dma20 > p.dma50) add(1, 'Price above the 20-day and 50-day averages (uptrend)');
-    else if (p.price < p.dma20 && p.dma20 < p.dma50) add(-1, 'Price below the 20-day and 50-day averages (downtrend)');
+    if (p.price > p.dma20 && p.dma20 > p.dma50) add(1, 'Price above the 20-day and 50-day averages (uptrend)', 'trend');
+    else if (p.price < p.dma20 && p.dma20 < p.dma50) add(-1, 'Price below the 20-day and 50-day averages (downtrend)', 'trend');
+    else if (p.price > p.dma20 && p.price > p.dma50) add(0.5, 'Price back above the 20-day and 50-day averages', 'trend');
+    else if (p.price < p.dma20 && p.price < p.dma50) add(-0.5, 'Price below the 20-day and 50-day averages', 'trend');
   }
-  if (ok(p.r1w) && Math.abs(p.r1w) >= 5) add(p.r1w > 0 ? 0.5 : -0.5, `${p.r1w > 0 ? 'Up' : 'Down'} ${Math.abs(p.r1w).toFixed(1)}% in a week`);
-  if (ok(p.rsi) && p.rsi >= 72) add(-0.5, `RSI ${p.rsi.toFixed(0)}: stretched, pullback risk`);
-  if (ok(p.rsi) && p.rsi <= 28) add(0.5, `RSI ${p.rsi.toFixed(0)}: oversold, bounce risk`);
-  if (ok(p.volX) && p.volX >= 1.5 && ok(p.chg) && Math.abs(p.chg) >= 1) add(p.chg > 0 ? 0.5 : -0.5, `Volume ${p.volX.toFixed(1)}× normal on a ${p.chg > 0 ? 'rise' : 'fall'}`);
+  if (ok(p.r1w) && Math.abs(p.r1w) >= 5) add(p.r1w > 0 ? 0.5 : -0.5, `${p.r1w > 0 ? 'Up' : 'Down'} ${Math.abs(p.r1w).toFixed(1)}% in a week`, 'trend');
+  if (ok(p.rsi) && p.rsi >= 72) add(-0.5, `RSI ${p.rsi.toFixed(0)}: stretched, pullback risk`, 'trend');
+  if (ok(p.rsi) && p.rsi <= 28) add(0.5, `RSI ${p.rsi.toFixed(0)}: oversold, bounce risk`, 'trend');
+  if (ok(p.volX) && p.volX >= 1.5 && ok(p.chg) && Math.abs(p.chg) >= 1) add(p.chg > 0 ? 0.5 : -0.5, `Volume ${p.volX.toFixed(1)}× normal on a ${p.chg > 0 ? 'rise' : 'fall'}`, 'day');
   if (f.liveDay && f.lev && ok(p.price)) {
-    if (p.price > f.lev.pdh) add(0.75, `Trading above yesterday's high ${f.lev.pdh}`);
-    else if (p.price < f.lev.pdl) add(-0.75, `Trading below yesterday's low ${f.lev.pdl}`);
+    if (p.price > f.lev.pdh) add(0.75, `Trading above yesterday's high ${f.lev.pdh}`, 'day');
+    else if (p.price < f.lev.pdl) add(-0.75, `Trading below yesterday's low ${f.lev.pdl}`, 'day');
   }
-  const it = f.news.items.filter((n) => ok(n.s) && Math.abs(n.s) >= 0.15 && Date.now() - n.ts < 4 * 864e5);
+  // relative strength against Nifty (same session)
+  if (mkt && ok(mkt.niftyChg) && ok(p.chg)) {
+    const rs = p.chg - mkt.niftyChg;
+    if (Math.abs(rs) >= 1.5 && Math.sign(p.chg) !== -Math.sign(rs)) add(rs > 0 ? 0.5 : -0.5, `${rs > 0 ? 'Stronger' : 'Weaker'} than Nifty by ${Math.abs(rs).toFixed(1)}%`, 'mkt');
+  }
+  // results: the market's reaction is the verdict
+  const R = f.resEv;
+  if (R && R.kind === 'past' && ok(R.react) && R.sessions >= 1 && R.sessions <= 6 && Math.abs(R.react) >= 2) add(R.react > 0 ? 1 : -1, `Market ${R.react > 0 ? 'liked' : 'disliked'} the results (${R.date}): ${sgn(R.react)}% since`, 'res');
+  // news, weighted by how verified it is (results headlines are counted in the reaction above, so skipped here)
+  const it = f.news.items.filter((n) => ok(n.s) && Math.abs(n.s) >= 0.15 && Date.now() - n.ts < 4 * 864e5 && !(R && R.kind === 'past' && n.status === 'results'));
+  const verified = f.news.items.filter((n) => ['official', 'confirmed', 'results'].includes(n.status)).length;
   if (it.length) {
-    const w = it.reduce((s, n) => s + NEWS_W[n.status], 0), avg = it.reduce((s, n) => s + n.s * NEWS_W[n.status], 0) / (w || 1);
-    if (Math.abs(avg) >= 0.2) add(Math.max(-1.5, Math.min(1.5, avg * 2)) * Math.min(1, w / 1.5), `News leans ${avg > 0 ? 'positive' : 'negative'} (${it.length} headline${it.length > 1 ? 's' : ''}, ${it.filter((n) => n.status === 'official' || n.status === 'confirmed').length} verified)`);
+    const w = it.reduce((t, n) => t + NEWS_W[n.status], 0), avg = it.reduce((t, n) => t + n.s * NEWS_W[n.status], 0) / (w || 1);
+    const v = it.filter((n) => ['official', 'confirmed', 'results'].includes(n.status)).length;
+    if (Math.abs(avg) >= 0.2) add(Math.max(-1.5, Math.min(1.5, avg * 2)) * Math.min(1, w / 1.5), `News leans ${avg > 0 ? 'positive' : 'negative'} (${it.length} headline${it.length > 1 ? 's' : ''}, ${v ? v + ' confirmed' : 'none confirmed'})`, 'news');
   }
-  if (mkt && ok(mkt.niftyChg) && Math.abs(mkt.niftyChg) >= 0.5) add(mkt.niftyChg > 0 ? 0.5 : -0.5, `Nifty ${mkt.niftyChg > 0 ? 'up' : 'down'} ${Math.abs(mkt.niftyChg).toFixed(2)}%`);
-  if (f.fii && ok(f.fii.netChg) && Math.abs(f.fii.netChg) >= 10000) add(f.fii.netChg > 0 ? 0.5 : -0.5, `FIIs ${f.fii.netChg > 0 ? 'cut shorts / added longs' : 'added shorts'} in index futures (${f.fii.longPct.toFixed(0)}% long)`);
-  const score = why.reduce((s, x) => s + x.pts, 0), pos = why.filter((x) => x.pts > 0).length, neg = why.filter((x) => x.pts < 0).length;
-  const lean = score >= 2.5 ? 'CALL' : score <= -2.5 ? 'PUT' : 'WAIT';
-  let conf = Math.abs(score) >= 4 ? 'high' : Math.abs(score) >= 2.5 ? 'medium' : 'low';
+  (f.brokers || []).slice(0, 2).forEach((b) => add(b.kind === 'up' ? 0.5 : -0.5, `Broker ${b.kind === 'up' ? 'upgrade / target raised' : 'downgrade / target cut'} (${b.src})`, 'news'));
+  // options positioning
+  const o = f.opt;
+  if (o && (Math.abs(o.ceAdd) + Math.abs(o.peAdd)) > 0) {
+    if (o.peAdd > 0 && o.peAdd > 1.5 * Math.max(0, o.ceAdd)) add(0.5, `Put writers adding more than call writers near the price (support building, PCR ${o.pcr})`, 'opt');
+    else if (o.ceAdd > 0 && o.ceAdd > 1.5 * Math.max(0, o.peAdd)) add(-0.5, `Call writers adding more than put writers near the price (supply building, PCR ${o.pcr})`, 'opt');
+  }
+  // market
+  if (mkt && ok(mkt.niftyChg) && Math.abs(mkt.niftyChg) >= 0.5) add(mkt.niftyChg > 0 ? 0.5 : -0.5, `Nifty ${mkt.niftyChg > 0 ? 'up' : 'down'} ${Math.abs(mkt.niftyChg).toFixed(2)}%`, 'mkt');
+  if (f.fii && ok(f.fii.netChg) && Math.abs(f.fii.netChg) >= 10000) add(f.fii.netChg > 0 ? 0.5 : -0.5, `FIIs ${f.fii.netChg > 0 ? 'cut shorts / added longs' : 'added shorts'} in index futures (${f.fii.longPct.toFixed(0)}% long)`, 'mkt');
+
+  const score = why.reduce((t, x) => t + x.pts, 0), pos = why.filter((x) => x.pts > 0).length, neg = why.filter((x) => x.pts < 0).length;
+  const side = score >= 1.5 ? 'CALL' : score <= -1.5 ? 'PUT' : 'WAIT';
+  let strong = Math.abs(score) >= 3.5;
+  const capped = [];
+  // a professional never calls it "strong" without positioning behind the price, or with an event or ban ahead
+  const futAgrees = fb && fb.b && futStrength === 1 && (side === 'CALL' ? ['LB', 'SC'] : ['SB', 'LU']).includes(fb.b);
+  if (strong && !futAgrees) { strong = false; capped.push('futures positioning does not clearly confirm the move'); }
   const warn = [];
-  if (lean !== 'WAIT' && (lean === 'CALL' ? neg : pos) >= 2) { conf = conf === 'high' ? 'medium' : 'low'; warn.push('Signals are mixed: several point the other way'); }
+  if (f.ban) { warn.push(`In the F&O ban list${f.ban.date ? ' (' + f.ban.date + ')' : ''}: no fresh positions allowed, only closing existing ones`); strong = false; }
+  if (R && R.kind === 'next' && R.inDays <= 3) { warn.push(`Results due ${R.date} (${R.inDays <= 0 ? 'today' : `in ${R.inDays} day${R.inDays > 1 ? 's' : ''}`}): option premiums usually drop sharply after results, and the stock can gap either way`); if (strong) { strong = false; capped.push('results are due'); } }
+  const lean = side === 'WAIT' ? 'WAIT' : (strong ? 'STRONG ' : 'LEANS ') + side;
+  let conf = strong ? 'high' : side !== 'WAIT' && Math.abs(score) >= 2.5 ? 'medium' : 'low';
+  if (side !== 'WAIT' && (side === 'CALL' ? neg : pos) >= 3) { conf = conf === 'high' ? 'medium' : 'low'; warn.push('Signals are mixed: several point the other way'); }
   const rum = f.news.items.find((n) => n.status === 'report' && Math.abs(n.s || 0) >= 0.3 && Date.now() - n.ts < 3 * 864e5);
   if (rum) { warn.push(`Big headline is an unconfirmed report: "${rum.t.slice(0, 90)}"`); if (conf === 'high') conf = 'medium'; }
+  if (fb && fb.b === 'SC' && side === 'CALL') warn.push('The rise is partly short covering (sellers exiting, not fresh buyers): such moves fade more often unless fresh longs join');
+  if (fb && fb.b === 'LU' && side === 'PUT') warn.push('The fall is partly long unwinding (buyers exiting, not fresh sellers): it can stop once they are out');
+  if (o && ok(p.price)) {
+    if (side === 'CALL' && o.callWall && (o.callWall - p.price) / p.price <= 0.012) warn.push(`Heavy call writing at ${o.callWall}, just above the price: expect resistance there`);
+    if (side === 'PUT' && o.putWall && (p.price - o.putWall) / p.price <= 0.012) warn.push(`Heavy put writing at ${o.putWall}, just below the price: expect support there`);
+  }
+  if (capped.length) warn.push(`Not marked strong: ${capped.join(', ')}`);
   if (f.phase === 'open15') warn.push('First 15 minutes: opening moves often reverse. Recheck at 9:30');
   if (f.phase === 'closed' || f.phase === 'pre') warn.push('Market closed: this reads the last session. It refreshes at 9:15 and 9:30');
-  if (ok(f.px.gap) && Math.abs(f.px.gap) >= 1) warn.push(`Opened with a ${f.px.gap > 0 ? 'gap up' : 'gap down'} of ${Math.abs(f.px.gap).toFixed(1)}%: gaps often fill partly in the first hour`);
-  return { lean, conf, score: r2(score), why: why.sort((a, b) => Math.abs(b.pts) - Math.abs(a.pts)), warn };
+  if (ok(p.gap) && Math.abs(p.gap) >= 1) warn.push(`Opened with a ${p.gap > 0 ? 'gap up' : 'gap down'} of ${Math.abs(p.gap).toFixed(1)}%: gaps often fill partly in the first hour`);
+  return { lean, side, label: LABEL[lean], conf, score: r2(score), verified, why: why.sort((a, b) => Math.abs(b.pts) - Math.abs(a.pts)), warn, plan: tradePlan(f, side) };
+}
+// the levels a desk would write on the order ticket: trigger, where the view is wrong, first target
+function tradePlan(f, side) {
+  const p = f.px.price, L = f.lev, s = f.sess, o = f.opt; if (!ok(p) || !L) return null;
+  const hiRef = f.liveDay ? Math.max(L.pdh, f.px.hi || 0) : L.pdh, loRef = f.liveDay ? Math.min(L.pdl, f.px.lo || Infinity) : L.pdl;
+  const above = (arr) => arr.filter((x) => ok(x) && x > p * 1.001).sort((a, b) => a - b)[0] || null;
+  const below = (arr) => arr.filter((x) => ok(x) && x < p * 0.999).sort((a, b) => b - a)[0] || null;
+  const vw = s && s.vwap;
+  if (side === 'CALL') {
+    const trigger = above([hiRef, L.r1]) || r2(p), stop = below([vw, L.p, L.s1, loRef]), target = above([o && o.callWall, L.r1, f.px.hi52].filter((x) => x > trigger * 1.002));
+    return { side, trigger: r2(trigger), stop: r2(stop), target: r2(target) };
+  }
+  if (side === 'PUT') {
+    const trigger = below([loRef, L.s1]) || r2(p), stop = above([vw, L.p, L.r1, hiRef]), target = below([o && o.putWall, L.s1, f.px.lo52].filter((x) => x < trigger * 0.998));
+    return { side, trigger: r2(trigger), stop: r2(stop), target: r2(target) };
+  }
+  return { side, up: r2(above([hiRef, L.r1])), dn: r2(below([loRef, L.s1])) };
+}
+
+// plain-words summary built from the same numbers (used when the AI is off, slow, or says something the data does not support)
+function ruleSummary(f, L) {
+  const hi = [], en = [], fb = f.fut.live || f.fut.nse || f.fut.last, n0 = (x) => (ok(x) ? Math.round(x).toLocaleString('en-IN') : '–');
+  const BHI = { LB: 'खरीदार नई पोज़िशन बना रहे हैं (लॉन्ग बिल्डअप)', SB: 'बेचने वाले नई पोज़िशन बना रहे हैं (शॉर्ट बिल्डअप)', SC: 'बेचने वाले अपनी पोज़िशन काट रहे हैं (शॉर्ट कवरिंग)', LU: 'खरीदार अपनी पोज़िशन काट रहे हैं (लॉन्ग अनवाइंडिंग)' };
+  const BEN = { LB: 'buyers are building fresh positions (long buildup)', SB: 'sellers are building fresh positions (short buildup)', SC: 'sellers are cutting positions (short covering)', LU: 'buyers are cutting positions (long unwinding)' };
+  const closed = f.phase === 'closed' || f.phase === 'pre';
+  if (closed) { hi.push(`ये पिछले सत्र (${f.px.session}) का डेटा है, सुबह 9:30 के बाद दोबारा देखें।`); en.push(`This is last-session data (${f.px.session}); recheck after 9:30.`); }
+  if (fb && fb.b) { const weak = !(Math.abs(fb.doiPct || 0) >= 2 && Math.abs(fb.dp || 0) >= 0.5); hi.push(`फ्यूचर्स में ${BHI[fb.b]}${weak ? ', पर ये संकेत कमज़ोर है' : ''}: भाव ${fb.dp > 0 ? '+' : ''}${fb.dp}%, OI ${fb.doiPct > 0 ? '+' : ''}${fb.doiPct}%।`); en.push(`In futures, ${BEN[fb.b]}${weak ? ', but the signal is weak' : ''}: price ${fb.dp > 0 ? '+' : ''}${fb.dp}%, OI ${fb.doiPct > 0 ? '+' : ''}${fb.doiPct}%.`); }
+  const day = L.why.find((w) => w.tag === 'day');
+  if (day) { hi.push(day.pts > 0 ? 'दिन का अंत मज़बूत रहा: भाव ऊपरी हिस्से में या VWAP के ऊपर।' : 'दिन का अंत कमज़ोर रहा: भाव निचले हिस्से में या VWAP के नीचे।'); en.push(day.pts > 0 ? 'The day ended strong: price in the upper part of the range or above VWAP.' : 'The day ended weak: price in the lower part of the range or below VWAP.'); }
+  const R = f.resEv;
+  if (R && R.kind === 'past' && ok(R.react)) { hi.push(`नतीजे ${R.date} को आए${R.src === 'NSE' ? ' (तारीख़ NSE से पक्की)' : ''}; तब से भाव ${R.react > 0 ? '+' : ''}${R.react}%${R.nums && ok(R.nums.pat) ? `, मुनाफ़ा सालाना ${R.nums.pat > 0 ? '+' : ''}${R.nums.pat}% (ख़बरों के मुताबिक़)` : ''}।`); en.push(`Results came on ${R.date}${R.src === 'NSE' ? ' (date confirmed on NSE)' : ''}; price ${R.react > 0 ? '+' : ''}${R.react}% since${R.nums && ok(R.nums.pat) ? `, profit ${R.nums.pat > 0 ? '+' : ''}${R.nums.pat}% YoY (as reported)` : ''}.`); }
+  if (R && R.kind === 'next') { hi.push(`नतीजे ${R.date} को आने हैं: उससे पहले ऑप्शन महँगे रहते हैं और नतीजों के बाद प्रीमियम तेज़ी से गिरता है।`); en.push(`Results are due ${R.date}: option premiums stay high before and drop fast after.`); }
+  const news = f.news.items.slice(0, 6);
+  if (news.length) { const v = L.verified; hi.push(v ? `ख़बरों में से ${v} की पुष्टि हुई है (NSE/BSE या कई भरोसेमंद अख़बार)।` : 'ख़बरों में से किसी की पुष्टि नहीं हुई है: ये एक-एक स्रोत की ख़बरें या रिपोर्ट हैं।'); en.push(v ? `${v} of the headlines are confirmed (NSE/BSE or several trusted outlets).` : 'None of the headlines is confirmed yet: single-source stories or reports.'); }
+  const t = L.why.find((w) => w.tag === 'trend');
+  if (t) { hi.push(t.pts > 0 ? 'लंबा रुझान ऊपर की तरफ़ है।' : 'लंबा रुझान नीचे की तरफ़ है।'); en.push(t.pts > 0 ? 'The bigger trend points up.' : 'The bigger trend points down.'); }
+  const P = L.plan;
+  if (P && P.side === 'CALL') { hi.push(`ऊपर ${n0(P.trigger)} पार हो तो तेज़ी पक्की होती है${P.target ? `, अगला पड़ाव ${n0(P.target)}` : ''}; ${P.stop ? `${n0(P.stop)} के नीचे आए तो ये सोच ग़लत।` : ''}`); en.push(`Above ${n0(P.trigger)} the rise is confirmed${P.target ? `, next stop ${n0(P.target)}` : ''}; ${P.stop ? `below ${n0(P.stop)} the view is wrong.` : ''}`); }
+  else if (P && P.side === 'PUT') { hi.push(`नीचे ${n0(P.trigger)} टूटे तो कमज़ोरी पक्की होती है${P.target ? `, अगला पड़ाव ${n0(P.target)}` : ''}; ${P.stop ? `${n0(P.stop)} के ऊपर गया तो ये सोच ग़लत।` : ''}`); en.push(`Below ${n0(P.trigger)} the fall is confirmed${P.target ? `, next stop ${n0(P.target)}` : ''}; ${P.stop ? `above ${n0(P.stop)} the view is wrong.` : ''}`); }
+  else if (P) { hi.push(`साफ़ दिशा नहीं: ${P.up ? n0(P.up) + ' के ऊपर तेज़ी' : ''}${P.up && P.dn ? ', ' : ''}${P.dn ? n0(P.dn) + ' के नीचे कमज़ोरी' : ''} का संकेत होगा।`); en.push(`No clear side: ${P.up ? 'above ' + n0(P.up) + ' turns it up' : ''}${P.up && P.dn ? ', ' : ''}${P.dn ? 'below ' + n0(P.dn) + ' turns it down' : ''}.`); }
+  if (L.warn[0] && !/Market closed/.test(L.warn[0])) { hi.push('सबसे बड़ा जोखिम: ' + warnHi(L.warn[0])); en.push('Biggest risk: ' + L.warn[0] + '.'); }
+  const HL = { 'STRONG CALL': 'डेटा मज़बूती से कॉल की तरफ़ है', 'LEANS CALL': 'डेटा कॉल की तरफ़ झुका है, पर पक्का नहीं', WAIT: 'अभी कोई साफ़ दिशा नहीं है', 'LEANS PUT': 'डेटा पुट की तरफ़ झुका है, पर पक्का नहीं', 'STRONG PUT': 'डेटा मज़बूती से पुट की तरफ़ है' };
+  hi.push(`कुल मिलाकर: ${HL[L.lean]}। फ़ैसला आपका है।`); en.push(`Overall: ${L.label}. The decision is yours.`);
+  return { hi: hi.join('\n'), en: en.join('\n'), by: 'rules' };
+}
+function warnHi(w) {
+  if (/short covering/i.test(w)) return 'ये तेज़ी कुछ हद तक शॉर्ट कवरिंग से है; नए खरीदार न जुड़े तो कम टिकती है।';
+  if (/long unwinding/i.test(w)) return 'ये गिरावट कुछ हद तक लॉन्ग अनवाइंडिंग से है; खरीदार निकल जाने के बाद रुक सकती है।';
+  if (/unconfirmed report/i.test(w)) return 'बड़ी ख़बर अभी सिर्फ़ रिपोर्ट है, आधिकारिक पुष्टि नहीं; ग़लत निकली तो भाव तेज़ी से पलट सकता है।';
+  if (/ban list/i.test(w)) return 'शेयर F&O बैन में है: नई पोज़िशन नहीं बन सकती।';
+  if (/Results due/i.test(w)) return 'नतीजे पास हैं: ऑप्शन का प्रीमियम नतीजों के बाद तेज़ी से गिरता है और गैप किसी भी तरफ़ हो सकता है।';
+  if (/call writing/i.test(w)) return 'ठीक ऊपर कॉल राइटर्स का बड़ा दीवार है, वहाँ रुकावट आ सकती है।';
+  if (/put writing/i.test(w)) return 'ठीक नीचे पुट राइटर्स का सपोर्ट है, वहाँ गिरावट रुक सकती है।';
+  if (/mixed/i.test(w)) return 'संकेत मिले-जुले हैं, कई बातें उल्टी तरफ़ इशारा कर रही हैं।';
+  if (/First 15 minutes/i.test(w)) return 'पहले 15 मिनट की चाल अक्सर पलटती है, 9:30 के बाद देखें।';
+  if (/gap/i.test(w)) return 'गैप के साथ खुला है; पहले घंटे में गैप अक्सर कुछ भरता है।';
+  if (/Not marked strong/i.test(w)) return 'फ्यूचर्स की पोज़िशन इस चाल की पूरी पुष्टि नहीं कर रही।';
+  return w;
+}
+// does the AI text claim something the data does not support?
+function aiBad(ai, f, L) {
+  const hi = String(ai.hi || ''), en = String(ai.en || '');
+  if (!hi || hi.length < 40) return 'empty';
+  if (L.verified === 0 && (/(वेरिफ़?ाइड|वेरीफाइड|पुष्टि हो चुकी|पुष्ट हैं|आधिकारिक रूप से पुष्ट)(?![^।\n]{0,12}नहीं)/.test(hi) || /\b(?<!un)verified\b(?![^.\n]{0,12}\bnot\b)/i.test(en.replace(/not (been )?verified/gi, '')))) return 'claims verified news';
+  const HL = { 'STRONG CALL': /मज़बूत|मजबूत|strong/i, 'STRONG PUT': /मज़बूत|मजबूत|strong/i };
+  if (L.lean === 'WAIT' && /(कॉल|पुट)\s*(ख़रीद|खरीद)|buy (a )?(call|put)/i.test(hi + en)) return 'tells to buy';
+  if (/(ख़रीदें|खरीदें|बेचें|ज़रूर लें|सलाह है)/.test(hi)) return 'gives advice';
+  if (!HL[L.lean] && /(मज़बूत|मजबूत) (कॉल|पुट|तेज़ी|तेजी)/.test(hi)) return 'overstates';
+  // numbers: every figure the AI writes must exist in the data (allowing rounding)
+  const facts = JSON.stringify(f) + JSON.stringify(L), nums = (hi.match(/\d[\d,]*(\.\d+)?/g) || []).map((x) => +x.replace(/,/g, '')).filter((x) => x >= 10 && !(x >= 2020 && x <= 2030));
+  const known = (x) => facts.includes(String(x)) || facts.includes(String(Math.round(x))) || (facts.match(/-?\d+(\.\d+)?/g) || []).some((y) => Math.abs(Math.abs(+y) - x) <= Math.max(0.6, x * 0.002));
+  if (nums.filter((x) => !known(x)).length >= 2) return 'numbers not in the data';
+  return null;
 }
 
 async function pulse(env, body) {
   const S = await resolveStock(env, body || {});
-  const f = await shared('pulsef:' + S.key, 60000, () => pulseFacts(env, S));
+  const f = await shared('pulsef2:' + S.key, 60000, () => pulseFacts(env, S));
   const mkt = body && body.mkt && ok(+body.mkt.niftyChg) ? { niftyChg: +body.mkt.niftyChg } : null;
-  const lean = pulseLean(f, mkt);
-  // AI words, cached per stock for 10 minutes (and per phase, so 9:15 and 9:30 get fresh text)
+  const lean = pulseLean(f, mkt), rule = ruleSummary(f, lean);
   let ai = null;
   if (hasAI(env) && body && body.ai !== false) {
-    const ck = `pulseai:${S.sym}:${f.phase}:${Math.floor(Date.now() / 600e3)}:${lean.lean}`;
+    const ck = `pulseai2:${S.sym}:${f.phase}:${Math.floor(Date.now() / 600e3)}:${lean.lean}`;
     ai = memGet(ck) || (await env.KV.get(ck, 'json').catch(() => null));
     if (!ai) {
-      const facts = { stock: `${f.name} (${f.sym})`, marketPhase: f.phase, price: f.px, levels: f.lev, futuresBuildup: f.fut, fiiIndexFutures: f.fii,
-        news: f.news.items.slice(0, 6).map((n) => ({ headline: n.t, verified: n.status, outlets: n.pubs.length, sentiment: n.s })), officialFilings: f.news.official.slice(0, 3).map((o) => o.t),
-        results: f.results, ruleLean: lean };
-      const prompt = `You explain one Indian F&O stock to a retail trader in very simple Hindi, using ONLY this data (never invent numbers or news).
-The rule-based lean is "${lean.lean}" with ${lean.conf} confidence. Do not change it; explain it.
-Data: ${JSON.stringify(facts).slice(0, 9000)}
-Write 5 to 7 short lines covering: who is in control (buyers or sellers, from the futures buildup), whether the main news is official/confirmed or only a report, the trend, the 2 price levels to watch and what each would mean, the biggest risk. ${f.phase === 'closed' || f.phase === 'pre' ? 'Say clearly this is from the last session and must be rechecked after 9:30.' : ''}
-Never promise an outcome or tell them to buy. End with one line that the decision is theirs.
+      const CHK = { official: 'NSE/BSE filing found (official)', confirmed: 'carried by several trusted outlets (confirmed)', results: 'results headline; results date confirmed on NSE, figures as reported', single: 'only one source: NOT confirmed', report: 'only a report (may / likely / sources): NOT confirmed' };
+      const facts = { stock: `${f.name} (${f.sym})`, marketPhase: f.phase, price: f.px, levels: f.lev, session: f.sess, futuresBuildup: f.fut, options: f.opt, fiiIndexFutures: f.fii,
+        results: f.resEv, brokerCalls: f.brokers.map((b) => `${b.kind === 'up' ? 'upgrade' : 'downgrade'}: ${b.t}`),
+        confirmedNewsCount: lean.verified, news: f.news.items.slice(0, 6).map((n) => ({ headline: n.t, check: CHK[n.status], outlets: n.pubs.length, sentiment: n.s })),
+        officialFilings: f.news.official.slice(0, 3).map((o) => o.t), inFnoBan: !!f.ban,
+        ruleVerdict: { label: lean.label, confidence: lean.conf, reasons: lean.why.map((w) => `${w.pts > 0 ? '+' : ''}${w.pts} ${w.txt}`), risks: lean.warn, plan: lean.plan } };
+      const prompt = `You are a senior Indian F&O desk trader explaining one stock to a retail trader in simple, natural spoken Hindi (as people speak in India, English market words like "buyers", "short covering", "VWAP" are fine).
+Use ONLY this data. Never invent numbers, news, reasons or targets. Every number you write must appear in the data.
+The rule verdict is "${lean.label}" (${lean.conf} confidence). Repeat it exactly; do not upgrade or downgrade it.
+News: exactly ${lean.verified} headline(s) are confirmed. ${lean.verified === 0 ? 'So you must say the news is NOT confirmed yet. Never call any of it verified or official.' : 'Say which part is confirmed and which is only reported.'}
+Data: ${JSON.stringify(facts).slice(0, 10000)}
+Write 6 to 8 short lines, no greeting, no "namaste", no headings:
+1) who is in control in futures and how strong that is; 2) how the day closed (range, last hour, VWAP) if given; 3) results and news, with how confirmed they are; 4) the trend; 5) the plan levels: above which level the view is confirmed, below which it is wrong, and the next level; 6) the single biggest risk; 7) the verdict line, then "फ़ैसला आपका है।"
+${f.phase === 'closed' || f.phase === 'pre' ? 'Start by saying this is last-session data, to be rechecked after 9:30.' : ''}
+Never tell them to buy or sell, never say "सलाह", never promise an outcome.
 Return ONLY JSON: {"hi": "Hindi (Devanagari), lines separated by \\n", "en": "same in simple English"}`;
       try {
-        const raw = await aiText(env, prompt, 900, 'chat'), j = JSON.parse(raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1));
-        ai = { hi: String(j.hi || '').trim(), en: String(j.en || '').trim() };
-        if (ai.hi || ai.en) { memSet(ck, ai, 600e3); await env.KV.put(ck, JSON.stringify(ai), { expirationTtl: 3600 }).catch(() => {}); } else ai = null;
+        const raw = await aiText(env, prompt, 1100, 'chat'), j = JSON.parse(raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1));
+        const cand = { hi: String(j.hi || '').replace(/^\s*(नमस्ते|नमस्कार|hello|hi)[^\n]*\n/i, '').trim(), en: String(j.en || '').replace(/^\s*(hello|hi)[^\n]*\n/i, '').trim(), by: 'ai' };
+        const bad = aiBad(cand, f, lean);
+        ai = bad ? { rejected: bad } : cand;
+        memSet(ck, ai, 600e3); await env.KV.put(ck, JSON.stringify(ai), { expirationTtl: 3600 }).catch(() => {});
       } catch (e) { ai = { err: String(e.message || e).slice(0, 160) }; }
     }
   }
-  return { ...f, lean, ai };
+  return { ...f, lean, ai: ai && ai.hi ? ai : null, aiNote: ai && (ai.rejected ? 'AI text did not match the data, so the summary below is built from the rules' : ai.err ? 'AI unavailable right now: ' + ai.err : null), rule };
+}
+
+// several stocks side by side, ranked (no AI, so it is fast and cheap)
+async function compare(env, body) {
+  const list = (Array.isArray(body && body.items) ? body.items : []).slice(0, 8);
+  if (!list.length) throw new HttpError(400, 'Add at least one stock to compare');
+  const mkt = body && body.mkt && ok(+body.mkt.niftyChg) ? { niftyChg: +body.mkt.niftyChg } : null, out = [];
+  for (let i = 0; i < list.length; i += 3) {            // three at a time, to stay gentle on Upstox
+    const part = await Promise.all(list.slice(i, i + 3).map(async (it) => {
+      try {
+        const S = await resolveStock(env, it), f = await shared('pulsef2:' + S.key, 60000, () => pulseFacts(env, S)), L = pulseLean(f, mkt);
+        return { sym: f.sym, name: f.name, key: f.key, price: f.px.price, chg: f.px.chg, lean: L.lean, label: L.label, conf: L.conf, score: L.score,
+          why: L.why.slice(0, 3), risk: L.warn.find((w) => !/Market closed|First 15/.test(w)) || null, plan: L.plan, fut: (f.fut.live || f.fut.nse || f.fut.last || {}).b || null, ban: !!f.ban };
+      } catch (e) { if (e.code === 'UPSTOX_LOGIN') throw e; return { sym: String(it.sym || '?').toUpperCase(), err: e.message }; }
+    }));
+    out.push(...part);
+  }
+  out.sort((a, b) => (a.err ? 1 : 0) - (b.err ? 1 : 0) || Math.abs(b.score || 0) - Math.abs(a.score || 0));
+  return { ts: Date.now(), phase: phaseNow(), items: out };
+}
+
+/* ---------- natural Indian voice (optional): Sarvam AI "Bulbul" text-to-speech ----------
+   Needs the secret SARVAM_API_KEY (sarvam.ai, paid per character after free credits). Without it the page keeps
+   using the phone's or computer's own voice. Same sentence = served from cache, so repeated alerts cost nothing. */
+async function sha1(t) { const b = await crypto.subtle.digest('SHA-1', new TextEncoder().encode(t)); return [...new Uint8Array(b)].map((x) => x.toString(16).padStart(2, '0')).join(''); }
+async function tts(env, body) {
+  if (!env.SARVAM_API_KEY) throw new HttpError(501, 'Natural voice is off: add SARVAM_API_KEY in the Worker', 'TTS_OFF');
+  const text = String((body && body.text) || '').replace(/\s+/g, ' ').trim().slice(0, 600);
+  if (!text) throw new HttpError(400, 'Nothing to speak');
+  const model = env.SARVAM_MODEL || 'bulbul:v3', speaker = String((body && body.voice) || env.SARVAM_SPEAKER || 'priya').toLowerCase().replace(/[^a-z_]/g, '').slice(0, 40);
+  const ck = 'tts:' + (await sha1(model + speaker + text));
+  const c = memGet(ck);
+  if (c) { return { audio: c, mime: 'audio/mpeg', cached: true }; }
+  const today = ymd(istNow()), uk = 'ttsuse:' + today, used = +(memGet(uk) || (await env.KV.get(uk).catch(() => 0)) || 0), cap = +(env.SARVAM_DAILY_CHARS || 8000);
+  if (used + text.length > cap) throw new HttpError(429, `Natural voice daily limit reached (${cap} characters). Using the device voice.`, 'TTS_CAP');
+  const r = await fetch('https://api.sarvam.ai/text-to-speech', { method: 'POST', headers: { 'api-subscription-key': env.SARVAM_API_KEY, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text, language_code: 'hi-IN', model, speaker, pace: +(env.SARVAM_PACE || 1.05), speech_sample_rate: 24000, output_audio_codec: 'mp3' }) });
+  if (!r.ok) { const e = await r.text().catch(() => ''); throw new HttpError(r.status === 429 ? 429 : 502, 'Natural voice error ' + r.status + ': ' + e.slice(0, 160), 'TTS_ERR'); }
+  const j = await r.json(), audio = j && j.audios && j.audios[0];
+  if (!audio) throw new HttpError(502, 'Natural voice returned no audio', 'TTS_ERR');
+  const nu = used + text.length; memSet(uk, nu, 6 * 3600e3);
+  if (Math.floor(nu / 2000) > Math.floor(used / 2000)) env.KV.put(uk, String(nu), { expirationTtl: 2 * 86400 }).catch(() => {}); // a KV write only every ~2,000 characters (free plan: 1,000 writes a day)
+  if (audio.length < 900000) memSet(ck, audio, 6 * 3600e3);
+  return { audio, mime: 'audio/mpeg', cached: false };
 }
 
 /* ---------------- रूटर ---------------- */
@@ -1719,7 +1983,7 @@ async function route(req, env, url) {
   switch (p) {
     case '/api/status': {
       const t = env.UPSTOX_ACCESS_TOKEN || (await env.KV.get('upstox_token'));
-      return R({ email, upstox: !!t, ai: hasAI(env), aiVia: env.GEMINI_API_KEY ? 'Gemini' : env.AI ? 'Workers AI' : env.ANTHROPIC_API_KEY ? 'Claude' : null, tokenMode: env.UPSTOX_ACCESS_TOKEN ? 'analytics' : 'oauth', v: 2, pulse: 1, upCalls30m: UPC.length, rateWait: Math.max(0, Math.ceil((RL.until - Date.now()) / 1000)) });
+      return R({ email, upstox: !!t, ai: hasAI(env), aiVia: env.GEMINI_API_KEY ? 'Gemini' : env.AI ? 'Workers AI' : env.ANTHROPIC_API_KEY ? 'Claude' : null, tokenMode: env.UPSTOX_ACCESS_TOKEN ? 'analytics' : 'oauth', v: 2, pulse: 2, tts: !!env.SARVAM_API_KEY, upCalls30m: UPC.length, rateWait: Math.max(0, Math.ceil((RL.until - Date.now()) / 1000)) });
     }
     case '/api/snapshot': {
       const w = (url.searchParams.get('w') || '').split(',').filter((k) => KEY_RE.test(k)).slice(0, 40);
@@ -1768,6 +2032,8 @@ async function route(req, env, url) {
       return R(await shared('eod:' + only.join(','), 20e3, () => eodQuotes(env, only)));
     }
     case '/api/buildup': return R(await buildupLists(env));
+    case '/api/compare': { if (req.method !== 'POST') throw new HttpError(405, 'POST required'); return R(await compare(env, await req.json().catch(() => ({})))); }
+    case '/api/tts': { if (req.method !== 'POST') throw new HttpError(405, 'POST required'); return R(await tts(env, await req.json().catch(() => ({})))); }
     case '/api/pulse': {
       if (req.method !== 'POST') throw new HttpError(405, 'POST required');
       return R(await pulse(env, await req.json().catch(() => ({}))));

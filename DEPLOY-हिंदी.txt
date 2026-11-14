@@ -1,20 +1,44 @@
-F&O Terminal: एक बार में deploy (15 Nov 2026 वाला पैकेज)
+F&O Terminal: एक बार में deploy (15 Nov 2026, version b)
 =========================================================
 
-1) Cloudflare Worker (पहले यह करें)
-   - Cloudflare dashboard > Workers > fno-worker > Edit code
-   - पूरा पुराना कोड हटाएँ, worker/src/index.js का पूरा कोड paste करें > Deploy
-   - कोई नई key या setting नहीं चाहिए (वही KV, वही Upstox, वही Gemini)
+A) Cloudflare Worker (पहले यह)
+   Cloudflare > Workers > fno-worker > Edit code > पूरा पुराना कोड हटाएँ > worker/src/index.js का पूरा कोड paste > Deploy
+   (कोई नई key ज़रूरी नहीं। Natural आवाज़ चाहिए तो नीचे D देखें।)
 
-2) Website (Vercel / GitHub)
-   - web/ फ़ोल्डर की सारी फ़ाइलें पुरानी के ऊपर replace करें
-     (नई फ़ाइल: web/js/pulse.js; बदली हुई: index.html, style.css, js/data-live.js, js/main.js)
-   - Commit/push करें, Vercel ख़ुद deploy कर देगा
+B) Website (GitHub / Vercel)
+   ZIP की सारी फ़ाइलें (web, worker, firebase, README.md) रिपो में पुरानी के ऊपर डालें > Commit. Vercel ख़ुद deploy करेगा.
 
-3) जाँच (2 मिनट)
-   - https://fno-worker.raiabhinaykumar.workers.dev/api/status खोलें: उसमें "pulse":1 दिखना चाहिए
-   - .../api/buildup खोलें: NSE की long/short buildup लिस्ट आनी चाहिए
-   - Dashboard खोलें > ऊपर "Pulse" बटन > कोई स्टॉक (जैसे PAYTM) लिखें > Check
-   - फ़ोन पर पुराना पेज दिखे तो एक बार refresh करें (version बदल दिया है, cache अपने-आप हटेगा)
+C) जाँच
+   1. https://fno-worker.raiabhinaykumar.workers.dev/api/status में "pulse":2 दिखे
+   2. Dashboard > Pulse > "eic" टाइप करें: नीचे EICHERMOT दिखना चाहिए > उसे चुनें
+   3. Compare टैब > 4-5 स्टॉक जोड़ें > Compare
+   4. फ़ोन पर पुराना पेज दिखे तो एक बार refresh
 
-अगर "Deploy the new Worker code" लिखा आए, तो Worker वाला step दोबारा देखें.
+D) (वैकल्पिक) Natural Indian आवाज़: Sarvam AI "Bulbul"
+   1. https://dashboard.sarvam.ai पर sign up करें (₹100 के free credits मिलते हैं) > API key बनाएँ
+   2. Cloudflare > fno-worker > Settings > Variables and Secrets > Add:
+        SARVAM_API_KEY  (Type: Secret)  = आपकी key
+      वैकल्पिक (Type: Text):
+        SARVAM_SPEAKER     = priya (डिफ़ॉल्ट, महिला)। दूसरे: shubh, rahul, aditya, ritu, neha, kavya, amit
+        SARVAM_DAILY_CHARS = 8000 (रोज़ की सीमा, इससे ज़्यादा पर फ़ोन की आवाज़ चलेगी)
+   3. Deploy. Dashboard > Ask पैनल (माइक वाला) में आवाज़ का dropdown: "Natural Indian voice (cloud)" चुनें
+   ख़र्च: Bulbul v3 लगभग ₹30 प्रति 10,000 अक्षर। 8,000 अक्षर/दिन की सीमा पर ज़्यादा से ज़्यादा ~₹24/दिन;
+   ₹100 के free credits लगभग 33,000 अक्षर (करीब 300 अलर्ट) चलेंगे। Key न डालें तो सब पहले जैसा, फ़ोन/कंप्यूटर की आवाज़ से।
+   अगर cloud आवाज़ 4 सेकंड में न आए, तो अलर्ट अपने-आप फ़ोन की आवाज़ में बोल दिया जाता है (कोई अलर्ट छूटता नहीं)।
+
+E) www.padhleindia.live वाली "certificate" error (कोड से नहीं, सेटिंग से ठीक होगी)
+   1. Vercel > आपका project > Settings > Domains > Add > www.padhleindia.live
+      वहाँ "Redirect to padhleindia.live" चुनें (308)
+   2. जहाँ domain का DNS है (Cloudflare DNS / GoDaddy / Hostinger), वहाँ record:
+        Type CNAME, Name www, Target cname.vercel-dns.com
+      Cloudflare DNS में हो तो बादल का निशान ग्रे (DNS only) रखें
+   3. 5-30 मिनट में Vercel ख़ुद नया certificate बना देगा; Domains पेज पर www के आगे "Valid Configuration" दिखेगा
+   तब तक https://padhleindia.live (बिना www) खोलें, वो ठीक चलता है.
+
+F) फ़ोन पर आवाज़ बेहतर करने के मुफ़्त तरीक़े
+   iPhone: Settings > Accessibility > Spoken Content > Voices > Hindi > "Lekha (Enhanced)" डाउनलोड करें,
+           फिर dashboard के Ask पैनल के dropdown में उसे चुनें. Silent switch बंद और volume ऊपर रखें.
+   Android: Settings > Text-to-speech > Google > Hindi (India) > high quality voice डाउनलोड करें.
+   Windows: Microsoft Edge में dashboard खोलें: "Swara Online (Natural)" मुफ़्त में काफ़ी इंसानी आवाज़ है.
+   ध्यान: फ़ोन की screen lock होने पर या दूसरा app खोलने पर browser आवाज़ रोक देता है; ये फ़ोन का नियम है.
+   पेज खुलने के बाद एक बार कहीं भी tap करें, उसके बाद अलर्ट अपने-आप बोलेंगे.

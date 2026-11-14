@@ -16,27 +16,127 @@ const Voice = (() => {
     const t = $('sbTxt'); if (t) t.textContent = paused ? 'Paused' : 'Speaking';
     const p = $('sbPause'); if (p) { p.innerHTML = paused ? '▶ Play' : '⏸ Pause'; p.setAttribute('aria-label', paused ? 'Play: continue speaking' : 'Pause speaking'); }
   }
-  function hiVoice() { try { return speechSynthesis.getVoices().find((x) => x.lang && x.lang.toLowerCase().startsWith('hi')); } catch { return null; } }
-  function next(my) {
+  /* Which device voice sounds most natural: neural/"Natural"/"Enhanced"/"Premium" Hindi voices first
+     (Edge: Microsoft Swara/Madhur Online (Natural); iPhone: Lekha Enhanced after download; Android/Chrome: Google हिन्दी).
+     You can also pick one in the Ask panel; the choice is remembered on this device. */
+  const VKEY = 'fno_voice';
+  function hiVoices() { try { return speechSynthesis.getVoices().filter((x) => x.lang && /^hi([-_]|$)/i.test(x.lang)); } catch { return []; } }
+  const vRank = (v) => (/natural|neural|online/i.test(v.name) ? 0 : /premium|enhanced/i.test(v.name) ? 1 : /google/i.test(v.name) ? 2 : v.localService ? 4 : 3);
+  function hiVoice() {
+    const vs = hiVoices(); let want = null; try { want = localStorage.getItem(VKEY); } catch (e) { /* private */ }
+    return vs.find((v) => v.name === want) || vs.slice().sort((a, b) => vRank(a) - vRank(b))[0] || null;
+  }
+  // text tuned for listening: no ".00", symbols spoken as words
+  function speakable(t) {
+    return String(t).replace(/(\d),(?=\d{2,3}\b)/g, '$1').replace(/(\d+)\.00\b/g, '$1').replace(/(\d+\.\d)\d+/g, '$1')
+      .replace(/\+\s?(\d)/g, 'प्लस $1').replace(/-(\d+(\.\d+)?)\s?%/g, 'माइनस $1%').replace(/%/g, ' प्रतिशत').replace(/₹\s?/g, '').replace(/\bOI\b/g, 'ओ आई')
+      .replace(/\bVWAP\b/gi, 'वी-वैप').replace(/\bPCR\b/g, 'पी सी आर').replace(/\bFII(s)?\b/g, 'एफ़ आई आई').replace(/\bNSE\b/g, 'एन एस ई').replace(/\bSL\b/g, 'स्टॉप लॉस').replace(/[|•·]/g, ', ').replace(/\s+/g, ' ').trim();
+  }
+  /* ===== Natural Indian voice (cloud, optional): used when the Worker has a Sarvam key ===== */
+  const au = typeof Audio !== 'undefined' ? new Audio() : null; if (au) { au.preload = 'auto'; au.setAttribute('playsinline', ''); }
+  const cloudOn = () => { let pref = null; try { pref = localStorage.getItem(VKEY); } catch (e) { /* private */ } return !!(au && typeof Source !== 'undefined' && Source.mode === 'live' && Source.status && Source.status.tts && (pref == null || pref === '' || pref === 'cloud')); };
+  let cloudFail = 0;
+  function chunks(t) { // a few sentences per request: fewer calls, natural flow
+    const s = (String(t).match(/[^।!?]+?(?:[।!?]+|\.(?=\s|$)|$)/g) || [String(t)]).map((x) => x.trim()).filter(Boolean), out = []; let cur = '';
+    s.forEach((x) => { if ((cur + ' ' + x).length > 420 && cur) { out.push(cur); cur = x; } else cur = cur ? cur + ' ' + x : x; }); if (cur) out.push(cur); return out;
+  }
+  async function fetchAudio(text) {
+    const r = await Promise.race([Source.post('/api/tts', { text }), new Promise((_, rej) => setTimeout(() => rej(new Error('slow')), 4000))]);
+    if (!r || !r.audio) throw new Error('no audio'); return 'data:' + (r.mime || 'audio/mpeg') + ';base64,' + r.audio;
+  }
+  async function cloudNext(my) {
     if (my !== gen || paused) return;
     if (!queue.length) { curS = null; setSpeaking(false); return; }
-    curS = queue.shift();
-    const u = new SpeechSynthesisUtterance(curS); u.lang = 'hi-IN';
+    curS = queue[0];
+    try {
+      const src = curS._src || (await fetchAudio(curS));
+      if (my !== gen || paused) return;
+      queue.shift(); cloudFail = 0;
+      if (queue[0] && !queue[0]._src) { const nx = queue[0]; fetchAudio(String(nx)).then((u) => { if (queue[0] === nx) { const o = new String(nx); o._src = u; queue[0] = o; } }).catch(() => {}); } // prefetch
+      au.onended = () => { if (my === gen && !paused) { curS = null; cloudNext(my); } };
+      au.onerror = () => { if (my === gen && !paused) { curS = null; cloudNext(my); } };
+      au.src = src; setSpeaking(true);
+      await au.play();
+    } catch (e) {
+      if (my !== gen || paused) return;
+      cloudFail++; // slow network, quota or blocked autoplay: finish with the device voice so the alert is never lost
+      if (/notallowed|user didn.t interact|play\(\) failed/i.test(String(e && (e.name + e.message)))) toastOnce();
+      queue = queue.map(String); next(my);
+    }
+  }
+  let toasted = false; const toastOnce = () => { if (!toasted && !unlocked && typeof toast === 'function') { toasted = true; toast('Tap anywhere on the page once to turn on voice alerts'); } };
+  /* Chrome quirks this works around (the "bar says Speaking but no sound" glitch):
+     1) speak() right after cancel() is often dropped silently, so we wait a moment after cancel;
+     2) the speech engine can get stuck "paused" (tab was in background, phone screen locked), so resume() first;
+     3) an utterance with no live reference can be garbage-collected and never finishes, so we keep a reference;
+     4) if a sentence never starts within 1.5 s we retry once, and a watchdog moves on if it never ends;
+     5) before the first tap on the page the browser blocks speech; the first tap anywhere unlocks it. */
+  let curU = null, startT = null, endT = null, unlocked = false;
+  function speakNow(my, txt, tries) {
+    if (my !== gen || paused) return;
+    const u = new SpeechSynthesisUtterance(txt); u.lang = 'hi-IN'; u.rate = 1;
     const v = hiVoice(); if (v) u.voice = v;
-    u.onend = () => { if (my === gen) { curS = null; next(my); } };
-    u.onerror = () => { if (my === gen && !paused) { queue = []; curS = null; setSpeaking(false); } };
-    try { speechSynthesis.speak(u); setSpeaking(true); } catch { setSpeaking(false); }
+    let started = false;
+    const done = () => { clearTimeout(startT); clearTimeout(endT); if (my === gen && curU === u) { curU = null; curS = null; next(my); } };
+    u.onstart = () => { started = true; clearTimeout(startT); clearTimeout(endT); endT = setTimeout(() => { if (my === gen && curU === u) { try { speechSynthesis.cancel(); } catch {} done(); } }, 4000 + txt.length * 120); };
+    u.onend = done;
+    u.onerror = (e) => {
+      clearTimeout(startT); if (my !== gen || paused || curU !== u) return;
+      const why = e && e.error;
+      if (why === 'interrupted' || why === 'canceled') return;
+      if (why === 'not-allowed') { queue.unshift(txt); curU = null; setSpeaking(false); if (!unlocked && typeof toast === 'function') toast('Tap anywhere on the page once to turn on voice alerts'); return; }
+      done();
+    };
+    curU = u;
+    try { if (speechSynthesis.paused) speechSynthesis.resume(); speechSynthesis.speak(u); setSpeaking(true); } catch { curU = null; setSpeaking(false); return; }
+    startT = setTimeout(() => {
+      if (started || my !== gen || curU !== u) return;
+      try { speechSynthesis.cancel(); } catch {}
+      if (tries < 1) setTimeout(() => speakNow(my, txt, tries + 1), 120); else { if (speechSynthesis.paused || speechSynthesis.speaking) { try { speechSynthesis.resume(); } catch {} } done(); }
+    }, 1500);
+  }
+  function next(my) {
+    if (my !== gen || paused) return;
+    if (!queue.length) { curS = null; curU = null; setSpeaking(false); return; }
+    curS = queue.shift();
+    speakNow(my, curS, 0);
   }
   function say(t) {
     if (!t || !ttsOn() || paused) return; // while paused, new alerts stay quiet (your paused message is kept)
+    const busy = (() => { try { return speechSynthesis.speaking || speechSynthesis.pending; } catch { return false; } })();
     stop();
-    queue = (String(t).match(/[^।.!?]+[।.!?]*/g) || [String(t)]).map((x) => x.trim()).filter(Boolean);
-    next(gen);
+    const txt = speakable(t), my = gen;
+    if (cloudOn() && cloudFail < 3) { queue = chunks(txt); setSpeaking(true); cloudNext(my); return; }
+    queue = (txt.match(/[^।!?]+?(?:[।!?]+|\.(?=\s|$)|$)/g) || [txt]).map((x) => x.trim()).filter(Boolean);
+    setSpeaking(true);
+    setTimeout(() => next(my), busy ? 250 : 60); // give cancel() time to finish, or Chrome drops the next speak()
   }
-  function stop() { gen++; queue = []; curS = null; paused = false; try { speechSynthesis.cancel(); } catch { /* not supported */ } setSpeaking(false); soundUI(); }
+  // voice picker in the Ask panel
+  function fillVoices() {
+    const el = $('voiceSel'); if (!el) return; let want = ''; try { want = localStorage.getItem(VKEY) || ''; } catch (e) { /* private */ }
+    const cloud = typeof Source !== 'undefined' && Source.mode === 'live' && Source.status && Source.status.tts, vs = hiVoices().sort((a, b) => vRank(a) - vRank(b));
+    el.innerHTML = (cloud ? '<option value="cloud">Natural Indian voice (cloud)</option>' : '') + '<option value="">Best voice on this device</option>' + vs.map((v) => `<option value="${esc(v.name)}">${esc(v.name.replace(/Microsoft |Google /, ''))}${vRank(v) === 0 ? ' (natural)' : ''}</option>`).join('');
+    el.value = want && [...el.options].some((o) => o.value === want) ? want : cloud ? 'cloud' : '';
+    el.onchange = () => { try { localStorage.setItem(VKEY, el.value); } catch (e) { /* private */ } cloudFail = 0; const was = $('tts') && $('tts').checked; if (was) say('ये आवाज़ अब अलर्ट और जवाब बोलेगी।'); };
+  }
+  try { if ('speechSynthesis' in window) speechSynthesis.onvoiceschanged = fillVoices; } catch (e) { /* none */ }
+  setTimeout(fillVoices, 0); setTimeout(fillVoices, 4000);
+  // first tap anywhere unlocks speech for the session (browsers block speech that starts without a tap)
+  const unlock = () => {
+    if (unlocked) return; unlocked = true;
+    try { const u = new SpeechSynthesisUtterance(' '); u.volume = 0; speechSynthesis.speak(u); } catch {}
+    if (au) { try { au.muted = true; au.src = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA='; au.play().then(() => { au.pause(); au.muted = false; }).catch(() => { au.muted = false; }); } catch (e) { au.muted = false; } }
+    if (queue.length && !paused && ttsOn() && !curU) { const my = gen; setTimeout(() => next(my), 300); }
+  };
+  ['pointerdown', 'keydown', 'touchstart'].forEach((ev) => document.addEventListener(ev, unlock, { capture: true, passive: true }));
+  // coming back to the tab: wake a stuck engine
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) { try { if (speechSynthesis.paused && !paused) speechSynthesis.resume(); } catch {} } });
+  function stop() { gen++; queue = []; curS = null; curU = null; if (au) { try { au.pause(); au.onended = null; } catch (e) { /* none */ } } clearTimeout(startT); clearTimeout(endT); paused = false; try { speechSynthesis.cancel(); } catch { /* not supported */ } setSpeaking(false); soundUI(); }
   function pause() {
     if (paused) return;
     paused = true; gen++;
+    clearTimeout(startT); clearTimeout(endT); curU = null;
+    if (au && !au.paused && au.src) { try { au.pause(); } catch (e) { /* none */ } curS = null; setSpeaking(true); soundUI(); return; } // cloud voice: resume in place
     if (curS) queue.unshift(curS); curS = null;  // replay the interrupted sentence on Play
     try { speechSynthesis.cancel(); } catch { /* not supported */ }
     setSpeaking(true); soundUI();
@@ -44,7 +144,8 @@ const Voice = (() => {
   function play() {
     if (!paused) return;
     paused = false; soundUI();
-    if (queue.length && ttsOn()) { setSpeaking(true); next(gen); } else { queue = []; setSpeaking(false); }
+    if (au && au.src && au.paused && au.currentTime > 0 && !au.ended && ttsOn()) { const my = gen; au.onended = () => { if (my === gen && !paused) cloudNext(my); }; setSpeaking(true); au.play().catch(() => { queue = queue.map(String); next(my); }); return; }
+    if (queue.length && ttsOn()) { setSpeaking(true); const my = gen; setTimeout(() => (cloudOn() && cloudFail < 3 && queue.length && typeof queue[0] === 'string' && queue[0].length > 120 ? cloudNext(my) : next(my)), 80); } else { queue = []; setSpeaking(false); }
   }
   const togglePause = () => (paused ? play() : pause());
   // One-tap sound on/off (top bar 🔊). Remembered on this device.
@@ -338,5 +439,5 @@ const Voice = (() => {
     show(html, useAI ? '' : sayTxt);
     if (useAI) { const done = await askAI(raw, a, 'aiAns'); if (!done) say(sayTxt); }
   }
-  return { say, stop, pause, play, togglePause, mute, toggleSound, toggleMic, ask, ctx: (a) => fullCtx(a) };
+  return { say, stop, pause, play, togglePause, mute, toggleSound, toggleMic, ask, fillVoices, ctx: (a) => fullCtx(a) };
 })();

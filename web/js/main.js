@@ -100,7 +100,7 @@ async function rollExpired(list) {
 }
 
 async function startLive() {
-  try { await LiveSource.init(); }
+  try { await LiveSource.init(); try { Voice.fillVoices(); } catch (e) { /* voice list */ } }
   catch (e) { gate(`<div class="gbox"><h2>Can’t reach the Worker</h2><p>${esc(e.message)}</p><p class="mut">Check the Worker URL, ALLOWED_EMAIL and FIREBASE_API_KEY.</p><button class="go" onclick="Store.signOut()">Log in with another email</button></div>`); return; }
   gate('');
   const wl = await rollExpired(await Store.loadWatch(false));

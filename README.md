@@ -1,3 +1,14 @@
+# ✅ नया (15 नवंबर 2026, version b): Pulse 2.0 + Compare + आवाज़ का सुधार
+
+**अपलोड:** Worker में `worker/src/index.js` पूरा paste > Deploy; GitHub पर सारी फ़ाइलें replace। पूरे steps: `DEPLOY-हिंदी.txt`।
+
+- **Pulse 2.0:** 2-3 अक्षर टाइप करते ही नीचे स्टॉक की लिस्ट। फ़ैसले के 5 स्तर (Strong/Leans CALL, WAIT, Leans/Strong PUT)। "Strong" तभी, जब futures की पोज़िशन भी साथ दे और results या F&O ban सामने न हो। नए संकेत: दिन कहाँ बंद हुआ, आख़िरी घंटे की ख़रीद/बिक्री, VWAP, option writers की दीवारें (PCR), results के बाद बाज़ार का react, broker upgrade/downgrade, Nifty के मुक़ाबले ताक़त, F&O ban। हर स्टॉक पर trade plan: "इसके ऊपर पक्का / इसके नीचे ग़लत / अगला level"।
+- **AI की जाँच:** Gemini का लिखा सार data से मिलाया जाता है। ख़बर को झूठा "verified" कहे, data में न हो ऐसे नंबर लिखे, या सलाह दे, तो वो हटाकर नियमों से बना हिंदी सार दिखता है।
+- **Compare टैब:** 8 तक स्टॉक्स, सबसे साफ़ संकेत से कमज़ोर तक रैंक, कारण और सबसे बड़ा जोखिम साथ में।
+- **आवाज़:** "Speaking दिखे पर आवाज़ न आए" वाला glitch ठीक (Chrome/iPhone का bug)। Device की सबसे natural Hindi आवाज़ अपने-आप चुनी जाती है, Ask पैनल में बदल भी सकते हैं। वैकल्पिक: Sarvam AI की Indian आवाज़ (`SARVAM_API_KEY`)।
+
+---
+
 # ✅ नया (15 नवंबर 2026): Stock Pulse + Upstox limit का इलाज
 
 **अपलोड:** (1) Cloudflare में `worker/src/index.js` का पूरा कोड paste करके **Deploy** (नए: `/api/pulse`, `/api/buildup`, rate-limit सुधार)। (2) GitHub पर `web` की सारी फ़ाइलें replace (नई: `web/js/pulse.js`)। कोई नई key नहीं। Firebase rules में कोई बदलाव नहीं।
