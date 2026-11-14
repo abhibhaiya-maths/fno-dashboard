@@ -1,0 +1,20 @@
+F&O Terminal: एक बार में deploy (15 Nov 2026 वाला पैकेज)
+=========================================================
+
+1) Cloudflare Worker (पहले यह करें)
+   - Cloudflare dashboard > Workers > fno-worker > Edit code
+   - पूरा पुराना कोड हटाएँ, worker/src/index.js का पूरा कोड paste करें > Deploy
+   - कोई नई key या setting नहीं चाहिए (वही KV, वही Upstox, वही Gemini)
+
+2) Website (Vercel / GitHub)
+   - web/ फ़ोल्डर की सारी फ़ाइलें पुरानी के ऊपर replace करें
+     (नई फ़ाइल: web/js/pulse.js; बदली हुई: index.html, style.css, js/data-live.js, js/main.js)
+   - Commit/push करें, Vercel ख़ुद deploy कर देगा
+
+3) जाँच (2 मिनट)
+   - https://fno-worker.raiabhinaykumar.workers.dev/api/status खोलें: उसमें "pulse":1 दिखना चाहिए
+   - .../api/buildup खोलें: NSE की long/short buildup लिस्ट आनी चाहिए
+   - Dashboard खोलें > ऊपर "Pulse" बटन > कोई स्टॉक (जैसे PAYTM) लिखें > Check
+   - फ़ोन पर पुराना पेज दिखे तो एक बार refresh करें (version बदल दिया है, cache अपने-आप हटेगा)
+
+अगर "Deploy the new Worker code" लिखा आए, तो Worker वाला step दोबारा देखें.

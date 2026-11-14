@@ -3,7 +3,7 @@ const LiveSource = (() => {
   const HDAY = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
   const raw = {};
   const R = (k) => raw[k] || (raw[k] = { days: null, news: [], newsAI: false, bars: {}, fut: null, daily: null, chain: null });
-  let snap = null, status = null, lastErr = null, lastOk = 0, resultsData = { ai: false, items: [] };
+  let snap = null, status = null, lastErr = null, lastOk = 0, staleData = false, resultsData = { ai: false, items: [] };
   let glob = [], cal = { items: [], sources: {} }, fii = null, off = { items: [], sources: {} }, vixDaily = null, geo = null;
 
   let rateUntil = 0;
@@ -24,6 +24,7 @@ const LiveSource = (() => {
   const soft = (e) => { if (e.code === 'UPSTOX_LOGIN' || e.code === 'UPSTOX_TOKEN_BAD') fail(e); }; // optional extras: don't flag the whole page
   const enc = encodeURIComponent;
   const watchKeys = () => KEYS.filter((k) => !CFG[k].core);
+  const pickK = (only) => (k) => !only || (Array.isArray(only) ? only.includes(k) : only === k);
   const sessQ = (k) => (CFG[k].exch === 'MCX' ? '&s=MCX' : '');
 
   async function init() { status = await api('/api/status'); return status; }
@@ -37,18 +38,18 @@ const LiveSource = (() => {
       if (s.lite) s.chains = snap ? snap.chains : {}; // keep the last chains (their near-ATM options still update from ticks)
       // keep the freshest streamed ticks: the stream is newer than a REST snapshot
       if (snap && Stream.connected) Stream.carryOver(snap, s);
-      snap = s; lastOk = Date.now(); lastErr = null; Stream.syncKeys(snap);
+      staleData = !!s.stale; snap = s; lastOk = Date.now(); lastErr = null; Stream.syncKeys(snap);
     } catch (e) { fail(e); }
   }
   // Option chains of watchlist stocks/indices that have F&O (the three main indices come with the snapshot)
   async function refreshChains(only) {
-    await Promise.all(watchKeys().filter((k) => CFG[k].opt && CFG[k].ukey && (!only || only === k)).map(async (k) => {
+    await Promise.all(watchKeys().filter((k) => CFG[k].opt && CFG[k].ukey && pickK(only)(k)).map(async (k) => {
       try { R(k).chain = await api('/api/chain?u=' + enc(CFG[k].ukey)); if (R(k).chain.lot) CFG[k].lot = R(k).chain.lot; } catch (e) { soft(e); if (e.code === 'NO_OPTIONS') CFG[k].opt = false; }
     }));
     if (snap) Stream.syncKeys(snap);
   }
   async function refreshCandles(only) {
-    await Promise.all(KEYS.filter((k) => !only || only === k).map(async (k) => {
+    await Promise.all(KEYS.filter(pickK(only)).map(async (k) => {
       const cf = CFG[k], q = cf.core ? '?index=' + k : '?key=' + enc(cf.key) + sessQ(k);
       try {
         const j = await api('/api/candles' + q), td = istYmd(), had = R(k).days && R(k).days.find((d) => d.date === td);
@@ -334,7 +335,7 @@ const LiveSource = (() => {
   async function stt(audio, mime) { return api('/api/stt', { method: 'POST', body: JSON.stringify({ audio, mime }) }); }
   async function ask(question, context, history) { return api('/api/ask', { method: 'POST', body: JSON.stringify({ question, context, history: history || [] }) }); }
   function connectUrl(idToken) { return APP_CONFIG.WORKER_URL.replace(/\/$/, '') + '/auth/login?id_token=' + encodeURIComponent(idToken); }
-  return { mode: 'live', raw: (p) => api(p), init, refreshSnapshot, refreshChains, refreshCandles, refreshFut, refreshDaily, refreshNews, refreshResults, refreshGlobal, refreshCalendar, refreshFII, refreshOfficial,
+  return { mode: 'live', raw: (p) => api(p), post: (p, body) => api(p, { method: 'POST', body: JSON.stringify(body || {}) }), stale: () => staleData, init, refreshSnapshot, refreshChains, refreshCandles, refreshFut, refreshDaily, refreshNews, refreshResults, refreshGlobal, refreshCalendar, refreshFII, refreshOfficial,
     search, instInfo, get, clock, rateLimited, stt, rateWait: () => Math.max(0, Math.ceil((rateUntil - Date.now()) / 1000)), ask, connectUrl, results: () => resultsData, stream: Stream, drop: (k) => { delete raw[k]; },
     global: () => glob, calendar: () => cal, official: () => off, fiiAuto: () => fii, geo: () => geo, refreshGeo, world: () => world, maps: () => maps, hvNews: () => hvNews, refreshMaps, refreshHvNews, participant: () => part, refreshWorld, refreshParticipant,
     get status() { return status; }, get error() { return lastErr; }, newsAI: (k) => R(k).newsAI, newsSources: (k) => R(k).sources };

@@ -1,22 +1,10 @@
-# ✅ नया (11 नवंबर 2026, भाग 5): Journal + Alerts (अपने लेवल + झटका डिटेक्टर) — यही सबसे ताज़ा वर्ज़न है
+# ✅ नया (15 नवंबर 2026): Stock Pulse + Upstox limit का इलाज
 
-**अपलोड:** इस ZIP का `web`, `worker`, `firebase`, `README.md` GitHub पर डालें → Commit → साइट पर Ctrl + Shift + R। Worker वही है जो भाग 4 में था (इस बार Worker में कोई नया बदलाव नहीं); अगर भाग 4 वाला Worker deploy नहीं किया, तो `worker/src/index.js` अब deploy कर दें।
+**अपलोड:** (1) Cloudflare में `worker/src/index.js` का पूरा कोड paste करके **Deploy** (नए: `/api/pulse`, `/api/buildup`, rate-limit सुधार)। (2) GitHub पर `web` की सारी फ़ाइलें replace (नई: `web/js/pulse.js`)। कोई नई key नहीं। Firebase rules में कोई बदलाव नहीं।
 
-**1. Journal (ऊपर "Journal" बटन):** हर पेपर ट्रेड और हर सिग्नल के साथ अब उस वक़्त की हालत सेव होती है (समय, VIX, expiry, रिपोर्ट कार्ड नंबर, Market Brain, daily trend, ख़बरें, दिन का प्रकार, ADX)। Journal बताता है कहाँ आप जीतते हैं और कहाँ हारते हैं, जैसे "Expiry day: won 22%" या "FOMO टैग वाले ट्रेड: 22%"। "Warn me here" दबाने पर वही हालत दोबारा आने पर रिपोर्ट कार्ड चेतावनी देता है (सिर्फ़ सलाह, कुछ रोकता या ग्रेड नहीं बदलता)। "My Trades & Tags" में हर ट्रेड पर टैग लगाएँ: Followed plan, FOMO, Revenge trade, Early exit, Late exit, Moved my SL, Too big, News trade। सबक़ 8+ ट्रेड या 20+ सिग्नल के बाद ही दिखते हैं।
+**नया क्या है:** ऊपर **Pulse** बटन: कोई भी F&O स्टॉक खोजें: buyers/sellers (futures buildup), ख़बर असली है या रिपोर्ट, trend, levels, FII मूड, CALL/PUT/WAIT झुकाव कारणों के साथ, और हिंदी सार। "Market buildup" टैब में सारे F&O शेयरों की चार लिस्ट (NSE bhavcopy)। खुला रहे तो 9:15, 9:30 और फिर हर 10 मिनट अपने-आप update।
 
-**2. Alerts (ऊपर "Alerts" बटन):** अपने भाव पर अलर्ट (ऊपर/नीचे, एक बार या हर 10 मिनट, नोट बोलकर), एक टैप में resistance/support/day high/low पर अलर्ट। **झटका डिटेक्टर:** अचानक बड़ी candle, 3 मिनट में तेज़ चाल, India VIX का उछाल, या बड़ी ख़बर। अगर उल्टी पोज़िशन है तो पहले "आपकी कॉल/पुट ख़तरे में है"। लाल बैनर + बीप + हिंदी आवाज़। Off / Normal / Sensitive। ये तभी चलते हैं जब डैशबोर्ड खुला हो (फ़ोन पर स्क्रीन ऑन रखें)। Telegram अभी नहीं जोड़ा गया।
-
-CALL/PUT सिग्नल, स्कोर, ग्रेड और पेपर ट्रेडिंग के नियम पहले जैसे हैं।
-
----
-
-# ✅ नया (11 नवंबर 2026, भाग 4): हर इंस्ट्रूमेंट के लिए World cues + AI से नतीजों की तारीख़ — यही सबसे ताज़ा वर्ज़न है
-
-**अपलोड:** इस ZIP का `web`, `worker`, `firebase`, `README.md` GitHub पर डालें → Commit। **Worker भी दोबारा Deploy करें** (`worker/src/index.js`): नतीजों का कैलेंडर अब पिछले 20 और अगले 30 दिन का है, और NSE रोके तो ख़बरों से तारीख़ें निकालता है। कोई नई key नहीं।
-
-**1. World cues अब चुने हुए इंस्ट्रूमेंट के लिए:** ऊपर की पट्टी "World cues for Nifty / SENSEX / BANK NIFTY / WIPRO / CRUDEOIL…" दिखाती है। हर इंस्ट्रूमेंट के लिए अलग हिसाब: Bank Nifty = बैंक ADR + US yields; IT शेयर = Nasdaq + Infosys ADR + कमज़ोर रुपया अच्छा; फ़ार्मा = कमज़ोर रुपया अच्छा; मेटल = चीन + डॉलर; OMC/एयरलाइन/पेंट = सस्ता क्रूड अच्छा; ONGC = महँगा क्रूड अच्छा; MCX crude/gold/silver/gas = उनके अपने विश्व भाव (बाकी "not relevant")। नीचे वाली World markets तालिका का कॉलम भी "For <इंस्ट्रूमेंट>" दिखाता है। Pre-market checklist पूरे बाज़ार (Nifty) का ही रहता है। इंजन (स्कोर, सिग्नल, ग्रेड, Market Brain) पहले जैसा Nifty वाला हिसाब ही इस्तेमाल करता है, उसमें कोई बदलाव नहीं।
-
-**2. Ask बॉक्स में नतीजों की तारीख़:** "11 तारीख को किसके रिजल्ट आने हैं", "kal kaun se results aaye", "is hafte kiske results hain", "Friday ko", "15 November", "Reliance ka result kab hai"। जवाब: F&O कंपनियाँ अलग, बाकी अलग; जिनके नतीजे आ चुके उनका मुनाफ़ा YoY (Results Radar से); हिंदी में बोलकर; AI चालू हो तो सिर्फ़ इसी लिस्ट से छोटा सार (वो कोई नाम या तारीख़ ख़ुद नहीं जोड़ सकता)।
+**Upstox limit:** Worker limit लगने पर आख़िरी अच्छा data देता है ("⚠ Upstox busy"), limit की ख़बर सारे devices में बाँटता है; छुपे tabs polling रोकते हैं। Signals पहले की तरह WebSocket से, कोई देरी नहीं।
 
 ---
 

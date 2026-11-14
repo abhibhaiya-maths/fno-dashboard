@@ -81,7 +81,7 @@ const NEWS_KW = {
 /* ---------------- छोटे हेल्पर ---------------- */
 const MEM = new Map(); // isolate के अंदर छोटा कैश
 function memGet(k) { const v = MEM.get(k); if (!v) return null; if (v.exp < Date.now()) { MEM.delete(k); return null; } return v.val; }
-function memSet(k, val, ttlMs) { MEM.set(k, { val, exp: Date.now() + ttlMs }); if (MEM.size > 300) MEM.delete(MEM.keys().next().value); }
+function memSet(k, val, ttlMs) { MEM.set(k, { val, exp: Date.now() + ttlMs }); if (MEM.size > 900) MEM.delete(MEM.keys().next().value); }
 
 class HttpError extends Error { constructor(status, msg, code) { super(msg); this.status = status; this.code = code; } }
 
@@ -143,6 +143,7 @@ async function upstoxToken(env) {
   return t;
 }
 async function up(env, path, force) {
+  if (!force) await syncRL(env);
   if (!force && Date.now() < RL.until) { const e = new HttpError(429, RL.msg, 'UPSTOX_RATE'); e.retryAfter = Math.ceil((RL.until - Date.now()) / 1000); throw e; }
   const t = await upstoxToken(env);
   UPC.push(Date.now()); while (UPC.length && UPC[0] < Date.now() - 1800e3) UPC.shift();
@@ -163,6 +164,7 @@ async function up(env, path, force) {
     const wait = ra ? ra * 1000 : Math.min(15 * 60e3, 60e3 * 2 ** RL.n);
     RL.until = Date.now() + wait;
     RL.msg = `Upstox rate limit (${up || 'too many requests'}). Pausing data requests for ${Math.round(wait / 60000) || 1} min.`;
+    try { await env.KV.put('rl_until', String(RL.until), { expirationTtl: 3600 }); } catch (e2) { /* KV write limit */ }
     const e = new HttpError(429, RL.msg, 'UPSTOX_RATE'); e.retryAfter = Math.ceil(wait / 1000); throw e;
   }
   if (!r.ok || j.status === 'error') {
@@ -182,11 +184,24 @@ async function upAny(env, paths) {
   throw last;
 }
 // Short shared cache: phone + laptop + friends asking for the same thing within seconds share one Upstox call
+// If Upstox is rate-limiting us (or we are close to its limit), keep serving the last good copy (marked stale)
+// instead of failing: the dashboard keeps its data and nobody hammers Upstox while it is blocked.
+const staleOf = (v) => (v && typeof v === 'object' && !Array.isArray(v) ? { ...v, stale: true } : v);
+function budgetTight() { const now = Date.now(); let m1 = 0; for (let i = UPC.length - 1; i >= 0 && UPC[i] > now - 60e3; i--) m1++; return m1 > 300 || UPC.length > 1600; }
 async function shared(key, ms, fn) {
   const c = memGet('sh:' + key); if (c) return c;
   const p = MEM.get('shp:' + key); if (p && p.exp > Date.now()) return p.v; // same request already in flight
+  const last = MEM.get('shl:' + key), lastOk = last && last.exp > Date.now();
+  if (lastOk && (Date.now() < RL.until || budgetTight())) return staleOf(last.val);
   const v = fn(); MEM.set('shp:' + key, { v, exp: Date.now() + 10000 });
-  try { const out = await v; memSet('sh:' + key, out, ms); return out; } finally { MEM.delete('shp:' + key); }
+  try { const out = await v; memSet('sh:' + key, out, ms); MEM.set('shl:' + key, { val: out, exp: Date.now() + 20 * 60e3 }); return out; }
+  catch (e) { if (e.code === 'UPSTOX_RATE' && lastOk) return staleOf(last.val); throw e; }
+  finally { MEM.delete('shp:' + key); }
+}
+// Every Worker copy (isolate) learns about an Upstox block, not just the one that got the 429
+async function syncRL(env) {
+  if (memGet('rlchk')) return; memSet('rlchk', 1, 20000);
+  try { const v = +(await env.KV.get('rl_until')) || 0; if (v > RL.until) { RL.until = v; RL.msg = 'Upstox rate limit: pausing data requests for a few minutes (shared across all your devices).'; } } catch (e) { /* KV unavailable */ }
 }
 
 function nextTokenExpiry() {
@@ -261,7 +276,7 @@ function slimSide(o) {
     iv: g.iv ? g.iv / 100 : 0, de: g.delta || 0, ga: g.gamma || 0, th: g.theta || 0, ve: g.vega || 0,
   };
 }
-async function chain(env, ukey) { return shared('chain:' + ukey, 8000, () => chain0(env, ukey)); }
+async function chain(env, ukey) { return shared('chain:' + ukey, 15000, () => chain0(env, ukey)); }
 async function chain0(env, ukey) {
   const c = await contracts(env, ukey);
   if (!c.expiries.length) throw new HttpError(404, 'No option contracts for this instrument', 'NO_OPTIONS');
@@ -300,7 +315,7 @@ async function quotes(env, watch) {
 }
 
 async function snapshot(env, watch, lite) {
-  return shared('snap:' + (lite ? 'L:' : '') + (watch || []).join(','), 2500, () => snapshot0(env, watch, lite));
+  return shared('snap:' + (lite ? 'L:' : '') + (watch || []).join(','), lite ? 2500 : 6000, () => snapshot0(env, watch, lite));
 }
 async function snapshot0(env, watch, lite) {
   // lite = prices only (1 Upstox call) for fast polling; full adds the three option chains (3 more calls)
@@ -343,7 +358,7 @@ async function candles(env, key, sess) {
   let todayDays = [], todayErr = null;
   const lk = 'lastToday:' + key;
   try {
-    const d = await shared('intra:' + key, 20000, () => upAny(env, [
+    const d = await shared('intra:' + key, 30000, () => upAny(env, [
       `/v3/historical-candle/intraday/${enc(key)}/minutes/1`,
       `/v2/historical-candle/intraday/${enc(key)}/1minute`,
     ]));
@@ -725,7 +740,7 @@ async function futData(env, ukey, sym, exch, sess) {
   try { const d = await daily(env, f.fkey); const l = d.rows[d.rows.length - 1]; if (l) prev = { date: l[0], close: l[4], oi: l[6] }; } catch (e) { if (e.code === 'UPSTOX_LOGIN') throw e; }
   let rows = [];
   try {
-    const d = await upAny(env, [`/v3/historical-candle/intraday/${enc(f.fkey)}/minutes/1`, `/v2/historical-candle/intraday/${enc(f.fkey)}/1minute`]);
+    const d = await shared('fintra:' + f.fkey, 45000, () => upAny(env, [`/v3/historical-candle/intraday/${enc(f.fkey)}/minutes/1`, `/v2/historical-candle/intraday/${enc(f.fkey)}/1minute`]));
     const g = groupCandles(d && d.candles, sess).filter((x) => x.date === today)[0];
     rows = g ? g.c.map((x) => [x[0], x[4], x[6]]) : [];
   } catch (e) { if (e.code === 'UPSTOX_LOGIN') throw e; }
@@ -1172,7 +1187,7 @@ async function nseWeights(env, idx) {
   }
 }
 async function marketMap(env, idx) {
-  return shared('map:' + idx, 20000, async () => {
+  return shared('map:' + idx, 30000, async () => {
     const M = MAP_IDX[idx]; if (!M) throw new HttpError(400, 'Unknown index');
     const [cons, W] = await Promise.all([constituents(env, idx), nseWeights(env, idx)]);
     const keys = cons.items.map((x) => 'NSE_EQ|' + x.isin), q = {};
@@ -1421,6 +1436,273 @@ async function histRaw(req, env, url) {
   return new Response(r.body, { status: r.ok ? 200 : 502, headers: { 'content-type': 'application/json; charset=utf-8', ...corsHeaders(req, env) } });
 }
 
+/* ================= STOCK PULSE + MARKET BUILDUP (added Nov 2026) =================
+   /api/buildup : long / short buildup, short covering, long unwinding for every F&O stock, from NSE's
+                  official F&O bhavcopy (one free file per day, cached in KV). Same data Stockezee shows.
+   /api/pulse   : one stock, everything in one place: live + last-session futures buildup, trend, levels,
+                  FII mood, news with an authenticity check (official filing? how many trusted outlets?),
+                  results, a rule-based CALL / PUT / WAIT lean and a plain Hindi summary from the AI.
+   Upstox cost per pulse: about 2 calls (one quote, one futures intraday); everything else is cached. */
+
+const RUMOUR_RE = /\b(reportedly|sources? (said|say|close)|people (familiar|aware)|according to sources|as per (media )?reports|reports? (say|said|suggest)|in talks|mulls?|mulling|considering|likely to|may (revise|cut|hike|raise|ease|allow|ban|relax|scrap|delay)|could (revise|cut|ease|relax)|set to|plans? to|speculat|buzz|rumou?r|unconfirmed)\b/i;
+const TRUSTED_PUB = /economic ?times|economictimes|\bET\b|business ?standard|livemint|\bmint\b|moneycontrol|businessline|hindu ?business|cnbc|reuters|bloomberg|financial ?express|ndtv ?profit|business ?today|zee ?business|press trust|\bPTI\b/i;
+const BUILD = { LB: 'Long buildup', SB: 'Short buildup', SC: 'Short covering', LU: 'Long unwinding' };
+const buildOf = (dp, doi) => (!ok(dp) || !ok(doi) || dp === 0 || doi === 0 ? null : dp > 0 ? (doi > 0 ? 'LB' : 'SC') : doi > 0 ? 'SB' : 'LU');
+const r2 = (v) => (ok(v) ? Math.round(v * 100) / 100 : null);
+
+/* ---------- tiny ZIP reader (NSE ships the bhavcopy as a one-file zip) ---------- */
+async function unzipFirst(buf) {
+  const u8 = new Uint8Array(buf), dv = new DataView(buf);
+  if (dv.getUint32(0, true) !== 0x04034b50) return new TextDecoder().decode(u8); // not a zip: plain CSV
+  let e = -1;
+  for (let i = u8.length - 22; i >= Math.max(0, u8.length - 70000); i--) if (dv.getUint32(i, true) === 0x06054b50) { e = i; break; }
+  if (e < 0) throw new Error('bad zip');
+  const cd = dv.getUint32(e + 16, true);
+  if (dv.getUint32(cd, true) !== 0x02014b50) throw new Error('bad zip directory');
+  const method = dv.getUint16(cd + 10, true), csize = dv.getUint32(cd + 20, true), lho = dv.getUint32(cd + 42, true);
+  const start = lho + 30 + dv.getUint16(lho + 26, true) + dv.getUint16(lho + 28, true), data = u8.subarray(start, start + csize);
+  if (method === 0) return new TextDecoder().decode(data);
+  if (method !== 8) throw new Error('zip method ' + method);
+  return new Response(new Blob([data]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).text();
+}
+
+/* ---------- NSE F&O bhavcopy (UDiFF format) -> buildup per symbol ---------- */
+function parseBhav(text, date) {
+  const lines = text.split(/\r?\n/).filter(Boolean);
+  const head = lines[0].split(',').map((h) => h.replace(/"/g, '').trim().toLowerCase());
+  const col = (...names) => { for (const n of names) { const i = head.indexOf(n.toLowerCase()); if (i >= 0) return i; } return -1; };
+  const C = { tp: col('FinInstrmTp'), sym: col('TckrSymb'), exp: col('XpryDt'), cl: col('ClsPric'), pc: col('PrvsClsgPric'), oi: col('OpnIntrst'), doi: col('ChngInOpnIntrst'), vol: col('TtlTradgVol'), val: col('TtlTrfVal'), und: col('UndrlygPric') };
+  if (C.tp < 0 || C.sym < 0 || C.oi < 0 || C.doi < 0 || C.cl < 0) throw new Error('NSE changed the bhavcopy columns');
+  const by = {};
+  for (let i = 1; i < lines.length; i++) {
+    const c = lines[i].split(',').map((x) => x.replace(/"/g, '').trim()), tp = c[C.tp];
+    if (tp !== 'STF' && tp !== 'IDF') continue;
+    const s = c[C.sym], x = by[s] || (by[s] = { sym: s, idx: tp === 'IDF', oi: 0, doi: 0, vol: 0, val: 0, near: null });
+    x.oi += +c[C.oi] || 0; x.doi += +c[C.doi] || 0; x.vol += +c[C.vol] || 0; x.val += +c[C.val] || 0;
+    const exp = c[C.exp];
+    if (!x.near || exp < x.near.exp) x.near = { exp, cl: +c[C.cl], pc: C.pc >= 0 ? +c[C.pc] : null, und: C.und >= 0 ? +c[C.und] : null };
+  }
+  const rows = Object.values(by).map((x) => {
+    const pc = x.near.pc, dp = ok(pc) && pc > 0 ? ((x.near.cl - pc) / pc) * 100 : null, prevOi = x.oi - x.doi, doiPct = prevOi > 0 ? (x.doi / prevOi) * 100 : null;
+    const b = buildOf(dp, x.doi);
+    // clear = price really moved AND fresh positions really changed (filters "OI up 8% but price +0.2%")
+    const strength = ok(dp) && ok(doiPct) ? Math.abs(doiPct) * Math.min(1, Math.abs(dp) / 1) : 0;
+    return { sym: x.sym, idx: x.idx, b, price: r2(x.near.cl), dp: r2(dp), oi: x.oi, doi: x.doi, doiPct: r2(doiPct), strength: r2(strength), clear: ok(dp) && Math.abs(dp) >= 0.5 && Math.abs(doiPct) >= 2, val: x.val, exp: x.near.exp };
+  }).filter((x) => x.b);
+  return { date, rows };
+}
+async function bhavBuildup(env) {
+  const hit = memGet('bhav:latest'); if (hit) return hit;
+  const n = istNow(), afterPub = n.getUTCHours() * 60 + n.getUTCMinutes() >= 18 * 60 + 30; // NSE posts it in the evening
+  let res = null, tried = [];
+  for (let i = afterPub ? 0 : 1; i < 9 && !res; i++) {
+    const d = new Date(n.getTime() - i * 864e5), wd = d.getUTCDay(); if (wd === 0 || wd === 6) continue;
+    const ds = ymd(d), ck = 'bhav:' + ds;
+    const kv = await env.KV.get(ck, 'json').catch(() => null);
+    if (kv) { res = kv; break; }
+    const url = `https://nsearchives.nseindia.com/content/fo/BhavCopy_NSE_FO_0_0_0_${ds.replace(/-/g, '')}_F_0000.csv.zip`;
+    tried.push(ds);
+    try {
+      const r = await fetch(url, { headers: { 'User-Agent': UA_BROWSER, Accept: '*/*', Referer: 'https://www.nseindia.com/' } });
+      if (!r.ok) continue; // holiday or not published yet
+      res = parseBhav(await unzipFirst(await r.arrayBuffer()), ds);
+      res.ts = Date.now();
+      await env.KV.put(ck, JSON.stringify(res), { expirationTtl: 5 * 86400 }).catch(() => {});
+    } catch (e) { /* try the day before */ }
+  }
+  if (!res) throw new HttpError(502, `NSE F&O bhavcopy not reachable (tried ${tried.join(', ') || 'cache'}). NSE sometimes blocks cloud servers; try again later.`, 'NSE_BHAV');
+  memSet('bhav:latest', res, 30 * 60e3);
+  return res;
+}
+async function buildupLists(env) {
+  return shared('buildup', 10 * 60e3, async () => {
+    const B = await bhavBuildup(env), st = B.rows.filter((x) => !x.idx);
+    const top = (k) => st.filter((x) => x.b === k).sort((p, q) => q.strength - p.strength || Math.abs(q.doiPct) - Math.abs(p.doiPct)).slice(0, 15);
+    const count = (k) => st.filter((x) => x.b === k).length;
+    return { ts: Date.now(), date: B.date, src: 'NSE F&O bhavcopy (all expiries, end of day)',
+      counts: { LB: count('LB'), SB: count('SB'), SC: count('SC'), LU: count('LU') }, lists: { LB: top('LB'), SB: top('SB'), SC: top('SC'), LU: top('LU') },
+      index: B.rows.filter((x) => x.idx && /^(NIFTY|BANKNIFTY|FINNIFTY|MIDCPNIFTY)$/.test(x.sym)) };
+  });
+}
+
+/* ---------- news authenticity ---------- */
+function overlap(a, b) { let n = 0; a.forEach((x) => { if (b.has(x)) n++; }); return n / Math.max(1, Math.min(a.size, b.size)); }
+function nameMatcher(name, sym) {
+  const words = String(name || '').toLowerCase().replace(/[^a-z0-9& ]/g, ' ').split(/\s+/).filter((w) => w.length > 2 && !/^(ltd|limited|the|and|india|company|corporation|industries|bank|fut)$/.test(w));
+  const keys = [String(sym || '').toLowerCase(), words.slice(0, 2).join(' '), words[0] && words[0].length >= 5 ? words[0] : null].filter((x) => x && x.length >= 3);
+  return (t) => { const s = String(t || '').toLowerCase(); return keys.some((k) => s.includes(k)); };
+}
+function checkNews(items, offItems, isMine) {
+  const off = (offItems || []).filter((o) => isMine(o.co + ' ' + o.t) && o.ts > Date.now() - 7 * 864e5).slice(0, 6);
+  const offW = off.map((o) => normWords(o.t + ' ' + (o.sub || '')));
+  const out = items.slice(0, 10).map((n) => {
+    const pubs = [...new Set([n.src, ...(n.alsoBy || [])].filter(Boolean))], trusted = pubs.filter((p) => TRUSTED_PUB.test(p)).length;
+    const w = normWords(n.t), offHit = offW.some((ow) => overlap(w, ow) >= 0.25) || (RESULT_RE.test(n.t) && off.some((o) => /result/i.test(o.t + ' ' + o.sub)));
+    const rumour = RUMOUR_RE.test(n.t);
+    const status = offHit ? 'official' : rumour ? 'report' : trusted >= 2 || pubs.length >= 3 ? 'confirmed' : 'single';
+    return { t: n.t, link: n.link, src: n.src, pubs, ts: n.ts, s: n.s, imp: n.imp, status };
+  });
+  return { items: out, official: off.map((o) => ({ t: o.t, co: o.co, src: o.src, ts: o.ts, link: o.link })) };
+}
+const NEWS_W = { official: 1, confirmed: 1, single: 0.6, report: 0.3 };
+
+/* ---------- one stock ---------- */
+function pctFrom(rows, price, back) { const r = rows[rows.length - back]; return r && r[4] ? ((price - r[4]) / r[4]) * 100 : null; }
+function smaOf(c, n) { if (c.length < n) return null; let s = 0; for (let i = c.length - n; i < c.length; i++) s += c[i]; return s / n; }
+function rsiOf(c, n = 14) {
+  if (c.length <= n) return null; let g = 0, l = 0;
+  for (let i = 1; i <= n; i++) { const d = c[i] - c[i - 1]; if (d > 0) g += d; else l -= d; }
+  g /= n; l /= n;
+  for (let i = n + 1; i < c.length; i++) { const d = c[i] - c[i - 1]; g = (g * (n - 1) + Math.max(d, 0)) / n; l = (l * (n - 1) + Math.max(-d, 0)) / n; }
+  return l === 0 ? 100 : 100 - 100 / (1 + g / l);
+}
+function phaseNow() {
+  const n = istNow(), wd = n.getUTCDay(), m = n.getUTCHours() * 60 + n.getUTCMinutes() - 555;
+  if (wd === 0 || wd === 6) return 'closed';
+  return m < -15 ? 'closed' : m < 0 ? 'pre' : m < 15 ? 'open15' : m < 375 ? 'live' : 'closed';
+}
+async function resolveStock(env, b) {
+  let key = String(b.key || ''), sym = String(b.sym || '').toUpperCase().replace(/[^A-Z0-9&-]/g, '').slice(0, 20), name = String(b.name || '').slice(0, 60);
+  if (!KEY_RE.test(key)) {
+    const U = await universe(env).catch(() => ({ items: [] })), x = (U.items || []).find((i) => i.sym === sym);
+    if (!x) throw new HttpError(404, `Couldn't find ${sym || 'that stock'} in the F&O list. Search by its NSE symbol.`, 'NOT_FOUND');
+    key = x.key; name = name || x.name;
+  }
+  return { key, sym: sym || key.split('|')[1], name: name || sym };
+}
+async function pulseFacts(env, S) {
+  const { key, sym, name } = S, phase = phaseNow(), today = ymd(istNow());
+  const [qm, D, F, B, P, N, O, RS] = await Promise.all([
+    shared('pq:' + key, 15000, () => up(env, '/v2/market-quote/quotes?instrument_key=' + enc(key))).then(quoteMap).catch(() => ({})),
+    daily(env, key).catch(() => ({ rows: [] })),
+    futFor(env, key, sym, 'NSE').catch(() => null),
+    bhavBuildup(env).catch(() => null),
+    participantOI(env).catch(() => null),
+    newsFor(env, sym, name).catch(() => ({ items: [] })),
+    official(env).catch(() => ({ items: [] })),
+    results(env).catch(() => ({ items: [] })),
+  ]);
+  const q = qm[key] || null, rows = D.rows || [], closes = rows.map((r) => r[4]);
+  const last = rows[rows.length - 1] || null, qms = q && q.ts ? (+q.ts || Date.parse(q.ts)) : NaN, qDate = ok(qms) ? ymd(new Date(qms + 5.5 * 3600e3)) : null;
+  const liveDay = !!(q && qDate && last && qDate > last[0]);  // the quote is from a session newer than the last daily candle
+  const price = q && ok(q.price) ? q.price : last ? last[4] : null;
+  const base = liveDay ? rows : rows.slice(0, -1);              // completed sessions before the one the price belongs to
+  const ref = (n) => { const r = base[base.length - n]; return r && r[4] ? ((price - r[4]) / r[4]) * 100 : null; };
+  const lv = liveDay ? last : rows[rows.length - 2] || null;    // session the levels come from (yesterday when live)
+  const piv = lv ? (lv[2] + lv[3] + lv[4]) / 3 : null;
+  const cl = liveDay ? [...closes, price] : closes, yr = rows.slice(-250);
+  const vol20 = rows.slice(-21, -1).reduce((s, r) => s + (r[5] || 0), 0) / 20, volNow = liveDay ? q && q.vol : last && last[5];
+  const pc = q && ok(q.prevClose) ? q.prevClose : base.length ? base[base.length - 1][4] : null;
+  const px = { price: r2(price), chg: r2(pc ? ((price - pc) / pc) * 100 : null), prevClose: r2(pc), open: liveDay && q ? r2(q.open) : null, hi: liveDay && q ? r2(q.hi) : null, lo: liveDay && q ? r2(q.lo) : null,
+    session: liveDay ? today : last && last[0], r1w: r2(ref(5)), r1m: r2(ref(21)), r3m: r2(ref(63)), r1y: r2(ref(250)),
+    dma20: r2(smaOf(cl, 20)), dma50: r2(smaOf(cl, 50)), dma200: r2(smaOf(cl, 200)), rsi: r2(rsiOf(cl.slice(-120))),
+    hi52: yr.length ? r2(Math.max(...yr.map((r) => r[2]))) : null, lo52: yr.length ? r2(Math.min(...yr.map((r) => r[3]))) : null,
+    volX: vol20 && volNow ? r2(volNow / vol20) : null };
+  px.gap = liveDay && ok(px.open) && pc ? r2(((px.open - pc) / pc) * 100) : null;
+  const lev = lv ? { from: lv[0], pdh: r2(lv[2]), pdl: r2(lv[3]), pdc: r2(lv[4]), p: r2(piv), r1: r2(2 * piv - lv[3]), s1: r2(2 * piv - lv[2]) } : null;
+
+  // futures: live (today vs yesterday) and last completed session (yesterday vs day before), plus NSE's own all-expiry figure
+  const fut = { live: null, last: null, nse: null, expiry: F && F.expiry, lot: F && F.lot };
+  if (F && F.fkey) {
+    const fd = await daily(env, F.fkey).catch(() => ({ rows: [] })), fr = fd.rows || [];
+    const L = fr[fr.length - 1], P2 = fr[fr.length - 2];
+    if (L && P2) { const dp = ((L[4] - P2[4]) / P2[4]) * 100, doi = L[6] - P2[6]; fut.last = { date: L[0], b: buildOf(dp, doi), dp: r2(dp), doiPct: r2(P2[6] ? (doi / P2[6]) * 100 : null), oi: L[6] }; }
+    if (phase === 'live' || phase === 'open15') {
+      try {
+        const d = await shared('fintra:' + F.fkey, 45000, () => upAny(env, [`/v3/historical-candle/intraday/${enc(F.fkey)}/minutes/1`, `/v2/historical-candle/intraday/${enc(F.fkey)}/1minute`]));
+        const g = groupCandles(d && d.candles, 'NSE').filter((x) => x.date === today)[0];
+        if (g && g.c.length && L) {
+          const z = g.c[g.c.length - 1], dp = ((z[4] - L[4]) / L[4]) * 100, doi = (z[6] || 0) - L[6];
+          if (z[6]) fut.live = { at: z[0], b: buildOf(dp, doi), dp: r2(dp), doiPct: r2(L[6] ? (doi / L[6]) * 100 : null), oi: z[6], px: z[4] };
+        }
+      } catch (e) { if (e.code === 'UPSTOX_LOGIN') throw e; }
+    }
+  }
+  if (B) { const x = B.rows.find((r) => r.sym === sym); if (x) fut.nse = { date: B.date, b: x.b, dp: x.dp, doiPct: x.doiPct, oi: x.oi, clear: x.clear }; }
+
+  // FII positioning in index futures (market-wide mood)
+  let fii = null;
+  if (P && P.latest && P.latest.p && P.latest.p.FII) {
+    const f = P.latest.p.FII, pv = P.prev && P.prev.p && P.prev.p.FII, lp = (f.futL / (f.futL + f.futS || 1)) * 100;
+    fii = { date: P.latest.date, longPct: r2(lp), net: f.futL - f.futS, netChg: pv ? f.futL - f.futS - (pv.futL - pv.futS) : null };
+  }
+  const isMine = nameMatcher(name, sym);
+  const news = checkNews(N.items || [], O.items || [], isMine);
+  const res = (RS.items || []).filter((x) => isMine(x.t + ' ' + (x.co || ''))).slice(0, 3).map((x) => ({ t: x.t, q: x.q, s: x.s, src: x.src, ts: x.ts, link: x.link }));
+  return { ts: Date.now(), sym, name, key, phase, liveDay, px, lev, fut, fii, news, results: res };
+}
+
+// rule-based lean: every point is visible to the user, the AI only explains it in words
+function pulseLean(f, mkt) {
+  const why = [], add = (pts, txt) => { if (pts) why.push({ pts: r2(pts), txt }); };
+  const fb = f.fut.live || f.fut.nse || f.fut.last, src = f.fut.live ? 'today, live' : f.fut.nse ? `last session, NSE ${f.fut.nse.date}` : f.fut.last ? `last session ${f.fut.last.date}` : '';
+  if (fb && fb.b) {
+    const big = Math.abs(fb.doiPct || 0) >= 2 && Math.abs(fb.dp || 0) >= 0.5 ? 1 : 0.5;
+    add({ LB: 2, SB: -2, SC: 1, LU: -1 }[fb.b] * big, `Futures ${BUILD[fb.b].toLowerCase()} (${src}: price ${fb.dp > 0 ? '+' : ''}${fb.dp}%, OI ${fb.doiPct > 0 ? '+' : ''}${fb.doiPct}%)${big < 1 ? ', weak' : ''}`);
+  }
+  const p = f.px;
+  if (ok(p.dma20) && ok(p.dma50)) {
+    if (p.price > p.dma20 && p.dma20 > p.dma50) add(1, 'Price above the 20-day and 50-day averages (uptrend)');
+    else if (p.price < p.dma20 && p.dma20 < p.dma50) add(-1, 'Price below the 20-day and 50-day averages (downtrend)');
+  }
+  if (ok(p.r1w) && Math.abs(p.r1w) >= 5) add(p.r1w > 0 ? 0.5 : -0.5, `${p.r1w > 0 ? 'Up' : 'Down'} ${Math.abs(p.r1w).toFixed(1)}% in a week`);
+  if (ok(p.rsi) && p.rsi >= 72) add(-0.5, `RSI ${p.rsi.toFixed(0)}: stretched, pullback risk`);
+  if (ok(p.rsi) && p.rsi <= 28) add(0.5, `RSI ${p.rsi.toFixed(0)}: oversold, bounce risk`);
+  if (ok(p.volX) && p.volX >= 1.5 && ok(p.chg) && Math.abs(p.chg) >= 1) add(p.chg > 0 ? 0.5 : -0.5, `Volume ${p.volX.toFixed(1)}× normal on a ${p.chg > 0 ? 'rise' : 'fall'}`);
+  if (f.liveDay && f.lev && ok(p.price)) {
+    if (p.price > f.lev.pdh) add(0.75, `Trading above yesterday's high ${f.lev.pdh}`);
+    else if (p.price < f.lev.pdl) add(-0.75, `Trading below yesterday's low ${f.lev.pdl}`);
+  }
+  const it = f.news.items.filter((n) => ok(n.s) && Math.abs(n.s) >= 0.15 && Date.now() - n.ts < 4 * 864e5);
+  if (it.length) {
+    const w = it.reduce((s, n) => s + NEWS_W[n.status], 0), avg = it.reduce((s, n) => s + n.s * NEWS_W[n.status], 0) / (w || 1);
+    if (Math.abs(avg) >= 0.2) add(Math.max(-1.5, Math.min(1.5, avg * 2)) * Math.min(1, w / 1.5), `News leans ${avg > 0 ? 'positive' : 'negative'} (${it.length} headline${it.length > 1 ? 's' : ''}, ${it.filter((n) => n.status === 'official' || n.status === 'confirmed').length} verified)`);
+  }
+  if (mkt && ok(mkt.niftyChg) && Math.abs(mkt.niftyChg) >= 0.5) add(mkt.niftyChg > 0 ? 0.5 : -0.5, `Nifty ${mkt.niftyChg > 0 ? 'up' : 'down'} ${Math.abs(mkt.niftyChg).toFixed(2)}%`);
+  if (f.fii && ok(f.fii.netChg) && Math.abs(f.fii.netChg) >= 10000) add(f.fii.netChg > 0 ? 0.5 : -0.5, `FIIs ${f.fii.netChg > 0 ? 'cut shorts / added longs' : 'added shorts'} in index futures (${f.fii.longPct.toFixed(0)}% long)`);
+  const score = why.reduce((s, x) => s + x.pts, 0), pos = why.filter((x) => x.pts > 0).length, neg = why.filter((x) => x.pts < 0).length;
+  const lean = score >= 2.5 ? 'CALL' : score <= -2.5 ? 'PUT' : 'WAIT';
+  let conf = Math.abs(score) >= 4 ? 'high' : Math.abs(score) >= 2.5 ? 'medium' : 'low';
+  const warn = [];
+  if (lean !== 'WAIT' && (lean === 'CALL' ? neg : pos) >= 2) { conf = conf === 'high' ? 'medium' : 'low'; warn.push('Signals are mixed: several point the other way'); }
+  const rum = f.news.items.find((n) => n.status === 'report' && Math.abs(n.s || 0) >= 0.3 && Date.now() - n.ts < 3 * 864e5);
+  if (rum) { warn.push(`Big headline is an unconfirmed report: "${rum.t.slice(0, 90)}"`); if (conf === 'high') conf = 'medium'; }
+  if (f.phase === 'open15') warn.push('First 15 minutes: opening moves often reverse. Recheck at 9:30');
+  if (f.phase === 'closed' || f.phase === 'pre') warn.push('Market closed: this reads the last session. It refreshes at 9:15 and 9:30');
+  if (ok(f.px.gap) && Math.abs(f.px.gap) >= 1) warn.push(`Opened with a ${f.px.gap > 0 ? 'gap up' : 'gap down'} of ${Math.abs(f.px.gap).toFixed(1)}%: gaps often fill partly in the first hour`);
+  return { lean, conf, score: r2(score), why: why.sort((a, b) => Math.abs(b.pts) - Math.abs(a.pts)), warn };
+}
+
+async function pulse(env, body) {
+  const S = await resolveStock(env, body || {});
+  const f = await shared('pulsef:' + S.key, 60000, () => pulseFacts(env, S));
+  const mkt = body && body.mkt && ok(+body.mkt.niftyChg) ? { niftyChg: +body.mkt.niftyChg } : null;
+  const lean = pulseLean(f, mkt);
+  // AI words, cached per stock for 10 minutes (and per phase, so 9:15 and 9:30 get fresh text)
+  let ai = null;
+  if (hasAI(env) && body && body.ai !== false) {
+    const ck = `pulseai:${S.sym}:${f.phase}:${Math.floor(Date.now() / 600e3)}:${lean.lean}`;
+    ai = memGet(ck) || (await env.KV.get(ck, 'json').catch(() => null));
+    if (!ai) {
+      const facts = { stock: `${f.name} (${f.sym})`, marketPhase: f.phase, price: f.px, levels: f.lev, futuresBuildup: f.fut, fiiIndexFutures: f.fii,
+        news: f.news.items.slice(0, 6).map((n) => ({ headline: n.t, verified: n.status, outlets: n.pubs.length, sentiment: n.s })), officialFilings: f.news.official.slice(0, 3).map((o) => o.t),
+        results: f.results, ruleLean: lean };
+      const prompt = `You explain one Indian F&O stock to a retail trader in very simple Hindi, using ONLY this data (never invent numbers or news).
+The rule-based lean is "${lean.lean}" with ${lean.conf} confidence. Do not change it; explain it.
+Data: ${JSON.stringify(facts).slice(0, 9000)}
+Write 5 to 7 short lines covering: who is in control (buyers or sellers, from the futures buildup), whether the main news is official/confirmed or only a report, the trend, the 2 price levels to watch and what each would mean, the biggest risk. ${f.phase === 'closed' || f.phase === 'pre' ? 'Say clearly this is from the last session and must be rechecked after 9:30.' : ''}
+Never promise an outcome or tell them to buy. End with one line that the decision is theirs.
+Return ONLY JSON: {"hi": "Hindi (Devanagari), lines separated by \\n", "en": "same in simple English"}`;
+      try {
+        const raw = await aiText(env, prompt, 900, 'chat'), j = JSON.parse(raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1));
+        ai = { hi: String(j.hi || '').trim(), en: String(j.en || '').trim() };
+        if (ai.hi || ai.en) { memSet(ck, ai, 600e3); await env.KV.put(ck, JSON.stringify(ai), { expirationTtl: 3600 }).catch(() => {}); } else ai = null;
+      } catch (e) { ai = { err: String(e.message || e).slice(0, 160) }; }
+    }
+  }
+  return { ...f, lean, ai };
+}
+
 /* ---------------- रूटर ---------------- */
 async function route(req, env, url) {
   const p = url.pathname;
@@ -1437,7 +1719,7 @@ async function route(req, env, url) {
   switch (p) {
     case '/api/status': {
       const t = env.UPSTOX_ACCESS_TOKEN || (await env.KV.get('upstox_token'));
-      return R({ email, upstox: !!t, ai: hasAI(env), aiVia: env.GEMINI_API_KEY ? 'Gemini' : env.AI ? 'Workers AI' : env.ANTHROPIC_API_KEY ? 'Claude' : null, tokenMode: env.UPSTOX_ACCESS_TOKEN ? 'analytics' : 'oauth', v: 2, upCalls30m: UPC.length, rateWait: Math.max(0, Math.ceil((RL.until - Date.now()) / 1000)) });
+      return R({ email, upstox: !!t, ai: hasAI(env), aiVia: env.GEMINI_API_KEY ? 'Gemini' : env.AI ? 'Workers AI' : env.ANTHROPIC_API_KEY ? 'Claude' : null, tokenMode: env.UPSTOX_ACCESS_TOKEN ? 'analytics' : 'oauth', v: 2, pulse: 1, upCalls30m: UPC.length, rateWait: Math.max(0, Math.ceil((RL.until - Date.now()) / 1000)) });
     }
     case '/api/snapshot': {
       const w = (url.searchParams.get('w') || '').split(',').filter((k) => KEY_RE.test(k)).slice(0, 40);
@@ -1484,6 +1766,11 @@ async function route(req, env, url) {
     case '/api/eod': {
       const only = (url.searchParams.get('syms') || '').toUpperCase().split(',').map((x) => x.replace(/[^A-Z0-9&-]/g, '')).filter(Boolean).slice(0, 60);
       return R(await shared('eod:' + only.join(','), 20e3, () => eodQuotes(env, only)));
+    }
+    case '/api/buildup': return R(await buildupLists(env));
+    case '/api/pulse': {
+      if (req.method !== 'POST') throw new HttpError(405, 'POST required');
+      return R(await pulse(env, await req.json().catch(() => ({}))));
     }
     case '/api/earnings': return R(await shared('earnings', 30e3, () => earningsRadar(env)));
     case '/api/stt': {
