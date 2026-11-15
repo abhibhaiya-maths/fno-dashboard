@@ -504,7 +504,8 @@ async function fetchFeed([src, url]) {
       const ts = Date.parse(g('pubDate')) || Date.now();
       let t = g('title'), s2 = src;
       if (src.startsWith('Google News')) { const m = t.match(/^(.*)\s+-\s+([^-]{2,50})$/); if (m) { t = m[1]; s2 = m[2].trim(); } }
-      return { t, link: g('link'), ts, src: s2, feed: src };
+      const d = g('description').replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
+      return { t, link: g('link'), ts, src: s2, feed: src, d: d && d.toLowerCase().indexOf(t.toLowerCase().slice(0, 40)) < 0 ? d.slice(0, 280) : '' };
     }).filter((i) => i.t);
   } catch { return []; } finally { clearTimeout(t); }
 }
@@ -1532,20 +1533,25 @@ function nameMatcher(name, sym) {
   const keys = [String(sym || '').toLowerCase(), words.slice(0, 2).join(' '), words[0] && words[0].length >= 5 ? words[0] : null].filter((x) => x && x.length >= 3);
   return (t) => { const s = String(t || '').toLowerCase(); return keys.some((k) => s.includes(k)); };
 }
+// News is gathered from everywhere, but it only counts as confirmed when trusted outlets (or an NSE/BSE filing) carry it.
 function checkNews(items, offItems, isMine, resDate) {
   const off = (offItems || []).filter((o) => isMine(o.co + ' ' + o.t) && o.ts > Date.now() - 7 * 864e5).slice(0, 6);
   const offW = off.map((o) => normWords(o.t + ' ' + (o.sub || '')));
-  const out = items.slice(0, 10).map((n) => {
-    const pubs = [...new Set([n.src, ...(n.alsoBy || [])].filter(Boolean))], trusted = pubs.filter((p) => TRUSTED_PUB.test(p)).length;
+  const out = items.slice(0, 12).map((n) => {
+    const pubs = [...new Set([n.src, ...(n.alsoBy || [])].filter(Boolean))], tp = pubs.filter((p) => TRUSTED_PUB.test(p)), trusted = tp.length;
     const w = normWords(n.t), offHit = offW.some((ow) => overlap(w, ow) >= 0.25) || (RESULT_RE.test(n.t) && off.some((o) => /result/i.test(o.t + ' ' + o.sub)));
     const rumour = RUMOUR_RE.test(n.t);
     const resHit = !offHit && resDate && RESULT_RE.test(n.t) && Math.abs(n.ts - Date.parse(resDate)) <= 4 * 864e5; // results day confirmed on NSE's calendar
-    const status = offHit ? 'official' : resHit && !rumour ? 'results' : rumour ? 'report' : trusted >= 2 || pubs.length >= 3 ? 'confirmed' : 'single';
-    return { t: n.t, link: n.link, src: n.src, pubs, ts: n.ts, s: n.s, imp: n.imp, status };
+    const status = offHit ? 'official' : resHit && !rumour && trusted ? 'results' : rumour ? 'report' : trusted >= 2 || (trusted >= 1 && pubs.length >= 3) ? 'confirmed' : trusted === 1 ? 'single' : 'unverified';
+    const wt = NEWS_W[status] * (status === 'report' && !trusted ? 0.4 : 1);
+    return { t: n.t, d: n.d || '', link: n.link, src: n.src, pubs, trustedPubs: tp, others: pubs.length - trusted, ts: n.ts, s: n.s, imp: n.imp, status, w: r2(wt) };
   });
-  return { items: out, official: off.map((o) => ({ t: o.t, co: o.co, src: o.src, ts: o.ts, link: o.link })) };
+  // most useful first: verified and impactful, then the rest
+  const rank = { official: 0, results: 0, confirmed: 1, single: 2, report: 2, unverified: 3 };
+  out.sort((a, b) => rank[a.status] - rank[b.status] || Math.abs(b.s || 0) - Math.abs(a.s || 0) || b.ts - a.ts);
+  return { items: out.slice(0, 10), official: off.map((o) => ({ t: o.t, co: o.co, src: o.src, ts: o.ts, link: o.link })) };
 }
-const NEWS_W = { official: 1, confirmed: 1, results: 0.9, single: 0.6, report: 0.3 };
+const NEWS_W = { official: 1, confirmed: 1, results: 0.9, single: 0.6, report: 0.3, unverified: 0.15 };
 
 /* ---------- one stock ---------- */
 function pctFrom(rows, price, back) { const r = rows[rows.length - back]; return r && r[4] ? ((price - r[4]) / r[4]) * 100 : null; }
@@ -1622,25 +1628,8 @@ function optionRead(ch, price) {
 }
 const withTimeout = (p, ms, fb) => Promise.race([p, new Promise((res) => setTimeout(() => res(fb), ms))]);
 
-async function pulseFacts(env, S) {
-  const { key, sym, name } = S, phase = phaseNow(), today = ymd(istNow());
-  const [qm, D, F, B, P, N, O, RS, CD, CH, BAN, CAL, BRK, EARN] = await Promise.all([
-    shared('pq:' + key, 15000, () => up(env, '/v2/market-quote/quotes?instrument_key=' + enc(key))).then(quoteMap).catch(() => ({})),
-    daily(env, key).catch(() => ({ rows: [] })),
-    futFor(env, key, sym, 'NSE').catch(() => null),
-    bhavBuildup(env).catch(() => null),
-    participantOI(env).catch(() => null),
-    newsFor(env, sym, name).catch(() => ({ items: [] })),
-    official(env).catch(() => ({ items: [] })),
-    results(env).catch(() => ({ items: [] })),
-    candles(env, key, 'NSE').catch(() => null),
-    chain(env, key).catch(() => null),
-    secBan(env).catch(() => null),
-    withTimeout(resultsCalendar(env).catch(() => null), 5000, null),
-    withTimeout(brokerCalls(env).catch(() => null), 5000, null),
-    (async () => memGet('earnings:v1') || (await env.KV.get('earnings:v1', 'json').catch(() => null)))(),
-  ]);
-  const q = qm[key] || null, rows = D.rows || [], closes = rows.map((r) => r[4]);
+function pxFacts(rows, q, today) {
+  const closes = rows.map((r) => r[4]);
   const last = rows[rows.length - 1] || null, qms = q && q.ts ? (+q.ts || Date.parse(q.ts)) : NaN, qDate = ok(qms) ? ymd(new Date(qms + 5.5 * 3600e3)) : null;
   const liveDay = !!(q && qDate && last && qDate > last[0]);  // the quote is from a session newer than the last daily candle
   const price = q && ok(q.price) ? q.price : last ? last[4] : null;
@@ -1659,10 +1648,33 @@ async function pulseFacts(env, S) {
   px.gap = liveDay && ok(px.open) && pc ? r2(((px.open - pc) / pc) * 100) : null;
   const lev = lv ? { from: lv[0], pdh: r2(lv[2]), pdl: r2(lv[3]), pdc: r2(lv[4]), p: r2(piv), r1: r2(2 * piv - lv[3]), s1: r2(2 * piv - lv[2]) } : null;
 
+  if (!liveDay && last && last[2] > last[3]) px.clvDaily = r2((last[4] - last[3]) / (last[2] - last[3]));
+  return { liveDay, px, lev, last };
+}
+async function pulseFacts(env, S) {
+  const { key, sym, name } = S, phase = phaseNow(), today = ymd(istNow());
+  const [qm, D, F, B, P, N, O, RS, CD, CH, BAN, CAL, BRK, EARN] = await Promise.all([
+    shared('pq:' + key, 15000, () => up(env, '/v2/market-quote/quotes?instrument_key=' + enc(key))).then(quoteMap).catch(() => ({})),
+    daily(env, key).catch(() => ({ rows: [] })),
+    futFor(env, key, sym, 'NSE').catch(() => null),
+    bhavBuildup(env).catch(() => null),
+    participantOI(env).catch(() => null),
+    pulseNews(env, sym, name).catch(() => ({ items: [] })),
+    official(env).catch(() => ({ items: [] })),
+    results(env).catch(() => ({ items: [] })),
+    candles(env, key, 'NSE').catch(() => null),
+    chain(env, key).catch(() => null),
+    secBan(env).catch(() => null),
+    withTimeout(resultsCalendar(env).catch(() => null), 5000, null),
+    withTimeout(brokerCalls(env).catch(() => null), 5000, null),
+    (async () => memGet('earnings:v1') || (await env.KV.get('earnings:v1', 'json').catch(() => null)))(),
+  ]);
+  const q = qm[key] || null, rows = D.rows || [], last = rows[rows.length - 1] || null;
+  const { liveDay, px, lev } = pxFacts(rows, q, today), price = px.price;
+
   // the session the price belongs to, read from 1-minute candles (today when live, else the last session)
   const days = (CD && CD.days) || [], sessDate = liveDay ? today : last && last[0];
   const sess = sessionRead(days.find((d) => d.date === sessDate)) || null;
-  if (!sess && !liveDay && last && last[2] > last[3]) px.clvDaily = r2((last[4] - last[3]) / (last[2] - last[3]));
   if (liveDay && sess) sess.clv = null; // "where it closed" only means something once the day is over
 
   // futures: live (today vs yesterday) and last completed session (yesterday vs day before), plus NSE's own all-expiry figure
@@ -1769,7 +1781,7 @@ function pulseLean(f, mkt) {
   const it = f.news.items.filter((n) => ok(n.s) && Math.abs(n.s) >= 0.15 && Date.now() - n.ts < 4 * 864e5 && !(R && R.kind === 'past' && n.status === 'results'));
   const verified = f.news.items.filter((n) => ['official', 'confirmed', 'results'].includes(n.status)).length;
   if (it.length) {
-    const w = it.reduce((t, n) => t + NEWS_W[n.status], 0), avg = it.reduce((t, n) => t + n.s * NEWS_W[n.status], 0) / (w || 1);
+    const wOf = (n) => (ok(n.w) ? n.w : NEWS_W[n.status] || 0.15), w = it.reduce((t, n) => t + wOf(n), 0), avg = it.reduce((t, n) => t + n.s * wOf(n), 0) / (w || 1);
     const v = it.filter((n) => ['official', 'confirmed', 'results'].includes(n.status)).length;
     if (Math.abs(avg) >= 0.2) add(Math.max(-1.5, Math.min(1.5, avg * 2)) * Math.min(1, w / 1.5), `News leans ${avg > 0 ? 'positive' : 'negative'} (${it.length} headline${it.length > 1 ? 's' : ''}, ${v ? v + ' confirmed' : 'none confirmed'})`, 'news');
   }
@@ -1885,6 +1897,120 @@ function aiBad(ai, f, L) {
   return null;
 }
 
+/* ---------- news for one stock: gathered from everywhere, validated by trusted outlets ---------- */
+async function articleBlurb(link) { // the first lines of a trusted article (meta description), to give the AI real context
+  if (!link || /news\.google\.com/.test(link)) return '';
+  const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), 3500);
+  try {
+    const r = await fetch(link, { signal: ctl.signal, headers: { 'User-Agent': UA_BROWSER, Accept: 'text/html' } });
+    if (!r.ok || !r.body) return '';
+    const rd = r.body.getReader(); let html = '', n = 0;
+    while (n < 80000) { const { done, value } = await rd.read(); if (done) break; n += value.length; html += new TextDecoder().decode(value); if (/<\/head>/i.test(html)) break; }
+    try { rd.cancel(); } catch (e) { /* closed */ }
+    const m = html.match(/<meta[^>]+(?:property|name)=["'](?:og:description|description|twitter:description)["'][^>]*content=["']([^"']{40,600})["']/i) || html.match(/<meta[^>]+content=["']([^"']{40,600})["'][^>]*(?:property|name)=["'](?:og:description|description)["']/i);
+    return m ? xmlText(m[1]).replace(/\s+/g, ' ').trim().slice(0, 400) : '';
+  } catch (e) { return ''; } finally { clearTimeout(t); }
+}
+async function pulseNews(env, sym, name) {
+  const ck = 'pnews:' + sym, c = memGet(ck) || (await env.KV.get(ck, 'json').catch(() => null));
+  if (c && c.ts > Date.now() - 20 * 60e3) { memSet(ck, c, 20 * 60e3); return c; }
+  const isMine = nameMatcher(name, sym), clean = String(name || sym).replace(/\b(limited|ltd\.?)\b/gi, '').replace(/[^\w &.-]/g, '').trim().slice(0, 40);
+  // 1) trusted publishers (already scored by AI in newsFor), 2) the open web through Google News (any outlet)
+  const [T, W] = await Promise.all([
+    newsFor(env, sym, name).catch(() => ({ items: [] })),
+    fetchFeed(['Google News', `https://news.google.com/rss/search?q=${enc('"' + clean + '"')}+when:7d&hl=en-IN&gl=IN&ceid=IN:en`]).catch(() => []),
+  ]);
+  const items = (T.items || []).map((x) => ({ ...x, alsoBy: [...(x.alsoBy || [])] }));
+  const tw = items.map((x) => normWords(x.t));
+  for (const w of W) {
+    if (w.ts < Date.now() - 7 * 864e5 || !isMine(w.t)) continue;
+    const ww = normWords(w.t), i = tw.findIndex((t) => overlap(ww, t) >= 0.5);
+    if (i >= 0) { if (w.src !== items[i].src && !items[i].alsoBy.includes(w.src)) items[i].alsoBy.push(w.src); continue; } // another outlet carries the same story
+    const j = items.findIndex((x, k) => k >= (T.items || []).length && overlap(ww, normWords(x.t)) >= 0.5);
+    if (j >= 0) { if (!items[j].alsoBy.includes(w.src)) items[j].alsoBy.push(w.src); continue; }
+    items.push({ ...w, s: lexScore(w.t), imp: 'medium', alsoBy: [], wide: true }); tw.push(ww);
+  }
+  // context for the biggest trusted stories (first lines of the article)
+  const top = items.filter((x) => !x.wide && !x.d && Math.abs(x.s || 0) >= 0.25).sort((a, b) => Math.abs(b.s) - Math.abs(a.s)).slice(0, 3);
+  await Promise.all(top.map(async (x) => { x.d = await articleBlurb(x.link); }));
+  const res = { ts: Date.now(), items: items.sort((a, b) => b.ts - a.ts).slice(0, 24) };
+  memSet(ck, res, 20 * 60e3); env.KV.put(ck, JSON.stringify(res), { expirationTtl: 3600 }).catch(() => {});
+  return res;
+}
+
+/* ---------- Top 5 up / Top 5 down: the clearest data across all F&O stocks ----------
+   Stage 1 (free, all stocks): NSE's F&O bhavcopy (who built positions) + live movers from one Upstox quote call.
+   Stage 2 (about 30 stocks): the same rules as the single-stock Pulse on price, trend, levels, results, ban and FII.
+   Option walls, last-hour and news are only in the single-stock view (tap a stock). */
+async function moversScan(env, mkt0) {
+  const today = ymd(istNow()), phase = phaseNow();
+  const [U, B, BAN, CAL, P] = await Promise.all([universe(env), bhavBuildup(env).catch(() => null), secBan(env).catch(() => null), withTimeout(resultsCalendar(env).catch(() => null), 5000, null), participantOI(env).catch(() => null)]);
+  const uni = (U.items || []).filter((x) => x.key), byS = Object.fromEntries(uni.map((x) => [x.sym, x]));
+  // one quote call for every F&O stock + Nifty
+  const keys = [...uni.map((x) => x.key), 'NSE_INDEX|Nifty 50'];
+  const qm = {};
+  for (let i = 0; i < keys.length; i += 240) Object.assign(qm, await shared('mvq:' + i, 20000, () => up(env, '/v2/market-quote/quotes?instrument_key=' + keys.slice(i, i + 240).map(enc).join(','))).then(quoteMap).catch(() => ({})));
+  const nq = qm['NSE_INDEX|Nifty 50'], mkt = mkt0 || (nq && ok(nq.chg) ? { niftyChg: r2(nq.chg) } : null);
+  const rows = B ? B.rows.filter((x) => !x.idx && byS[x.sym]) : [];
+  const wS = (x) => (x.strength || 0) * (x.b === 'LB' || x.b === 'SB' ? 1 : 0.7) * (x.clear ? 1 : 0.6);
+  const pick = (ks, n) => rows.filter((x) => ks.includes(x.b)).sort((a, b) => wS(b) - wS(a)).slice(0, n).map((x) => x.sym);
+  const live = uni.map((x) => ({ sym: x.sym, q: qm[x.key] })).filter((x) => x.q && ok(x.q.chg) && x.q.vol > 0 && x.q.ts && ymd(new Date((+x.q.ts || Date.parse(x.q.ts)) + 5.5 * 3600e3)) === today);
+  const liveUp = live.sort((a, b) => b.q.chg - a.q.chg).slice(0, 7).map((x) => x.sym), liveDn = live.slice().sort((a, b) => a.q.chg - b.q.chg).slice(0, 7).map((x) => x.sym);
+  const pool = [...new Set([...pick(['LB', 'SC'], 12), ...pick(['SB', 'LU'], 12), ...liveUp, ...liveDn])];
+  let fii = null;
+  if (P && P.latest && P.latest.p && P.latest.p.FII) { const f = P.latest.p.FII, pv = P.prev && P.prev.p && P.prev.p.FII; fii = { date: P.latest.date, longPct: r2((f.futL / (f.futL + f.futS || 1)) * 100), net: f.futL - f.futS, netChg: pv ? f.futL - f.futS - (pv.futL - pv.futS) : null }; }
+  const out = [];
+  for (let i = 0; i < pool.length; i += 6) {
+    const part = await Promise.all(pool.slice(i, i + 6).map(async (sym) => {
+      try {
+        const u = byS[sym], D = await daily(env, u.key), q = qm[u.key] || null, r = D.rows || [];
+        if (r.length < 60) return null;
+        const { liveDay, px, lev } = pxFacts(r, q, today), bx = B && B.rows.find((x) => x.sym === sym);
+        const cal = ((CAL && CAL.items) || []).filter((x) => x.sym === sym && x.date).sort((a, b) => (a.date < b.date ? -1 : 1));
+        const past = cal.filter((x) => x.date <= today && x.date >= ymd(addDays(istNow(), -15))).pop(), next = cal.find((x) => x.date > today && x.date <= ymd(addDays(istNow(), 10)));
+        let resEv = null;
+        if (past) { const k = r.findIndex((x) => x[0] >= past.date), bc = k > 0 ? r[k - 1][4] : null; resEv = { kind: 'past', date: past.date, src: past.src, react: bc ? r2(((px.price - bc) / bc) * 100) : null, sessions: k >= 0 ? r.length - k + (liveDay ? 1 : 0) : 1 }; }
+        else if (next) resEv = { kind: 'next', date: next.date, inDays: Math.round((Date.parse(next.date) - Date.parse(today)) / 864e5) };
+        const f = { sym, name: u.name, key: u.key, phase, liveDay, px, lev, sess: null, opt: null, brokers: [], news: { items: [], official: [] }, fii, resEv,
+          fut: { live: null, last: null, nse: bx ? { date: B.date, b: bx.b, dp: bx.dp, doiPct: bx.doiPct, clear: bx.clear } : null }, ban: BAN && (BAN.syms || []).includes(sym) ? { date: BAN.date } : null };
+        const L = pulseLean(f, mkt);
+        return { sym, name: u.name, key: u.key, price: px.price, chg: px.chg, lean: L.lean, side: L.side, label: L.label, conf: L.conf, score: L.score, fut: bx ? bx.b : null,
+          why: L.why.slice(0, 3), risk: L.warn.find((w) => !/Market closed|First 15|refreshes/.test(w)) || null, plan: L.plan, ban: !!f.ban, liveMover: liveUp.includes(sym) || liveDn.includes(sym) };
+      } catch (e) { if (e.code === 'UPSTOX_LOGIN') throw e; return null; }
+    }));
+    out.push(...part.filter(Boolean));
+  }
+  const upL = out.filter((x) => x.side === 'CALL' && !x.ban).sort((a, b) => b.score - a.score).slice(0, 5);
+  const dnL = out.filter((x) => x.side === 'PUT' && !x.ban).sort((a, b) => a.score - b.score).slice(0, 5);
+  return { ts: Date.now(), phase, bhavDate: B && B.date, nifty: mkt && mkt.niftyChg, scanned: out.length, of: uni.length, up: upL, down: dnL };
+}
+async function movers(env, force) {
+  const ck = 'movers:v1', open = ['live', 'open15'].includes(phaseNow()), maxAge = open ? 8 * 60e3 : 3 * 3600e3, minAge = open ? 90e3 : 20 * 60e3;
+  const c = memGet(ck) || (await env.KV.get(ck, 'json').catch(() => null));
+  if (c && (Date.now() - c.ts < (force ? minAge : maxAge))) { memSet(ck, c, 60e3); return { ...c, cached: true }; }
+  if (Date.now() < RL.until || budgetTight()) { if (c) return { ...c, cached: true, stale: true }; }
+  const res = await shared('movers', 60e3, () => moversScan(env, null));
+  memSet(ck, res, 60e3); env.KV.put(ck, JSON.stringify(res), { expirationTtl: 86400 }).catch(() => {});
+  return res;
+}
+
+/* ---------- "if-then" for the news that matters, when the AI is off or wrong ---------- */
+function ruleScenarios(f) {
+  const out = [];
+  for (const n of f.news.items) {
+    if (out.length >= 3) break;
+    if (!ok(n.s) || Math.abs(n.s) < 0.25 || Date.now() - n.ts > 5 * 864e5) continue;
+    const up = n.s > 0, t = n.t.slice(0, 110);
+    if (n.status === 'report' || n.status === 'unverified') out.push({ t, status: n.status,
+      hi: `अगर कंपनी, NSE/BSE filing या रेगुलेटर इसकी पुष्टि करे, तो ${up ? 'तेज़ी' : 'गिरावट'} टिक सकती है; अगर ख़बर ग़लत निकले या खंडन आए, तो ${up ? 'चढ़ा हुआ भाव तेज़ी से वापस गिर' : 'गिरा हुआ भाव तेज़ी से वापस चढ़'} सकता है।`,
+      en: `If the company, an exchange filing or the regulator confirms it, the ${up ? 'rise' : 'fall'} can hold; if it is denied or proves wrong, the ${up ? 'rise can reverse fast' : 'fall can reverse fast'}.` });
+    else if (n.status === 'official' || n.status === 'results' || n.status === 'confirmed') out.push({ t, status: n.status,
+      hi: `ख़बर पक्की है, इसलिए असली सवाल ये है कि भाव इसे पहले ही कितना मान चुका है: ${up ? 'अच्छी ख़बर के बाद भी भाव न चढ़े तो कमज़ोरी का संकेत' : 'बुरी ख़बर के बाद भी भाव न गिरे तो मज़बूती का संकेत'} है।`,
+      en: `The news is confirmed, so the question is how much is already priced in: ${up ? 'if price fails to rise on good news, that is a warning' : 'if price holds up on bad news, that is a sign of strength'}.` });
+  }
+  return out;
+}
+
 async function pulse(env, body) {
   const S = await resolveStock(env, body || {});
   const f = await shared('pulsef2:' + S.key, 60000, () => pulseFacts(env, S));
@@ -1892,13 +2018,13 @@ async function pulse(env, body) {
   const lean = pulseLean(f, mkt), rule = ruleSummary(f, lean);
   let ai = null;
   if (hasAI(env) && body && body.ai !== false) {
-    const ck = `pulseai2:${S.sym}:${f.phase}:${Math.floor(Date.now() / 600e3)}:${lean.lean}`;
+    const ck = `pulseai3:${S.sym}:${f.phase}:${Math.floor(Date.now() / 600e3)}:${lean.lean}`;
     ai = memGet(ck) || (await env.KV.get(ck, 'json').catch(() => null));
     if (!ai) {
-      const CHK = { official: 'NSE/BSE filing found (official)', confirmed: 'carried by several trusted outlets (confirmed)', results: 'results headline; results date confirmed on NSE, figures as reported', single: 'only one source: NOT confirmed', report: 'only a report (may / likely / sources): NOT confirmed' };
+      const CHK = { official: 'NSE/BSE filing found (official)', confirmed: 'carried by several trusted outlets (confirmed)', results: 'results headline; results date confirmed on NSE, figures as reported', single: 'only one trusted outlet: NOT confirmed', report: 'only a report (may / likely / sources): NOT confirmed', unverified: 'only non-mainstream sites, no trusted outlet: NOT confirmed, treat as rumour' };
       const facts = { stock: `${f.name} (${f.sym})`, marketPhase: f.phase, price: f.px, levels: f.lev, session: f.sess, futuresBuildup: f.fut, options: f.opt, fiiIndexFutures: f.fii,
         results: f.resEv, brokerCalls: f.brokers.map((b) => `${b.kind === 'up' ? 'upgrade' : 'downgrade'}: ${b.t}`),
-        confirmedNewsCount: lean.verified, news: f.news.items.slice(0, 6).map((n) => ({ headline: n.t, check: CHK[n.status], outlets: n.pubs.length, sentiment: n.s })),
+        confirmedNewsCount: lean.verified, news: f.news.items.slice(0, 7).map((n, i) => ({ i, headline: n.t, detail: n.d || undefined, check: CHK[n.status], trustedOutlets: (n.trustedPubs || []).slice(0, 4), otherSites: n.others || 0, sentiment: n.s, daysAgo: r2((Date.now() - n.ts) / 864e5) })),
         officialFilings: f.news.official.slice(0, 3).map((o) => o.t), inFnoBan: !!f.ban,
         ruleVerdict: { label: lean.label, confidence: lean.conf, reasons: lean.why.map((w) => `${w.pts > 0 ? '+' : ''}${w.pts} ${w.txt}`), risks: lean.warn, plan: lean.plan } };
       const prompt = `You are a senior Indian F&O desk trader explaining one stock to a retail trader in simple, natural spoken Hindi (as people speak in India, English market words like "buyers", "short covering", "VWAP" are fine).
@@ -1906,21 +2032,28 @@ Use ONLY this data. Never invent numbers, news, reasons or targets. Every number
 The rule verdict is "${lean.label}" (${lean.conf} confidence). Repeat it exactly; do not upgrade or downgrade it.
 News: exactly ${lean.verified} headline(s) are confirmed. ${lean.verified === 0 ? 'So you must say the news is NOT confirmed yet. Never call any of it verified or official.' : 'Say which part is confirmed and which is only reported.'}
 Data: ${JSON.stringify(facts).slice(0, 10000)}
-Write 6 to 8 short lines, no greeting, no "namaste", no headings:
-1) who is in control in futures and how strong that is; 2) how the day closed (range, last hour, VWAP) if given; 3) results and news, with how confirmed they are; 4) the trend; 5) the plan levels: above which level the view is confirmed, below which it is wrong, and the next level; 6) the single biggest risk; 7) the verdict line, then "फ़ैसला आपका है।"
+Write 7 to 9 short lines, no greeting, no "namaste", no headings:
+1) who is in control in futures and how strong that is; 2) how the day closed (range, last hour, VWAP) if given; 3) WHY the stock moved: the main news or results behind it, in plain words, with how confirmed each is; 4) the trend; 5) the plan levels: above which level the view is confirmed, below which it is wrong, and the next level; 6) the single biggest risk; 7) the verdict line, then "फ़ैसला आपका है।"
 ${f.phase === 'closed' || f.phase === 'pre' ? 'Start by saying this is last-session data, to be rechecked after 9:30.' : ''}
+Then, for up to 3 news items that matter most for the price (from the news list only), write an "if-then" in Hindi and English:
+what has to happen for the move to continue, and what would reverse it, based only on that headline and its detail (for example: "if the regulator confirms the relief, the rally can extend; if the final rules are stricter, it can fall back"). If the news is not confirmed, the first condition must be its official confirmation. No numbers that are not in the data.
 Never tell them to buy or sell, never say "सलाह", never promise an outcome.
-Return ONLY JSON: {"hi": "Hindi (Devanagari), lines separated by \\n", "en": "same in simple English"}`;
+Return ONLY JSON: {"hi": "Hindi (Devanagari), lines separated by \\n", "en": "same in simple English", "scen": [{"i": news index, "hi": "अगर ... तो ...; अगर ... तो ...", "en": "If ..., ...; if ..., ..."}]}`;
       try {
-        const raw = await aiText(env, prompt, 1100, 'chat'), j = JSON.parse(raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1));
+        const raw = await aiText(env, prompt, 1800, 'chat'), j = JSON.parse(raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1));
         const cand = { hi: String(j.hi || '').replace(/^\s*(नमस्ते|नमस्कार|hello|hi)[^\n]*\n/i, '').trim(), en: String(j.en || '').replace(/^\s*(hello|hi)[^\n]*\n/i, '').trim(), by: 'ai' };
+        const NI = f.news.items;
+        cand.scen = (Array.isArray(j.scen) ? j.scen : []).filter((x) => x && Number.isInteger(x.i) && NI[x.i] && x.hi && x.hi.length > 20).slice(0, 3)
+          .map((x) => ({ t: NI[x.i].t.slice(0, 110), status: NI[x.i].status, hi: String(x.hi).trim(), en: String(x.en || '').trim() }))
+          .filter((x) => !aiBad({ hi: x.hi.padEnd(40, ' '), en: x.en }, f, lean));
         const bad = aiBad(cand, f, lean);
         ai = bad ? { rejected: bad } : cand;
         memSet(ck, ai, 600e3); await env.KV.put(ck, JSON.stringify(ai), { expirationTtl: 3600 }).catch(() => {});
       } catch (e) { ai = { err: String(e.message || e).slice(0, 160) }; }
     }
   }
-  return { ...f, lean, ai: ai && ai.hi ? ai : null, aiNote: ai && (ai.rejected ? 'AI text did not match the data, so the summary below is built from the rules' : ai.err ? 'AI unavailable right now: ' + ai.err : null), rule };
+  const scen = ai && ai.hi && ai.scen && ai.scen.length ? ai.scen.map((x) => ({ ...x, by: 'ai' })) : ruleScenarios(f).map((x) => ({ ...x, by: 'rules' }));
+  return { ...f, lean, scen, ai: ai && ai.hi ? ai : null, aiNote: ai && (ai.rejected ? 'AI text did not match the data, so the summary below is built from the rules' : ai.err ? 'AI unavailable right now: ' + ai.err : null), rule };
 }
 
 // several stocks side by side, ranked (no AI, so it is fast and cheap)
@@ -1983,7 +2116,7 @@ async function route(req, env, url) {
   switch (p) {
     case '/api/status': {
       const t = env.UPSTOX_ACCESS_TOKEN || (await env.KV.get('upstox_token'));
-      return R({ email, upstox: !!t, ai: hasAI(env), aiVia: env.GEMINI_API_KEY ? 'Gemini' : env.AI ? 'Workers AI' : env.ANTHROPIC_API_KEY ? 'Claude' : null, tokenMode: env.UPSTOX_ACCESS_TOKEN ? 'analytics' : 'oauth', v: 2, pulse: 2, tts: !!env.SARVAM_API_KEY, upCalls30m: UPC.length, rateWait: Math.max(0, Math.ceil((RL.until - Date.now()) / 1000)) });
+      return R({ email, upstox: !!t, ai: hasAI(env), aiVia: env.GEMINI_API_KEY ? 'Gemini' : env.AI ? 'Workers AI' : env.ANTHROPIC_API_KEY ? 'Claude' : null, tokenMode: env.UPSTOX_ACCESS_TOKEN ? 'analytics' : 'oauth', v: 2, pulse: 3, tts: !!env.SARVAM_API_KEY, upCalls30m: UPC.length, rateWait: Math.max(0, Math.ceil((RL.until - Date.now()) / 1000)) });
     }
     case '/api/snapshot': {
       const w = (url.searchParams.get('w') || '').split(',').filter((k) => KEY_RE.test(k)).slice(0, 40);
@@ -2032,6 +2165,7 @@ async function route(req, env, url) {
       return R(await shared('eod:' + only.join(','), 20e3, () => eodQuotes(env, only)));
     }
     case '/api/buildup': return R(await buildupLists(env));
+    case '/api/movers': return R(await movers(env, url.searchParams.get('force') === '1'));
     case '/api/compare': { if (req.method !== 'POST') throw new HttpError(405, 'POST required'); return R(await compare(env, await req.json().catch(() => ({})))); }
     case '/api/tts': { if (req.method !== 'POST') throw new HttpError(405, 'POST required'); return R(await tts(env, await req.json().catch(() => ({})))); }
     case '/api/pulse': {

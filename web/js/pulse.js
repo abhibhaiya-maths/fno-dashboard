@@ -8,6 +8,7 @@ const Pulse = (() => {
   let tab = 'stock', P = null, busy = false, err = '', BU = null, buErr = '', showEn = false, nextAt = null, timer = null;
   let CMP = null, cmpBusy = false, cmpErr = '', cmpList = null;
   let UNI = null, sugg = [], sel = -1, sugFor = 'stock';
+  let MV = null, mvBusy = false, mvErr = '';
   const $p = (id) => document.getElementById(id);
   const live = () => Source.mode === 'live';
   const pct = (x, d = 2) => (ok(x) ? `${x >= 0 ? '+' : ''}${(+x).toFixed(d)}%` : '–');
@@ -21,6 +22,7 @@ const Pulse = (() => {
     'LEANS PUT': 'More points down than up, but not fully confirmed', 'STRONG PUT': 'Positioning, price and trend agree' };
   const recent = () => Store.pref('pulse_recent', []);
   const saveRecent = (it) => Store.setPref('pulse_recent', [it, ...recent().filter((x) => x.sym !== it.sym)].slice(0, 8));
+  const BADGE0 = { official: ['b', '✓ NSE/BSE filing'], results: ['b', '✓ Results (date on NSE)'], confirmed: ['b', '✓ Confirmed by trusted outlets'], single: ['n', 'One trusted outlet'], report: ['g', '⚠ Report, not confirmed'], unverified: ['s', '⚠ Unverified site'] };
   const leanOf = (L) => (L.lean in TONE ? L.lean : L.lean === 'CALL' ? 'LEANS CALL' : L.lean === 'PUT' ? 'LEANS PUT' : 'WAIT'); // older Worker
 
   /* ---------- shell ---------- */
@@ -33,6 +35,7 @@ const Pulse = (() => {
         <div class="pl-sbox"><input id="plQ" placeholder="Type 2-3 letters: pay, hal, tata, eich…" autocomplete="off" aria-label="Stock name" role="combobox" aria-expanded="false" aria-controls="plSug" aria-autocomplete="list" spellcheck="false">
         <div class="pl-sug" id="plSug" role="listbox"></div></div>
         <button class="btn-up" type="submit" id="plGo">Check</button></form>
+      <div id="plMov"></div>
       <div class="pl-chips" id="plChips"></div>
       <div id="plBody"></div>`;
     document.body.appendChild(el);
@@ -45,7 +48,7 @@ const Pulse = (() => {
     });
     document.addEventListener('click', (e) => { if (!e.target.closest || !e.target.closest('.pl-sbox')) hideSug(); });
   }
-  function open(sym) { build(); $p('pl').classList.add('on'); document.body.style.overflow = 'hidden'; loadUni(); show(tab); if (sym) find(sym); tick(); clearInterval(timer); timer = setInterval(tick, 20000); }
+  function open(sym) { build(); $p('pl').classList.add('on'); document.body.style.overflow = 'hidden'; loadUni(); show(tab); if (!MV || Date.now() - MV.ts > 8 * 60e3) loadMovers(); if (sym) find(sym); tick(); clearInterval(timer); timer = setInterval(tick, 20000); }
   function close() { const el = $p('pl'); if (el) el.classList.remove('on'); document.body.style.overflow = ''; clearInterval(timer); timer = null; hideSug(); }
   function show(t) {
     tab = t; document.querySelectorAll('#pl .pl-tabs button').forEach((b) => b.classList.toggle('on', b.dataset.t === t));
@@ -125,6 +128,7 @@ const Pulse = (() => {
     const m = istMin() + istNow().getUTCSeconds() / 60;
     if (nextAt != null && m >= nextAt && !document.hidden) {
       if (P && !busy) load({ sym: P.sym, key: P.key, name: P.name }, true);
+      if (!mvBusy) loadMovers();
       if (tab === 'mkt') loadBuildup();
       if (tab === 'cmp' && CMP && !cmpBusy) runCmp(true);
     }
@@ -153,6 +157,29 @@ const Pulse = (() => {
       saveRecent({ sym: P.sym, key: P.key, name: P.name });
     } catch (e) { err = /404|Not found/i.test(e.message) && !/find/i.test(e.message) ? 'Deploy the new Worker code: it adds /api/pulse.' : e.message; }
     busy = false; schedule(); render(); tick();
+  }
+  async function loadMovers(force) {
+    mvBusy = true; mvErr = ''; drawMov();
+    try { MV = live() ? await Source.raw('/api/movers' + (force ? '?force=1' : '')) : demoMovers(); if (force && MV.cached) toast('List is already fresh (it updates at most every 90 seconds in market hours)'); }
+    catch (e) { mvErr = /404|Not found/i.test(e.message) ? 'Deploy the new Worker code: it adds /api/movers.' : e.message; }
+    mvBusy = false; drawMov();
+  }
+  function moversToggle() { Store.setPref('pulse_mv_hide', !Store.pref('pulse_mv_hide', false)); drawMov(); }
+  function drawMov() {
+    const box = $p('plMov'); if (!box) return;
+    if (tab === 'mkt') { box.innerHTML = ''; return; }
+    const hide = Store.pref('pulse_mv_hide', false);
+    const head = `<div class="pl-mvh"><b>Clearest data today</b><span class="mut">${MV ? `${MV.scanned ? `${MV.scanned} shortlisted of ${MV.of} F&O stocks · ` : ''}NSE file ${esc(MV.bhavDate || '–')}${MV.phase === 'live' || MV.phase === 'open15' ? ' + live prices' : ''} · ${agoT(MV.ts)}${MV.stale ? ' · Upstox busy, last saved list' : ''}` : ''}</span>
+      <span class="pl-mvb"><button class="btn" onclick="Pulse.loadMovers(true)" ${mvBusy ? 'disabled' : ''}>${mvBusy ? 'Scanning…' : '↻ Refresh'}</button><button class="btn" onclick="Pulse.moversToggle()" aria-expanded="${!hide}">${hide ? 'Show' : 'Hide'}</button></span></div>`;
+    if (hide) { box.innerHTML = `<div class="pl-mv">${head}</div>`; return; }
+    if (mvErr) { box.innerHTML = `<div class="pl-mv">${head}<div class="alert d">${esc(mvErr)}</div></div>`; return; }
+    if (!MV) { box.innerHTML = `<div class="pl-mv">${head}<div class="pl-wait"><span class="spin"></span>Scanning all F&O stocks (first time takes about 10 seconds)…</div></div>`; return; }
+    const col = (list, up) => `<div class="pl-mvc ${up ? 'up' : 'dn'}"><div class="sec ${up ? 'up' : 'down'}">${up ? '▲ Top 5 up (CALL side)' : '▼ Top 5 down (PUT side)'}</div>${list.length ? list.map((x, i) => `
+      <button class="pl-mvr" onclick='Pulse.load(${JSON.stringify({ sym: x.sym, key: x.key, name: x.name })})' title="${esc((x.why || []).map((w) => (w.pts > 0 ? '+' : '') + w.pts + ' ' + w.txt).join('\n'))}">
+        <span class="pl-rank">${i + 1}</span><span class="pl-mvs"><b>${esc(x.sym)}</b><small>${esc(x.label.replace(' side', ''))} · ${x.conf}${x.fut ? ' · ' + BNAME[x.fut] : ''}</small></span>
+        <span class="pl-mvn"><b class="${cls(x.chg)}">${pct(x.chg)}</b><small>score ${x.score > 0 ? '+' : ''}${x.score}</small></span></button>`).join('') : `<div class="mut" style="padding:8px 2px">No stock has clear ${up ? 'buying' : 'selling'} data right now.</div>`}</div>`;
+    box.innerHTML = `<div class="pl-mv">${head}<div class="pl-mvg">${col(MV.up || [], true)}${col(MV.down || [], false)}</div>
+      <div class="legend">Ranked by how clearly the data leans (futures positioning, price vs levels, trend, results reaction, Nifty, FII), not by a promise of how far it will move. Stocks in the F&O ban are left out. Tap one for its full pulse with news, option writers and the last hour.</div></div>`;
   }
   async function loadBuildup() {
     buErr = ''; render();
@@ -187,7 +214,7 @@ const Pulse = (() => {
 
   /* ---------- drawing ---------- */
   function render() {
-    const b = $p('plBody'); if (!b) return; chips();
+    const b = $p('plBody'); if (!b) return; chips(); drawMov();
     if (tab === 'mkt') { b.innerHTML = renderMkt(); return; }
     if (tab === 'cmp') { b.innerHTML = renderCmp(); return; }
     if (busy && !P) { b.innerHTML = `<div class="pl-wait"><span class="spin"></span>Reading futures, options, news, filings and FII data…</div>`; return; }
@@ -234,6 +261,9 @@ const Pulse = (() => {
       h += `<div class="pl-ai"><div class="pl-ai-h"><b>In simple words</b><span><button class="btn" onclick="Pulse.lang()">${showEn ? 'हिंदी' : 'English'}</button><button class="btn" onclick="Pulse.speak()">🔊 Listen</button></span></div><div class="pl-ai-t">${esc(txt).replace(/\n/g, '<br>')}</div>
         <div class="legend">${sm.by === 'ai' ? 'Written by AI from the numbers on this page only, and checked against them.' : 'Built directly from the numbers on this page.'}${p.aiNote ? ' ' + esc(p.aiNote) + '.' : ''}</div></div>`;
     }
+    const SC = p.scen || [];
+    if (SC.length) h += `<div class="pl-ai pl-scen"><div class="pl-ai-h"><b>${showEn ? 'News: what could happen next' : 'ख़बरें: आगे क्या हो सकता है'}</b></div>${SC.map((x) => `<div class="pl-sc"><div class="pl-sct"><span class="pill ${(BADGE0[x.status] || BADGE0.single)[0]}">${(BADGE0[x.status] || BADGE0.single)[1]}</span> ${esc(x.t)}</div><div>${esc(showEn ? x.en || x.hi : x.hi)}</div></div>`).join('')}
+      <div class="legend">${SC[0].by === 'ai' ? 'Written by AI from these headlines only and checked against the data.' : 'Built from how confirmed each headline is.'} Unconfirmed news moves price fast both ways.</div></div>`;
     // positioning
     h += `<div class="pl-grid">
       <section class="pl-card"><div class="sec">Who is in control? (futures)</div><div class="pl-bs">${F.live ? bCard(`Today, live (${hm(F.live.at)})`, F.live) : ''}${bCard(F.nse ? `Last session, NSE file ${esc(F.nse.date)}` : 'Last session', F.nse || F.last)}</div>
@@ -257,11 +287,11 @@ const Pulse = (() => {
         ${lv ? row(`Previous high / low / close (${esc(lv.from)})`, `${f2(lv.pdh)} / ${f2(lv.pdl)} / ${f2(lv.pdc)}`) + row('Pivot / R1 / S1', `${f2(lv.p)} / <span class="up">${f2(lv.r1)}</span> / <span class="down">${f2(lv.s1)}</span>`) : ''}
         ${row('Nifty', A.NIFTY ? pct(A.NIFTY.chg) : '–', A.NIFTY ? cls(A.NIFTY.chg) : '')}
         ${p.fii ? row(`FII index futures (${esc(p.fii.date)})`, `${f0(p.fii.longPct)}% long, ${ok(p.fii.netChg) ? `${p.fii.netChg > 0 ? '+' : ''}${f0(p.fii.netChg)} net` : ''}`, p.fii.longPct >= 50 ? 'up' : 'down') : ''}</section></div>`;
-    const N = p.news, BADGE = { official: ['b', '✓ NSE/BSE filing'], results: ['b', '✓ Results (date on NSE)'], confirmed: ['b', '✓ Several trusted outlets'], single: ['n', 'Single source'], report: ['g', '⚠ Report, not confirmed'] };
-    h += `<section class="pl-card pl-news"><div class="sec">News check (last 7 days)</div>${N.items.length ? N.items.map((n) => `<div class="pl-n"><span class="pill ${(BADGE[n.status] || BADGE.single)[0]}">${(BADGE[n.status] || BADGE.single)[1]}</span><div><a href="${esc(n.link || '#')}" target="_blank" rel="noopener">${esc(n.t)}</a><small class="mut">${esc((n.pubs || []).slice(0, 3).join(', '))}${(n.pubs || []).length > 3 ? ` +${n.pubs.length - 3}` : ''} · ${agoT(n.ts)}${ok(n.s) && Math.abs(n.s) >= 0.15 ? ` · <span class="${cls(n.s)}">${n.s > 0 ? 'positive' : 'negative'}</span>` : ''}</small></div></div>`).join('') : '<div class="mut">No company news from trusted outlets this week.</div>'}
+    const N = p.news, BADGE = BADGE0;
+    h += `<section class="pl-card pl-news"><div class="sec">News check (last 7 days)</div>${N.items.length ? N.items.map((n) => `<div class="pl-n"><span class="pill ${(BADGE[n.status] || BADGE.single)[0]}">${(BADGE[n.status] || BADGE.single)[1]}</span><div><a href="${esc(n.link || '#')}" target="_blank" rel="noopener">${esc(n.t)}</a>${n.d ? `<span class="pl-nd">${esc(n.d.slice(0, 220))}</span>` : ''}<small class="mut">${n.trustedPubs ? (n.trustedPubs.length ? 'Trusted: ' + esc(n.trustedPubs.slice(0, 3).join(', ')) : 'No trusted outlet') + (n.others ? ` · ${n.others} other site${n.others > 1 ? 's' : ''}` : '') : esc((n.pubs || []).slice(0, 3).join(', '))} · ${agoT(n.ts)}${ok(n.s) && Math.abs(n.s) >= 0.15 ? ` · <span class="${cls(n.s)}">${n.s > 0 ? 'positive' : 'negative'}</span>` : ''}</small></div></div>`).join('') : '<div class="mut">No company news from trusted outlets this week.</div>'}
       ${N.official.length ? `<div class="sec">Official filings (NSE / BSE)</div>${N.official.map((o) => `<div class="pl-n"><span class="pill b">Filing</span><div>${o.link ? `<a href="${esc(o.link)}" target="_blank" rel="noopener">${esc(o.t)}</a>` : esc(o.t)}<small class="mut">${esc(o.src)} · ${agoT(o.ts)}</small></div></div>`).join('')}` : ''}
       ${p.results && p.results.length ? `<div class="sec">Results headlines</div>${p.results.map((r) => `<div class="pl-n"><span class="pill ${r.s > 0.15 ? 'b' : r.s < -0.15 ? 's' : 'n'}">${esc(r.q || 'Results')}</span><div>${esc(r.t)}<small class="mut">${esc(r.src || '')} · ${agoT(r.ts)}</small></div></div>`).join('')}` : ''}
-      <div class="legend">"Report, not confirmed" = the headline uses words like reportedly, sources, may, likely, in talks, and no exchange filing backs it. Such news can reverse fast. "Results (date on NSE)" = the results date is confirmed on NSE; the figures are as reported by the outlet.</div></section>
+      <div class="legend">News is collected from everywhere, but counts as confirmed only when trusted outlets (ET, Business Standard, Mint, Moneycontrol, BusinessLine, CNBC-TV18, Reuters, Bloomberg, PTI…) or an NSE/BSE filing carry it. "Unverified site" = only other websites have it: it barely moves the score. "Report, not confirmed" = words like reportedly, sources, may, likely, in talks, with no exchange filing. Such news can reverse fast. "Results (date on NSE)" = the results date is confirmed on NSE; the figures are as reported by the outlet.</div></section>
       <div class="legend">Updated ${ago ? ago + ' min ago' : 'just now'}. For analysis and practice only, not investment advice.</div>`;
     return h;
   }
@@ -316,7 +346,7 @@ const Pulse = (() => {
       resEv: { kind: 'past', date: '2026-11-13', src: 'NSE', react: 1.34, sessions: 1, nums: { q: 'Q2 FY27', pat: 15, rev: 12, src: 'Business Standard' } },
       brokers: [{ t: 'Eicher Motors: brokerage raises target after Q2 (demo)', kind: 'up', src: 'Moneycontrol', ts: now - 864e5 }],
       news: { items: [{ t: 'Eicher Motors Q2: net profit rises 15%, revenue at record high (demo)', pubs: ['Business Standard'], ts: now - 1.2 * 864e5, s: 0.6, status: 'results' },
-        { t: 'Royal Enfield sales jump in October (demo)', pubs: ['Autocar India'], ts: now - 2 * 864e5, s: 0.4, status: 'single' }], official: [] }, results: [], ban: null };
+        { t: 'Royal Enfield sales jump in October (demo)', pubs: ['Mint'], ts: now - 2 * 864e5, s: 0.4, status: 'single' }], official: [] }, results: [], ban: null };
     f.lean = { lean: 'LEANS CALL', side: 'CALL', label: 'Leans CALL side', conf: 'medium', score: 3.8, verified: 1,
       why: [{ pts: 1, txt: 'Price above the 20-day and 50-day averages (uptrend)' }, { pts: 0.5, txt: 'Futures short covering (last session, NSE 2026-11-13: price +1.91%, OI -1.41%), weak' },
         { pts: 0.5, txt: "Closed near the day's high (top 2% of the range)" }, { pts: 0.5, txt: 'Buying in the last hour (+0.62% after 2:30, 26% of the day\'s volume)' },
@@ -326,8 +356,18 @@ const Pulse = (() => {
       plan: { side: 'CALL', trigger: 7678.3, stop: 7608, target: 7700 } };
     f.rule = { by: 'rules', hi: 'ये पिछले सत्र (2026-11-13) का डेटा है, सुबह 9:30 के बाद दोबारा देखें।\nफ्यूचर्स में बेचने वाले अपनी पोज़िशन काट रहे हैं (शॉर्ट कवरिंग), पर ये संकेत कमज़ोर है: भाव +1.91%, OI -1.41%।\nदिन का अंत मज़बूत रहा: भाव ऊपरी हिस्से में या VWAP के ऊपर।\nनतीजे 2026-11-13 को आए (तारीख़ NSE से पक्की); तब से भाव +1.34%, मुनाफ़ा सालाना +15% (ख़बरों के मुताबिक़)।\nलंबा रुझान ऊपर की तरफ़ है।\nऊपर 7,678 पार हो तो तेज़ी पक्की होती है, अगला पड़ाव 7,700; 7,608 के नीचे आए तो ये सोच ग़लत।\nसबसे बड़ा जोखिम: ये तेज़ी कुछ हद तक शॉर्ट कवरिंग से है; नए खरीदार न जुड़े तो कम टिकती है।\nकुल मिलाकर: डेटा कॉल की तरफ़ झुका है, पर पक्का नहीं। फ़ैसला आपका है। (डेमो)',
       en: 'This is last-session data (2026-11-13); recheck after 9:30.\nIn futures, sellers are cutting positions (short covering), but the signal is weak: price +1.91%, OI -1.41%.\nThe day ended strong: price in the upper part of the range or above VWAP.\nResults came on 2026-11-13 (date confirmed on NSE); price +1.34% since, profit +15% YoY (as reported).\nThe bigger trend points up.\nAbove 7,678 the rise is confirmed, next stop 7,700; below 7,608 the view is wrong.\nBiggest risk: the rise is partly short covering; it fades more often unless fresh buyers join.\nOverall: Leans CALL side. The decision is yours. (demo)' };
+    f.scen = [{ by: 'rules', status: 'results', t: 'Eicher Motors Q2: net profit rises 15%, revenue at record high (demo)', hi: 'ख़बर पक्की है, इसलिए असली सवाल ये है कि भाव इसे पहले ही कितना मान चुका है: अच्छी ख़बर के बाद भी भाव न चढ़े तो कमज़ोरी का संकेत है। (डेमो)', en: 'The news is confirmed, so the question is how much is already priced in. (demo)' },
+      { by: 'rules', status: 'single', t: 'Royal Enfield sales jump in October (demo)', hi: 'अगर बाक़ी भरोसेमंद अख़बार और कंपनी का मासिक बिक्री आँकड़ा इसकी पुष्टि करें, तो तेज़ी टिक सकती है; अगर आँकड़े कमज़ोर निकलें, तो भाव वापस गिर सकता है। (डेमो)', en: 'If other trusted outlets and the monthly sales filing confirm it, the rise can hold; if the numbers disappoint, it can fall back. (demo)' }];
+    f.news.items.forEach((n) => { n.trustedPubs = n.pubs; n.others = 0; });
+    f.news.items.push({ t: 'Eicher to launch new 750cc bike, claims auto blog (demo)', pubs: ['bikeblog.in'], trustedPubs: [], others: 1, ts: now - 3 * 864e5, s: 0.3, status: 'unverified' });
     f.ai = null;
     return f;
+  }
+  function demoMovers() {
+    const mk = (sym, chg, lean, score, fut, why) => ({ sym, name: sym, key: '', chg, lean, label: { 'STRONG CALL': 'Strong CALL side', 'LEANS CALL': 'Leans CALL side', 'LEANS PUT': 'Leans PUT side', 'STRONG PUT': 'Strong PUT side' }[lean], conf: /STRONG/.test(lean) ? 'high' : 'medium', score, fut, why: [{ pts: score > 0 ? 2 : -2, txt: why }] });
+    return { ts: Date.now() - 4 * 60e3, phase: 'closed', bhavDate: '2026-11-13 (demo)', scanned: 31, of: 214,
+      up: [mk('POLICYBZR', 5.2, 'STRONG CALL', 4.9, 'LB', 'Futures long buildup'), mk('ANGELONE', 1.9, 'STRONG CALL', 4.1, 'LB', 'Futures long buildup'), mk('EICHERMOT', 1.3, 'LEANS CALL', 3.8, 'SC', 'Short covering'), mk('MFSL', 2.4, 'LEANS CALL', 3.1, 'LB', 'Long buildup'), mk('ABB', 1.8, 'LEANS CALL', 2.2, 'LB', 'Long buildup')],
+      down: [mk('GRASIM', -3.0, 'STRONG PUT', -4.6, 'SB', 'Short buildup'), mk('ALKEM', -3.7, 'STRONG PUT', -4.0, 'SB', 'Short buildup'), mk('TATAPOWER', -1.9, 'LEANS PUT', -3.1, 'SB', 'Short buildup'), mk('BOSCHLTD', -1.9, 'LEANS PUT', -2.6, 'SB', 'Short buildup'), mk('COROMANDEL', -2.3, 'LEANS PUT', -1.9, 'LU', 'Long unwinding')] };
   }
   function demoCmp(list) {
     const D = { EICHERMOT: ['LEANS CALL', 3.8, 'medium', 'SC'], POLICYBZR: ['STRONG CALL', 4.4, 'high', 'LB'], PAYTM: ['LEANS CALL', 1.9, 'low', 'LB'], ABB: ['WAIT', 0.8, 'low', 'LB'], TATAPOWER: ['LEANS PUT', -3.1, 'medium', 'SB'], HAL: ['WAIT', -0.4, 'low', 'LU'] };
@@ -345,5 +385,5 @@ const Pulse = (() => {
         LU: L([['COROMANDEL', -2.29, -5.92], ['KALYANKJIL', -2.32, -5.06], ['KAYNES', -2.58, -2.26], ['BDL', -1.49, -3.11]]) },
       index: [{ sym: 'BANKNIFTY', b: 'LU', doiPct: -6.53 }] };
   }
-  return { open, close, show, find, load, fromList, lang, speak, pick, enter, runCmp, rmCmp };
+  return { open, close, show, find, load, fromList, lang, speak, pick, enter, runCmp, rmCmp, loadMovers, moversToggle };
 })();

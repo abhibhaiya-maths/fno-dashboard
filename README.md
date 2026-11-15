@@ -1,3 +1,13 @@
+# ✅ नया (15 नवंबर 2026, version c): Top 5 ऊपर / Top 5 नीचे + ख़बरों की जाँच + "अगर-तो"
+
+**अपलोड:** पहले जैसा। Worker में `worker/src/index.js` पूरा paste करके Deploy करें, फिर GitHub पर सारी फ़ाइलें replace करें। जाँच: `/api/status` में `"pulse":3`।
+
+- **Clearest data today (Pulse में search box के नीचे):** सारे F&O स्टॉक्स में से सबसे साफ़ ऊपर (CALL side) और सबसे साफ़ नीचे (PUT side) वाले 5-5 स्टॉक्स, score के क्रम में। हर स्टॉक पर tap करें तो उसका पूरा Pulse खुलता है। **↻ Refresh** बटन है, और list 9:15, 9:30 और हर 10 मिनट पर अपने-आप भी update होती है। Data कहाँ से: NSE की F&O फ़ाइल (सारे स्टॉक्स की buildup) + Upstox की एक call में सबके live भाव + उसी Pulse वाले नियम। F&O ban वाले स्टॉक्स इसमें नहीं आते।
+- **ख़बरें हर जगह से, पुष्टि भरोसेमंद sources से:** ख़बर तभी "पक्की" मानी जाती है जब ET, Business Standard, Mint, Moneycontrol, BusinessLine, CNBC-TV18, Reuters, Bloomberg या PTI उसे छापें, या NSE/BSE पर उसकी filing हो। जो ख़बर सिर्फ़ दूसरी websites पर है, उस पर "⚠ Unverified site" लगता है और score पर उसका असर लगभग नहीं होता।
+- **"ख़बरें: आगे क्या हो सकता है":** बड़ी ख़बरों के लिए "अगर-तो", जैसे "अगर रेगुलेटर पुष्टि करे तो…, अगर ख़बर ग़लत निकले तो…"। Gemini को headline के साथ article की शुरुआती लाइनें भी जाती हैं, और उसका जवाब data से मिलाकर जाँचा जाता है।
+
+---
+
 # ✅ नया (15 नवंबर 2026, version b): Pulse 2.0 + Compare + आवाज़ का सुधार
 
 **अपलोड:** Worker में `worker/src/index.js` पूरा paste > Deploy; GitHub पर सारी फ़ाइलें replace। पूरे steps: `DEPLOY-हिंदी.txt`।

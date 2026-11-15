@@ -1010,3 +1010,18 @@ td.ov-tags{min-width:150px;max-width:220px;display:table-cell;white-space:normal
 @media (max-width:760px){.pl-tabs{width:100%}.pl-tabs button{flex:1;padding:6px 6px}.pl-plan b{font-size:15px}.pl-sug button b{min-width:80px}}
 .pl-verdict .alert{color:var(--text)}
 .vsel{background:var(--inset);color:var(--text);border:1px solid var(--line2);border-radius:var(--r-sm);padding:4px 6px;font:12.5px var(--sans);max-width:220px}
+/* Pulse: top movers + news scenarios */
+.pl-mv{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:10px 12px;margin-bottom:12px}
+.pl-mvh{display:flex;align-items:center;gap:8px 12px;flex-wrap:wrap;margin-bottom:6px}.pl-mvh>b{font:700 15px var(--disp)}.pl-mvh>.mut{font-size:12px;flex:1;min-width:180px}
+.pl-mvb{display:flex;gap:6px;margin-left:auto}
+.pl-mvg{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.pl-mvc{display:flex;flex-direction:column;gap:4px;min-width:0}.pl-mvc .sec{margin:2px 0 2px}.pl-mvc .sec.up{color:var(--call)}.pl-mvc .sec.down{color:var(--put)}
+.pl-mvr{display:flex;align-items:center;gap:10px;width:100%;background:var(--inset);border:1px solid var(--line);border-radius:var(--r-sm);padding:7px 10px;color:var(--text);cursor:pointer;text-align:left}
+.pl-mvc.up .pl-mvr{border-left:3px solid var(--call)}.pl-mvc.dn .pl-mvr{border-left:3px solid var(--put)}
+.pl-mvr:hover{border-color:var(--cyan)}.pl-mvr .pl-rank{font-size:16px;min-width:16px}
+.pl-mvs{flex:1;min-width:0;display:flex;flex-direction:column}.pl-mvs b{font-family:var(--disp);font-size:15px}.pl-mvs small{color:var(--muted);font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pl-mvn{display:flex;flex-direction:column;align-items:flex-end;font-variant-numeric:tabular-nums}.pl-mvn small{color:var(--muted);font-size:11.5px}
+.pl-scen .pl-sc{padding:8px 0;border-bottom:1px solid var(--line);font-size:14px;line-height:1.6}.pl-scen .pl-sc:last-of-type{border-bottom:0}
+.pl-sct{font-size:12.5px;color:var(--muted);margin-bottom:3px}.pl-sct .pill{margin-right:4px}
+.pl-nd{font-size:12.5px;color:var(--text);opacity:.8;line-height:1.45}
+@media (max-width:760px){.pl-mvg{grid-template-columns:minmax(0,1fr)}}

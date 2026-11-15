@@ -1,4 +1,4 @@
-F&O Terminal: एक बार में deploy (15 Nov 2026, version b)
+F&O Terminal: एक बार में deploy (15 Nov 2026, version c)
 =========================================================
 
 A) Cloudflare Worker (पहले यह)
@@ -9,8 +9,10 @@ B) Website (GitHub / Vercel)
    ZIP की सारी फ़ाइलें (web, worker, firebase, README.md) रिपो में पुरानी के ऊपर डालें > Commit. Vercel ख़ुद deploy करेगा.
 
 C) जाँच
-   1. https://fno-worker.raiabhinaykumar.workers.dev/api/status में "pulse":2 दिखे
-   2. Dashboard > Pulse > "eic" टाइप करें: नीचे EICHERMOT दिखना चाहिए > उसे चुनें
+   1. https://fno-worker.raiabhinaykumar.workers.dev/api/status में "pulse":3 दिखे
+      और .../api/movers खोलें: up और down की list आनी चाहिए (पहली बार करीब 10 सेकंड लगते हैं)
+   2. Dashboard > Pulse: search box के नीचे "Clearest data today" में Top 5 ऊपर / Top 5 नीचे दिखें
+      फिर "eic" टाइप करें: नीचे EICHERMOT दिखना चाहिए > उसे चुनें
    3. Compare टैब > 4-5 स्टॉक जोड़ें > Compare
    4. फ़ोन पर पुराना पेज दिखे तो एक बार refresh
 
