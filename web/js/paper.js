@@ -8,7 +8,7 @@ const Paper = (() => {
   const sqMin = (() => { const [h, m] = (PC.SQUARE_OFF_TIME || '15:20').split(':').map(Number); return h * 60 + m - 555; })();
   const dateKey = () => { const c = Source.clock(); return c.date === 'DEMO' ? 'DEMO-' + runId : c.date; };
   const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-  const opts = () => ({ trail: true, autoExit: false, lots: 1, slMode: 'both', voice: 'important', ...Store.pref('paper_opts', {}) });
+  const opts = () => ({ trail: true, autoExit: false, lots: 1, lotMode: 'fixed', slMode: 'both', voice: 'important', ...Store.pref('paper_opts', {}) });
   /* ---- Calm voice: an alert is spoken only after it has held for a while, positions on the same instrument are
      grouped into one sentence, HOLD is never spoken, and the same alert can't repeat for 3 minutes. ---- */
   const HOLD_MS = { EXIT: 20000, BOOK: 30000, WARN: 45000, HOLD: 45000 };
@@ -64,11 +64,22 @@ const Paper = (() => {
     const q = optQuote(a, K, type), px = buyPx(q), qty = lots * a.lot, ch = charges('BUY', px, qty, a.cf.exch);
     return { px, qty, ch, cost: px * qty + ch.total, q };
   }
+  // Lots by risk: as many lots as keep the stop-loss loss inside your per-trade line (config.js → RISK.TRADE_PCT),
+  // then the grade's size (★ full, A half, B and Scalp 1 lot). Never below 1 lot.
+  function riskLots(a, K, type, risk, grade) {
+    if (!a || !a.lot) return 1;
+    const q = optQuote(a, K, type), px = buyPx(q), dl = Math.abs(q.delta || 0.5), R = (APP_CONFIG.RISK && APP_CONFIG.RISK.TRADE_PCT) || 2;
+    const perLot = dl * (risk || 1.5 * a.atr) * a.lot + 2 * C.BROKERAGE * (1 + C.GST) + px * a.lot * 0.0025;
+    const fit = Math.floor(((invested() * R) / 100) / perLot), mul = grade && GRADE_INFO[grade] ? GRADE_INFO[grade].mul : 1;
+    return Math.max(1, Math.floor(fit * (mul || 0)) || 1);
+  }
+  const lotsFor = (a, s) => (opts().lotMode === 'risk' && s && s.setup ? riskLots(a, s.setup.K, s.setup.dir, s.setup.risk, s.grade) : (s && s.lots) || opts().lots);
   async function open({ key, K, type, lots, sl, tgt, src, risk, grade }) {
     const a = A[key];
     if (!ready || !a) return toast('Data is not ready yet');
     if (!a.cf.opt) return toast(`${a.cf.label} has no options on Upstox, so it can't be paper traded here.`);
     if (!a.sessionLive) return toast('Market is closed. Paper trades open during market hours.');
+    if (opts().lotMode === 'risk' && src !== 'manual') lots = riskLots(a, K, type, risk, grade);
     const e = estimate(key, K, type, lots);
     if (e.cost > acc.cash) return toast(`Not enough cash: need ${rs(e.cost)}, have ${rs(acc.cash)}`);
     const st = setupFor(a, type), dl = Math.abs(e.q.delta || 0.5);
@@ -81,6 +92,7 @@ const Paper = (() => {
       score: a.score, st0: a.stD, src: src || 'manual', grade: grade || null, advice: null, exitSigPx: null, log: [],
       slMode: opts().slMode, slUser: ok(sl) && sl > 0 && sl < e.px ? slv : null, slAuto: tick05(Math.max(0.05, e.px - dl * st.risk)) };
     t.sl = effSL(t);
+    try { t.ctx = typeof Journal !== 'undefined' ? Journal.snap(a, type) : null; } catch (e) { t.ctx = null; } // for the Journal: the market at entry
     trades.unshift(t);
     await Promise.all([Store.saveTrade(t), Store.saveAccount(acc)]);
     beep(660); toast(`Paper buy: ${t.label} ${K} ${type}, ${lots} lot at ${rs(e.px)}`);
@@ -253,6 +265,7 @@ const Paper = (() => {
         const strength = hz === 'star' ? 'strong' : hz === 'short' ? h.strength || 'mild'
           : ds >= 70 && (st === 'CE' ? h.coreUp : h.coreDn) >= 4 && ok(h.adx) && h.adx >= 25 && !(a.events && a.events.length) ? 'strong' : 'mild';
         const x = { id: uid(), key: k, hz, grade, dir: st, strength, score: h.score, date: dk, min: a.curMin, price: a.price, atr: h.atr, chk: HZC[hz].chk, ts: Date.now() };
+        try { x.ctx = typeof Journal !== 'undefined' ? Journal.snap(a, st) : null; } catch (e) { x.ctx = null; }
         signals.unshift(x); Store.saveSignal(x);
       }
       const today = a.D.candles.filter((c) => c.d === 2);
@@ -319,7 +332,7 @@ const Paper = (() => {
       h += `<div class="lv"><div><small>${s.state === 'CE' ? 'Long' : 'Short'} around</small><b>${f1(st.e)}</b></div><div><small>Stop-loss</small><b class="down">${f1(st.sl)}</b></div><div><small>Target 1 / 2</small><b class="up">${f1(st.t1)} / ${f1(st.t2)}</b></div></div>
         <div class="mut" style="font-size:12px;margin-top:6px">${esc(a.cf.label)} has no option chain on Upstox, so paper trading is off. Levels are for the ${a.isMCX ? 'futures contract' : 'stock price'}.</div>`;
     } else if (s.setup) {
-      const st = s.setup, L = s.lots || o.lots, e = estimate(cur, st.K, st.dir, L);
+      const st = s.setup, L = lotsFor(a, s), e = estimate(cur, st.K, st.dir, L);
       h += `<div class="lv"><div><small>Strike</small><b>${st.K} ${st.dir}</b></div><div><small>Buy price</small><b>${rs(e.px)}</b></div><div><small>SL / target</small><b><span class="down">${f1(st.pSL)}</span> / <span class="up">${f1(st.pT1)}</span></b></div></div>
         ${s.exitNote ? `<div class="mut" style="font-size:12px;margin-top:6px">${esc(s.exitNote)}</div>` : ''}<button class="big ${cls}" onclick="Paper.takeSignal()">Take paper trade: ${L} lot (${e.qty}), total ${rs(e.cost)}</button>`;
     }
@@ -342,6 +355,7 @@ const Paper = (() => {
     const op = openTrades(), o = opts();
     let h = `<div class="ptog"><label>New trades' SL <select onchange="Paper.setOpt('slMode',this.value)">${Object.entries(SLM).map(([k, l]) => `<option value="${k}" ${o.slMode === k ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
       <label>Voice <select onchange="Paper.setOpt('voice',this.value)"><option value="important" ${o.voice === 'important' ? 'selected' : ''}>Important only</option><option value="all" ${o.voice === 'all' ? 'selected' : ''}>All alerts</option><option value="off" ${o.voice === 'off' ? 'selected' : ''}>Off</option></select></label>
+      <label>Lots <select onchange="Paper.setOpt('lotMode',this.value)"><option value="fixed" ${o.lotMode !== 'risk' ? 'selected' : ''}>Fixed (${o.lots})</option><option value="risk" ${o.lotMode === 'risk' ? 'selected' : ''}>By risk (${(APP_CONFIG.RISK && APP_CONFIG.RISK.TRADE_PCT) || 2}% max loss)</option></select></label>
       <label><input type="checkbox" ${o.autoExit ? 'checked' : ''} onchange="Paper.setOpt('autoExit',this.checked)"> Auto-sell on exit signal</label></div>`;
     if (!op.length) h += '<div class="mut" style="padding:8px 0">No open positions. Take a trade from the live signal or place one manually below.</div>';
     for (const t of op) {
@@ -493,7 +507,10 @@ const Paper = (() => {
       lastLossMin: lastLoss && lastLoss.closedTs ? Math.round((Date.now() - lastLoss.closedTs) / 60000) : null, open: openTrades(), put: invested() };
   }
   return { speak, load, onTick, render, renderOrderForm, updateEstimate, takeSignal, takeBest, gradeStats, placeManual, closeId, openFromAsk, setSL, setSLMode, setTgt, setOpt, setLots, reset, opts, charges, addFunds, withdraw, resetTo, openFunds, renderFunds, fset,
-    get ready() { return ready; }, openTrades, dayInfo, get account() { return acc; } };
+    get ready() { return ready; }, openTrades, dayInfo, get account() { return acc; },
+    // read-only lists for the Journal, and saving your tags/notes on a trade
+    allTrades: () => trades, allSignals: () => signals, lotsFor, riskLots,
+    tagTrade: (id, tags, note) => { const t = trades.find((x) => x.id === id); if (!t) return; t.tags = tags; if (note != null) t.note = String(note).slice(0, 300); return Store.saveTrade(t); } };
 })();
 
 /* Small helpers: beep and toast */

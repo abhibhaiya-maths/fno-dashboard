@@ -414,3 +414,73 @@ function macroImpact() {
   const net = out.reduce((s, o) => s + o.idx, 0);
   return { items: out, net, read: !out.length ? 'No big macro move right now.' : net > 0 ? 'Macro backdrop leans supportive for Indian equities.' : net < 0 ? 'Macro backdrop leans against Indian equities.' : 'Macro signals are mixed.' };
 }
+
+/* ---------- World cues FOR THE SELECTED INSTRUMENT (display and AI context only) ----------
+   worldRead() above stays the Nifty read the engine uses (Market Brain, gap cause), so signals and grades don't change.
+   worldReadFor(a) re-weighs the same world markets for whatever is on screen: Bank Nifty leans on bank ADRs and US yields,
+   an IT stock on the Nasdaq, Infosys ADR and the rupee (a weaker rupee HELPS exporters), an OMC or airline on crude
+   (cheaper crude helps), ONGC the other way, MCX crude / gold / silver on their own world prices. */
+const CUE_SYMS = {
+  omc: ['BPCL', 'HINDPETRO', 'IOC'], upstream: ['ONGC', 'OIL'], aviation: ['INDIGO', 'SPICEJET'], paints: ['ASIANPAINT', 'BERGEPAINT', 'KANSAINER', 'PIDILITIND', 'SRF', 'MRF', 'APOLLOTYRE', 'CEATLTD', 'BALKRISIND'],
+  goldloan: ['MUTHOOTFIN', 'MANAPPURAM'], jewel: ['TITAN', 'KALYANKJIL', 'SENCO'],
+  it: ['INFY', 'TCS', 'HCLTECH', 'WIPRO', 'TECHM', 'LTIM', 'PERSISTENT', 'COFORGE', 'MPHASIS', 'OFSS', 'LTTS', 'KPITTECH', 'TATAELXSI', 'CYIENT'],
+  pharma: ['SUNPHARMA', 'DRREDDY', 'CIPLA', 'LUPIN', 'DIVISLAB', 'AUROPHARMA', 'ZYDUSLIFE', 'TORNTPHARM', 'ALKEM', 'BIOCON', 'GLENMARK', 'LAURUSLABS', 'IPCALAB', 'GRANULES', 'MANKIND'],
+  metal: ['TATASTEEL', 'JSWSTEEL', 'HINDALCO', 'VEDL', 'SAIL', 'JINDALSTEL', 'NMDC', 'NATIONALUM', 'HINDZINC', 'HINDCOPPER', 'COALINDIA', 'APLAPOLLO'],
+  bank: ['HDFCBANK', 'ICICIBANK', 'SBIN', 'KOTAKBANK', 'AXISBANK', 'INDUSINDBK', 'BANKBARODA', 'PNB', 'CANBK', 'FEDERALBNK', 'IDFCFIRSTB', 'AUBANK', 'BANDHANBNK', 'UNIONBANK', 'BAJFINANCE', 'BAJAJFINSV', 'SHRIRAMFIN', 'CHOLAFIN', 'LICHSGFIN', 'PFC', 'RECLTD'],
+};
+const CUE_PROFILES = {
+  bank: { name: 'banks', o: { hdb: [1.5, 1], ibn: [1.5, 1], us10y: [1.6, -1], usdinr: [1, -1], dxy: [1, -1], infy: [0, 1], wit: [0, 1], nasF: [0.8, 1] }, tip: 'US yields, the dollar and the bank ADRs (HDFC Bank, ICICI Bank in New York) matter most for banks.' },
+  it: { name: 'IT', o: { nasF: [2.5, 1], nas: [1.2, 1], infy: [2, 1], wit: [1, 1], usdinr: [1.6, 1], dxy: [0.8, 1], hdb: [0, 1], ibn: [0, 1], brent: [0.3, -1] }, tip: 'IT earns in dollars: the Nasdaq, the Infosys/Wipro ADRs matter most, and a WEAKER rupee (USD/INR up) helps.' },
+  pharma: { name: 'pharma', o: { usdinr: [1.6, 1], dxy: [0.6, 1], spxF: [1, 1], infy: [0, 1], wit: [0, 1], hdb: [0, 1], ibn: [0, 1], brent: [0.4, -1] }, tip: 'Pharma exports to the US: a weaker rupee helps; US market mood matters more than crude.' },
+  metal: { name: 'metals', o: { hsi: [1.8, 1], sse: [1.8, 1], dxy: [1.6, -1], silver: [0.6, 1], infy: [0, 1], wit: [0, 1], hdb: [0, 1], ibn: [0, 1] }, tip: 'Metals follow China (Hang Seng, Shanghai) and the dollar: a weaker dollar lifts metal prices.' },
+  omc: { name: 'oil marketing', o: { brent: [3, -1], wti: [1, -1], usdinr: [1.6, -1] }, tip: 'OMCs buy crude: cheaper crude and a stronger rupee help their margins.' },
+  upstream: { name: 'oil producers', o: { brent: [3, 1], wti: [1, 1] }, tip: 'ONGC and Oil India sell crude: a higher crude price helps them.' },
+  aviation: { name: 'airlines', o: { brent: [3, -1], wti: [1, -1], usdinr: [1.6, -1] }, tip: 'Fuel is an airline\'s biggest cost: cheaper crude and a stronger rupee help.' },
+  paints: { name: 'paints, tyres and chemicals', o: { brent: [2.2, -1], wti: [0.8, -1] }, tip: 'Their raw materials come from crude: cheaper crude helps margins.' },
+  goldloan: { name: 'gold lenders', o: { gold: [1.8, 1] }, tip: 'A higher gold price raises the value of their gold collateral.' },
+  jewel: { name: 'jewellers', o: { gold: [1.5, -1] }, tip: 'A sharp gold rally can squeeze jewellery demand and margins.' },
+  mcxcrude: { only: true, name: 'MCX crude', o: { brent: [3, 1], wti: [3, 1], dxy: [1, -1], usdinr: [1, 1], usvix: [0.5, -1] }, tip: 'MCX crude follows world crude, priced in rupees: a weaker rupee lifts it too.' },
+  mcxgold: { only: true, name: 'MCX gold', o: { gold: [3, 1], dxy: [1.5, -1], us10y: [1.5, -1], usdinr: [1, 1], usvix: [0.6, 1] }, tip: 'MCX gold follows world gold in rupees: a weaker dollar, lower US yields and more fear lift it.' },
+  mcxsilver: { only: true, name: 'MCX silver', o: { silver: [3, 1], gold: [1, 1], dxy: [1, -1], usdinr: [1, 1], hsi: [0.5, 1] }, tip: 'MCX silver follows world silver in rupees, with gold and China demand.' },
+  mcxgas: { only: true, name: 'MCX natural gas', o: { natgas: [3, 1], usdinr: [0.6, 1] }, tip: 'MCX natural gas follows US natural gas prices.' },
+};
+function cueProfile(a) {
+  if (!a || !a.cf) return null;
+  const cf = a.cf, sym = String(cf.sym || a.key || '').toUpperCase();
+  if (a.key === 'BANKNIFTY') return CUE_PROFILES.bank;
+  if (cf.core || cf.kind === 'INDEX') return /BANK|FIN/.test(sym) ? CUE_PROFILES.bank : /IT$|NIFTYIT/.test(sym) ? CUE_PROFILES.it : /PHARMA/.test(sym) ? CUE_PROFILES.pharma : /METAL/.test(sym) ? CUE_PROFILES.metal : null;
+  if (cf.exch === 'MCX') return /CRUDE/.test(sym) ? CUE_PROFILES.mcxcrude : /GOLD/.test(sym) ? CUE_PROFILES.mcxgold : /SILVER/.test(sym) ? CUE_PROFILES.mcxsilver : /GAS/.test(sym) ? CUE_PROFILES.mcxgas : { only: true, name: cf.label, o: { dxy: [1, -1], usdinr: [1, 1], hsi: [1, 1] }, tip: 'Commodity futures follow world prices and the rupee.' };
+  for (const k in CUE_SYMS) if (CUE_SYMS[k].includes(sym)) return CUE_PROFILES[k];
+  // otherwise the stock's sector from the market maps (NSE index lists carry it)
+  try {
+    const M = Source.maps ? Source.maps() : {}; let sec = '';
+    for (const id in M) { const x = (M[id].items || []).find((i) => i.sym === sym); if (x && x.sector) { sec = x.sector; break; } }
+    if (/information|^it$|software/i.test(sec)) return CUE_PROFILES.it;
+    if (/health|pharma/i.test(sec)) return CUE_PROFILES.pharma;
+    if (/metal|mining/i.test(sec)) return CUE_PROFILES.metal;
+    if (/financ|bank/i.test(sec)) return CUE_PROFILES.bank;
+  } catch (e) { /* no map yet */ }
+  return null;
+}
+function worldReadFor(a) {
+  const N0 = worldRead(a); if (!N0) return null;
+  if (!a || a.key === 'NIFTY') return { ...N0, label: 'Nifty', short: 'Nifty', prof: null };
+  const P = cueProfile(a), label = a.cf.label, short = a.cf.core ? label.replace(/^NIFTY 50$/i, 'Nifty') : (a.cf.sym || label);
+  let sw = 0, sx = 0;
+  const rows = N0.rows.map((x) => {
+    let w = x.cue.w, s = x.cue.s;
+    if (P && P.only) { w = 0; }
+    if (P && P.o[x.id]) [w, s] = P.o[x.id];
+    // for a single stock the GIFT/US mood still matters, a little less than for the index itself
+    if (!a.cf.core && !(P && P.only) && ['gift', 'indicative', 'dowF', 'nasF', 'spxF'].includes(x.id) && !(P && P.o[x.id])) w *= 0.7;
+    const c = x.cue, chg = x.chgUse, mag = ok(chg) ? Math.min(Math.abs(chg) / (2 * c.thr), 1) : 0, dirn = !w || !ok(chg) || Math.abs(chg) < c.thr ? 0 : Math.sign(chg) * s;
+    sw += w; sx += w * dirn * mag;
+    let note = x.note;
+    if (x.id === 'gift' && ok(N0.base) && a.key === 'SENSEX' && a.PC) { const g = (x.price - N0.base) / N0.base; note = `${x.note}; about ${sgn(g)}${f0(g * a.PC)} pts for Sensex`; }
+    if (x.id === 'gift' && ok(N0.base) && a.key === 'BANKNIFTY' && a.PC) { const g = (x.price - N0.base) / N0.base; note = `${x.note}; about ${sgn(g)}${f0(g * a.PC * 1.2)} pts for Bank Nifty (moves ~1.2× Nifty)`; }
+    return { ...x, imp: dirn, w, note, off: !w };
+  });
+  const score = sw ? Math.round((sx / sw) * 100) : 0;
+  const lean = score >= 35 ? 'clearly positive' : score >= 15 ? 'mildly positive' : score <= -35 ? 'clearly negative' : score <= -15 ? 'mildly negative' : 'mixed / flat';
+  return { ...N0, rows, score, lean, label, short, prof: P };
+}

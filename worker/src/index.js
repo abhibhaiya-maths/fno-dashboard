@@ -81,7 +81,7 @@ const NEWS_KW = {
 /* ---------------- छोटे हेल्पर ---------------- */
 const MEM = new Map(); // isolate के अंदर छोटा कैश
 function memGet(k) { const v = MEM.get(k); if (!v) return null; if (v.exp < Date.now()) { MEM.delete(k); return null; } return v.val; }
-function memSet(k, val, ttlMs) { MEM.set(k, { val, exp: Date.now() + ttlMs }); if (MEM.size > 900) MEM.delete(MEM.keys().next().value); }
+function memSet(k, val, ttlMs) { MEM.set(k, { val, exp: Date.now() + ttlMs }); if (MEM.size > 300) MEM.delete(MEM.keys().next().value); }
 
 class HttpError extends Error { constructor(status, msg, code) { super(msg); this.status = status; this.code = code; } }
 
@@ -143,7 +143,6 @@ async function upstoxToken(env) {
   return t;
 }
 async function up(env, path, force) {
-  if (!force) await syncRL(env);
   if (!force && Date.now() < RL.until) { const e = new HttpError(429, RL.msg, 'UPSTOX_RATE'); e.retryAfter = Math.ceil((RL.until - Date.now()) / 1000); throw e; }
   const t = await upstoxToken(env);
   UPC.push(Date.now()); while (UPC.length && UPC[0] < Date.now() - 1800e3) UPC.shift();
@@ -164,7 +163,6 @@ async function up(env, path, force) {
     const wait = ra ? ra * 1000 : Math.min(15 * 60e3, 60e3 * 2 ** RL.n);
     RL.until = Date.now() + wait;
     RL.msg = `Upstox rate limit (${up || 'too many requests'}). Pausing data requests for ${Math.round(wait / 60000) || 1} min.`;
-    try { await env.KV.put('rl_until', String(RL.until), { expirationTtl: 3600 }); } catch (e2) { /* KV write limit */ }
     const e = new HttpError(429, RL.msg, 'UPSTOX_RATE'); e.retryAfter = Math.ceil(wait / 1000); throw e;
   }
   if (!r.ok || j.status === 'error') {
@@ -184,24 +182,11 @@ async function upAny(env, paths) {
   throw last;
 }
 // Short shared cache: phone + laptop + friends asking for the same thing within seconds share one Upstox call
-// If Upstox is rate-limiting us (or we are close to its limit), keep serving the last good copy (marked stale)
-// instead of failing: the dashboard keeps its data and nobody hammers Upstox while it is blocked.
-const staleOf = (v) => (v && typeof v === 'object' && !Array.isArray(v) ? { ...v, stale: true } : v);
-function budgetTight() { const now = Date.now(); let m1 = 0; for (let i = UPC.length - 1; i >= 0 && UPC[i] > now - 60e3; i--) m1++; return m1 > 300 || UPC.length > 1600; }
 async function shared(key, ms, fn) {
   const c = memGet('sh:' + key); if (c) return c;
   const p = MEM.get('shp:' + key); if (p && p.exp > Date.now()) return p.v; // same request already in flight
-  const last = MEM.get('shl:' + key), lastOk = last && last.exp > Date.now();
-  if (lastOk && (Date.now() < RL.until || budgetTight())) return staleOf(last.val);
   const v = fn(); MEM.set('shp:' + key, { v, exp: Date.now() + 10000 });
-  try { const out = await v; memSet('sh:' + key, out, ms); MEM.set('shl:' + key, { val: out, exp: Date.now() + 20 * 60e3 }); return out; }
-  catch (e) { if (e.code === 'UPSTOX_RATE' && lastOk) return staleOf(last.val); throw e; }
-  finally { MEM.delete('shp:' + key); }
-}
-// Every Worker copy (isolate) learns about an Upstox block, not just the one that got the 429
-async function syncRL(env) {
-  if (memGet('rlchk')) return; memSet('rlchk', 1, 20000);
-  try { const v = +(await env.KV.get('rl_until')) || 0; if (v > RL.until) { RL.until = v; RL.msg = 'Upstox rate limit: pausing data requests for a few minutes (shared across all your devices).'; } } catch (e) { /* KV unavailable */ }
+  try { const out = await v; memSet('sh:' + key, out, ms); return out; } finally { MEM.delete('shp:' + key); }
 }
 
 function nextTokenExpiry() {
@@ -276,7 +261,7 @@ function slimSide(o) {
     iv: g.iv ? g.iv / 100 : 0, de: g.delta || 0, ga: g.gamma || 0, th: g.theta || 0, ve: g.vega || 0,
   };
 }
-async function chain(env, ukey) { return shared('chain:' + ukey, 15000, () => chain0(env, ukey)); }
+async function chain(env, ukey) { return shared('chain:' + ukey, 8000, () => chain0(env, ukey)); }
 async function chain0(env, ukey) {
   const c = await contracts(env, ukey);
   if (!c.expiries.length) throw new HttpError(404, 'No option contracts for this instrument', 'NO_OPTIONS');
@@ -315,7 +300,7 @@ async function quotes(env, watch) {
 }
 
 async function snapshot(env, watch, lite) {
-  return shared('snap:' + (lite ? 'L:' : '') + (watch || []).join(','), lite ? 2500 : 6000, () => snapshot0(env, watch, lite));
+  return shared('snap:' + (lite ? 'L:' : '') + (watch || []).join(','), 2500, () => snapshot0(env, watch, lite));
 }
 async function snapshot0(env, watch, lite) {
   // lite = prices only (1 Upstox call) for fast polling; full adds the three option chains (3 more calls)
@@ -358,7 +343,7 @@ async function candles(env, key, sess) {
   let todayDays = [], todayErr = null;
   const lk = 'lastToday:' + key;
   try {
-    const d = await shared('intra:' + key, 30000, () => upAny(env, [
+    const d = await shared('intra:' + key, 20000, () => upAny(env, [
       `/v3/historical-candle/intraday/${enc(key)}/minutes/1`,
       `/v2/historical-candle/intraday/${enc(key)}/1minute`,
     ]));
@@ -504,8 +489,7 @@ async function fetchFeed([src, url]) {
       const ts = Date.parse(g('pubDate')) || Date.now();
       let t = g('title'), s2 = src;
       if (src.startsWith('Google News')) { const m = t.match(/^(.*)\s+-\s+([^-]{2,50})$/); if (m) { t = m[1]; s2 = m[2].trim(); } }
-      const d = g('description').replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
-      return { t, link: g('link'), ts, src: s2, feed: src, d: d && d.toLowerCase().indexOf(t.toLowerCase().slice(0, 40)) < 0 ? d.slice(0, 280) : '' };
+      return { t, link: g('link'), ts, src: s2, feed: src };
     }).filter((i) => i.t);
   } catch { return []; } finally { clearTimeout(t); }
 }
@@ -741,7 +725,7 @@ async function futData(env, ukey, sym, exch, sess) {
   try { const d = await daily(env, f.fkey); const l = d.rows[d.rows.length - 1]; if (l) prev = { date: l[0], close: l[4], oi: l[6] }; } catch (e) { if (e.code === 'UPSTOX_LOGIN') throw e; }
   let rows = [];
   try {
-    const d = await shared('fintra:' + f.fkey, 45000, () => upAny(env, [`/v3/historical-candle/intraday/${enc(f.fkey)}/minutes/1`, `/v2/historical-candle/intraday/${enc(f.fkey)}/1minute`]));
+    const d = await upAny(env, [`/v3/historical-candle/intraday/${enc(f.fkey)}/minutes/1`, `/v2/historical-candle/intraday/${enc(f.fkey)}/1minute`]);
     const g = groupCandles(d && d.candles, sess).filter((x) => x.date === today)[0];
     rows = g ? g.c.map((x) => [x[0], x[4], x[6]]) : [];
   } catch (e) { if (e.code === 'UPSTOX_LOGIN') throw e; }
@@ -1188,7 +1172,7 @@ async function nseWeights(env, idx) {
   }
 }
 async function marketMap(env, idx) {
-  return shared('map:' + idx, 30000, async () => {
+  return shared('map:' + idx, 20000, async () => {
     const M = MAP_IDX[idx]; if (!M) throw new HttpError(400, 'Unknown index');
     const [cons, W] = await Promise.all([constituents(env, idx), nseWeights(env, idx)]);
     const keys = cons.items.map((x) => 'NSE_EQ|' + x.isin), q = {};
@@ -1437,667 +1421,43 @@ async function histRaw(req, env, url) {
   return new Response(r.body, { status: r.ok ? 200 : 502, headers: { 'content-type': 'application/json; charset=utf-8', ...corsHeaders(req, env) } });
 }
 
-/* ================= STOCK PULSE + MARKET BUILDUP (added Nov 2026) =================
-   /api/buildup : long / short buildup, short covering, long unwinding for every F&O stock, from NSE's
-                  official F&O bhavcopy (one free file per day, cached in KV). Same data Stockezee shows.
-   /api/pulse   : one stock, everything in one place: live + last-session futures buildup, trend, levels,
-                  FII mood, news with an authenticity check (official filing? how many trusted outlets?),
-                  results, a rule-based CALL / PUT / WAIT lean and a plain Hindi summary from the AI.
-   Upstox cost per pulse: about 2 calls (one quote, one futures intraday); everything else is cached. */
-
-const RUMOUR_RE = /\b(reportedly|sources? (said|say|close)|people (familiar|aware)|according to sources|as per (media )?reports|reports? (say|said|suggest)|in talks|mulls?|mulling|considering|likely to|may (revise|cut|hike|raise|ease|allow|ban|relax|scrap|delay)|could (revise|cut|ease|relax)|set to|plans? to|speculat|buzz|rumou?r|unconfirmed)\b/i;
-const TRUSTED_PUB = /economic ?times|economictimes|\bET\b|business ?standard|livemint|\bmint\b|moneycontrol|businessline|hindu ?business|cnbc|reuters|bloomberg|financial ?express|ndtv ?profit|business ?today|zee ?business|press trust|\bPTI\b/i;
-const BUILD = { LB: 'Long buildup', SB: 'Short buildup', SC: 'Short covering', LU: 'Long unwinding' };
-const buildOf = (dp, doi) => (!ok(dp) || !ok(doi) || dp === 0 || doi === 0 ? null : dp > 0 ? (doi > 0 ? 'LB' : 'SC') : doi > 0 ? 'SB' : 'LU');
-const r2 = (v) => (ok(v) ? Math.round(v * 100) / 100 : null);
-
-/* ---------- tiny ZIP reader (NSE ships the bhavcopy as a one-file zip) ---------- */
-async function unzipFirst(buf) {
-  const u8 = new Uint8Array(buf), dv = new DataView(buf);
-  if (dv.getUint32(0, true) !== 0x04034b50) return new TextDecoder().decode(u8); // not a zip: plain CSV
-  let e = -1;
-  for (let i = u8.length - 22; i >= Math.max(0, u8.length - 70000); i--) if (dv.getUint32(i, true) === 0x06054b50) { e = i; break; }
-  if (e < 0) throw new Error('bad zip');
-  const cd = dv.getUint32(e + 16, true);
-  if (dv.getUint32(cd, true) !== 0x02014b50) throw new Error('bad zip directory');
-  const method = dv.getUint16(cd + 10, true), csize = dv.getUint32(cd + 20, true), lho = dv.getUint32(cd + 42, true);
-  const start = lho + 30 + dv.getUint16(lho + 26, true) + dv.getUint16(lho + 28, true), data = u8.subarray(start, start + csize);
-  if (method === 0) return new TextDecoder().decode(data);
-  if (method !== 8) throw new Error('zip method ' + method);
-  return new Response(new Blob([data]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).text();
+/* ---------------- Next-Day Brief + ORB: NSE archive files and intraday candles, passed straight through ----------------
+   No parsing here (the browser unzips and reads them), so each call stays far inside the free plan's CPU limit.
+   Only these three NSE files can be asked for; Cloudflare's edge cache keeps a copy so NSE is hit rarely. */
+const NSE_FILES = {
+  fo: (d) => `https://nsearchives.nseindia.com/content/fo/BhavCopy_NSE_FO_0_0_0_${d}_F_0000.csv.zip`,                       // F&O bhavcopy (OI), ~6:30 pm
+  sec: (d) => `https://nsearchives.nseindia.com/products/content/sec_bhavdata_full_${d.slice(6, 8)}${d.slice(4, 6)}${d.slice(0, 4)}.csv`, // prices + delivery %, ~6 pm
+  n500: () => 'https://nsearchives.nseindia.com/content/indices/ind_nifty500list.csv',                                    // sector (industry) of each stock
+};
+async function nseFile(req, env, url) {
+  const f = url.searchParams.get('f') || '', d = url.searchParams.get('d') || '';
+  if (!NSE_FILES[f] || (f !== 'n500' && !/^20\d{6}$/.test(d))) throw new HttpError(400, 'Bad file');
+  const today = ymd(istNow()).replace(/-/g, ''), ttl = f === 'n500' ? 86400 : d < today ? 7 * 86400 : 900;
+  const r = await fetch(NSE_FILES[f](d), { headers: { 'User-Agent': UA_BROWSER, Accept: '*/*', Referer: 'https://www.nseindia.com/' }, cf: { cacheEverything: true, cacheTtlByStatus: { '200-299': ttl, '404': 600, '500-599': 0 } } });
+  const H = { ...corsHeaders(req, env), 'cache-control': 'no-store' };
+  if (r.status === 404 || r.status === 403) return new Response(JSON.stringify({ error: 'Not published yet', code: 'NSE_NOFILE' }), { status: 404, headers: { 'content-type': 'application/json', ...H } });
+  if (!r.ok) return new Response(JSON.stringify({ error: 'NSE archive: HTTP ' + r.status, code: 'NSE_ERR' }), { status: 502, headers: { 'content-type': 'application/json', ...H } });
+  return new Response(r.body, { status: 200, headers: { 'content-type': f === 'fo' ? 'application/zip' : 'text/csv; charset=utf-8', ...H } });
 }
-
-/* ---------- NSE F&O bhavcopy (UDiFF format) -> buildup per symbol ---------- */
-function parseBhav(text, date) {
-  const lines = text.split(/\r?\n/).filter(Boolean);
-  const head = lines[0].split(',').map((h) => h.replace(/"/g, '').trim().toLowerCase());
-  const col = (...names) => { for (const n of names) { const i = head.indexOf(n.toLowerCase()); if (i >= 0) return i; } return -1; };
-  const C = { tp: col('FinInstrmTp'), sym: col('TckrSymb'), exp: col('XpryDt'), cl: col('ClsPric'), pc: col('PrvsClsgPric'), oi: col('OpnIntrst'), doi: col('ChngInOpnIntrst'), vol: col('TtlTradgVol'), val: col('TtlTrfVal'), und: col('UndrlygPric') };
-  if (C.tp < 0 || C.sym < 0 || C.oi < 0 || C.doi < 0 || C.cl < 0) throw new Error('NSE changed the bhavcopy columns');
-  const by = {};
-  for (let i = 1; i < lines.length; i++) {
-    const c = lines[i].split(',').map((x) => x.replace(/"/g, '').trim()), tp = c[C.tp];
-    if (tp !== 'STF' && tp !== 'IDF') continue;
-    const s = c[C.sym], x = by[s] || (by[s] = { sym: s, idx: tp === 'IDF', oi: 0, doi: 0, vol: 0, val: 0, near: null });
-    x.oi += +c[C.oi] || 0; x.doi += +c[C.doi] || 0; x.vol += +c[C.vol] || 0; x.val += +c[C.val] || 0;
-    const exp = c[C.exp];
-    if (!x.near || exp < x.near.exp) x.near = { exp, cl: +c[C.cl], pc: C.pc >= 0 ? +c[C.pc] : null, und: C.und >= 0 ? +c[C.und] : null };
+// today's 1-minute candles for one instrument (ORB scanner: the 9:15–9:30 range)
+async function intraRaw(req, env, url) {
+  const key = keyParam(url, 'key');
+  if (Date.now() < RL.until) { const e = new HttpError(429, RL.msg, 'UPSTOX_RATE'); e.retryAfter = Math.ceil((RL.until - Date.now()) / 1000); throw e; }
+  const t = await upstoxToken(env);
+  UPC.push(Date.now());
+  const r = await fetch(`${UP}/v3/historical-candle/intraday/${enc(key)}/minutes/1`, { headers: { Accept: 'application/json', Authorization: 'Bearer ' + t } });
+  if (r.status === 429) { RL.until = Date.now() + 60e3; RL.msg = 'Upstox rate limit. Pausing 1 min.'; const e = new HttpError(429, RL.msg, 'UPSTOX_RATE'); e.retryAfter = 60; throw e; }
+  if (r.status === 401) throw new HttpError(502, 'Upstox token is invalid or expired.', 'UPSTOX_TOKEN_BAD');
+  return new Response(r.body, { status: r.ok ? 200 : 502, headers: { 'content-type': 'application/json; charset=utf-8', ...corsHeaders(req, env) } });
+}
+// live quotes for F&O contracts by exchange token (the Brief's 3 pm OI read); tokens come from the last bhavcopy
+async function foQuotes(env, toks) {
+  const out = {};
+  for (let i = 0; i < toks.length; i += 250) {
+    const part = toks.slice(i, i + 250), m = quoteMap(await up(env, '/v2/market-quote/quotes?instrument_key=' + part.map((t) => enc('NSE_FO|' + t)).join(',')));
+    part.forEach((t) => { const q = m['NSE_FO|' + t]; if (q && ok(q.price)) out[t] = [q.price, q.oi || 0, q.vol || 0, q.prevClose]; });
   }
-  const rows = Object.values(by).map((x) => {
-    const pc = x.near.pc, dp = ok(pc) && pc > 0 ? ((x.near.cl - pc) / pc) * 100 : null, prevOi = x.oi - x.doi, doiPct = prevOi > 0 ? (x.doi / prevOi) * 100 : null;
-    const b = buildOf(dp, x.doi);
-    // clear = price really moved AND fresh positions really changed (filters "OI up 8% but price +0.2%")
-    const strength = ok(dp) && ok(doiPct) ? Math.abs(doiPct) * Math.min(1, Math.abs(dp) / 1) : 0;
-    return { sym: x.sym, idx: x.idx, b, price: r2(x.near.cl), dp: r2(dp), oi: x.oi, doi: x.doi, doiPct: r2(doiPct), strength: r2(strength), clear: ok(dp) && Math.abs(dp) >= 0.5 && Math.abs(doiPct) >= 2, val: x.val, exp: x.near.exp };
-  }).filter((x) => x.b);
-  return { date, rows };
-}
-async function bhavBuildup(env) {
-  const hit = memGet('bhav:latest'); if (hit) return hit;
-  const n = istNow(), afterPub = n.getUTCHours() * 60 + n.getUTCMinutes() >= 18 * 60 + 30; // NSE posts it in the evening
-  let res = null, tried = [];
-  for (let i = afterPub ? 0 : 1; i < 9 && !res; i++) {
-    const d = new Date(n.getTime() - i * 864e5), wd = d.getUTCDay(); if (wd === 0 || wd === 6) continue;
-    const ds = ymd(d), ck = 'bhav:' + ds;
-    const kv = await env.KV.get(ck, 'json').catch(() => null);
-    if (kv) { res = kv; break; }
-    const url = `https://nsearchives.nseindia.com/content/fo/BhavCopy_NSE_FO_0_0_0_${ds.replace(/-/g, '')}_F_0000.csv.zip`;
-    tried.push(ds);
-    try {
-      const r = await fetch(url, { headers: { 'User-Agent': UA_BROWSER, Accept: '*/*', Referer: 'https://www.nseindia.com/' } });
-      if (!r.ok) continue; // holiday or not published yet
-      res = parseBhav(await unzipFirst(await r.arrayBuffer()), ds);
-      res.ts = Date.now();
-      await env.KV.put(ck, JSON.stringify(res), { expirationTtl: 5 * 86400 }).catch(() => {});
-    } catch (e) { /* try the day before */ }
-  }
-  if (!res) throw new HttpError(502, `NSE F&O bhavcopy not reachable (tried ${tried.join(', ') || 'cache'}). NSE sometimes blocks cloud servers; try again later.`, 'NSE_BHAV');
-  memSet('bhav:latest', res, 30 * 60e3);
-  return res;
-}
-async function buildupLists(env) {
-  return shared('buildup', 10 * 60e3, async () => {
-    const B = await bhavBuildup(env), st = B.rows.filter((x) => !x.idx);
-    const top = (k) => st.filter((x) => x.b === k).sort((p, q) => q.strength - p.strength || Math.abs(q.doiPct) - Math.abs(p.doiPct)).slice(0, 15);
-    const count = (k) => st.filter((x) => x.b === k).length;
-    return { ts: Date.now(), date: B.date, src: 'NSE F&O bhavcopy (all expiries, end of day)',
-      counts: { LB: count('LB'), SB: count('SB'), SC: count('SC'), LU: count('LU') }, lists: { LB: top('LB'), SB: top('SB'), SC: top('SC'), LU: top('LU') },
-      index: B.rows.filter((x) => x.idx && /^(NIFTY|BANKNIFTY|FINNIFTY|MIDCPNIFTY)$/.test(x.sym)) };
-  });
-}
-
-/* ---------- news authenticity ---------- */
-function overlap(a, b) { let n = 0; a.forEach((x) => { if (b.has(x)) n++; }); return n / Math.max(1, Math.min(a.size, b.size)); }
-function nameMatcher(name, sym) {
-  const words = String(name || '').toLowerCase().replace(/[^a-z0-9& ]/g, ' ').split(/\s+/).filter((w) => w.length > 2 && !/^(ltd|limited|the|and|india|company|corporation|industries|bank|fut)$/.test(w));
-  const keys = [String(sym || '').toLowerCase(), words.slice(0, 2).join(' '), words[0] && words[0].length >= 5 ? words[0] : null].filter((x) => x && x.length >= 3);
-  return (t) => { const s = String(t || '').toLowerCase(); return keys.some((k) => s.includes(k)); };
-}
-// News is gathered from everywhere, but it only counts as confirmed when trusted outlets (or an NSE/BSE filing) carry it.
-function checkNews(items, offItems, isMine, resDate) {
-  const off = (offItems || []).filter((o) => isMine(o.co + ' ' + o.t) && o.ts > Date.now() - 7 * 864e5).slice(0, 6);
-  const offW = off.map((o) => normWords(o.t + ' ' + (o.sub || '')));
-  const out = items.slice(0, 12).map((n) => {
-    const pubs = [...new Set([n.src, ...(n.alsoBy || [])].filter(Boolean))], tp = pubs.filter((p) => TRUSTED_PUB.test(p)), trusted = tp.length;
-    const w = normWords(n.t), offHit = offW.some((ow) => overlap(w, ow) >= 0.25) || (RESULT_RE.test(n.t) && off.some((o) => /result/i.test(o.t + ' ' + o.sub)));
-    const rumour = RUMOUR_RE.test(n.t);
-    const resHit = !offHit && resDate && RESULT_RE.test(n.t) && Math.abs(n.ts - Date.parse(resDate)) <= 4 * 864e5; // results day confirmed on NSE's calendar
-    const status = offHit ? 'official' : resHit && !rumour && trusted ? 'results' : rumour ? 'report' : trusted >= 2 || (trusted >= 1 && pubs.length >= 3) ? 'confirmed' : trusted === 1 ? 'single' : 'unverified';
-    const wt = NEWS_W[status] * (status === 'report' && !trusted ? 0.4 : 1);
-    return { t: n.t, d: n.d || '', link: n.link, src: n.src, pubs, trustedPubs: tp, others: pubs.length - trusted, ts: n.ts, s: n.s, imp: n.imp, status, w: r2(wt) };
-  });
-  // most useful first: verified and impactful, then the rest
-  const rank = { official: 0, results: 0, confirmed: 1, single: 2, report: 2, unverified: 3 };
-  out.sort((a, b) => rank[a.status] - rank[b.status] || Math.abs(b.s || 0) - Math.abs(a.s || 0) || b.ts - a.ts);
-  return { items: out.slice(0, 10), official: off.map((o) => ({ t: o.t, co: o.co, src: o.src, ts: o.ts, link: o.link })) };
-}
-const NEWS_W = { official: 1, confirmed: 1, results: 0.9, single: 0.6, report: 0.3, unverified: 0.15 };
-
-/* ---------- one stock ---------- */
-function pctFrom(rows, price, back) { const r = rows[rows.length - back]; return r && r[4] ? ((price - r[4]) / r[4]) * 100 : null; }
-function smaOf(c, n) { if (c.length < n) return null; let s = 0; for (let i = c.length - n; i < c.length; i++) s += c[i]; return s / n; }
-function rsiOf(c, n = 14) {
-  if (c.length <= n) return null; let g = 0, l = 0;
-  for (let i = 1; i <= n; i++) { const d = c[i] - c[i - 1]; if (d > 0) g += d; else l -= d; }
-  g /= n; l /= n;
-  for (let i = n + 1; i < c.length; i++) { const d = c[i] - c[i - 1]; g = (g * (n - 1) + Math.max(d, 0)) / n; l = (l * (n - 1) + Math.max(-d, 0)) / n; }
-  return l === 0 ? 100 : 100 - 100 / (1 + g / l);
-}
-function phaseNow() {
-  const n = istNow(), wd = n.getUTCDay(), m = n.getUTCHours() * 60 + n.getUTCMinutes() - 555;
-  if (wd === 0 || wd === 6) return 'closed';
-  return m < -15 ? 'closed' : m < 0 ? 'pre' : m < 15 ? 'open15' : m < 375 ? 'live' : 'closed';
-}
-async function resolveStock(env, b) {
-  let key = String(b.key || ''), sym = String(b.sym || '').toUpperCase().replace(/[^A-Z0-9&-]/g, '').slice(0, 20), name = String(b.name || '').slice(0, 60);
-  if (!KEY_RE.test(key)) {
-    const U = await universe(env).catch(() => ({ items: [] })), x = (U.items || []).find((i) => i.sym === sym);
-    if (!x) throw new HttpError(404, `Couldn't find ${sym || 'that stock'} in the F&O list. Search by its NSE symbol.`, 'NOT_FOUND');
-    key = x.key; name = name || x.name;
-  }
-  return { key, sym: sym || key.split('|')[1], name: name || sym };
-}
-/* ---------- extra facts a professional desk looks at ---------- */
-// F&O ban list (stocks above 95% of market-wide position limit: no fresh positions allowed)
-async function secBan(env) {
-  return shared('secban', 30 * 60e3, async () => {
-    const ck = 'secban:v1', c = await env.KV.get(ck, 'json').catch(() => null);
-    if (c && c.ts > Date.now() - 3 * 3600e3) return c;
-    try {
-      const r = await fetch('https://nsearchives.nseindia.com/content/fo/fo_secban.csv', { headers: { 'User-Agent': UA_BROWSER, Accept: 'text/csv,*/*' } });
-      if (!r.ok) throw new Error('HTTP ' + r.status);
-      const t = await r.text(), m = t.match(/(\d{2}-[A-Z]{3}-\d{4})/i), syms = [];
-      t.split(/\r?\n/).forEach((l) => { const x = l.split(',').map((s) => s.trim()); if (x.length >= 2 && /^\d+$/.test(x[0]) && /^[A-Z0-9&-]+$/.test(x[1])) syms.push(x[1]); });
-      const res = { ts: Date.now(), date: m ? m[1] : null, syms };
-      await env.KV.put(ck, JSON.stringify(res), { expirationTtl: 86400 }).catch(() => {});
-      return res;
-    } catch (e) { return c || { ts: Date.now(), date: null, syms: [], err: e.message }; }
-  });
-}
-// one session from 1-minute candles: VWAP, where it closed in the day's range, last-hour move
-function sessionRead(day) {
-  if (!day || !day.c || day.c.length < 30) return null;
-  const c = day.c; let pv = 0, v = 0, hi = -Infinity, lo = Infinity;
-  for (const k of c) { const tp = (k[2] + k[3] + k[4]) / 3; pv += tp * (k[5] || 0); v += k[5] || 0; if (k[2] > hi) hi = k[2]; if (k[3] < lo) lo = k[3]; }
-  const close = c[c.length - 1][4], open = c[0][1], lastM = c[c.length - 1][0];
-  const vwap = v > 0 ? pv / v : null, clv = hi > lo ? (close - lo) / (hi - lo) : null;
-  let lastHour = null, lastHourVol = null;
-  if (lastM >= 355) {                       // a full or nearly full session (14:30 = minute 315)
-    const before = c.filter((k) => k[0] < 315), after = c.filter((k) => k[0] >= 315);
-    if (before.length && after.length >= 20) {
-      const ref = before[before.length - 1][4]; lastHour = ref ? ((close - ref) / ref) * 100 : null;
-      const va = after.reduce((s, k) => s + (k[5] || 0), 0); lastHourVol = v > 0 ? (va / v) * 100 : null; // normal share is about 17%
-    }
-  }
-  return { date: day.date, open: r2(open), hi: r2(hi), lo: r2(lo), close: r2(close), vwap: r2(vwap), clv: r2(clv), lastHour: r2(lastHour), lastHourVol: r2(lastHourVol), complete: lastM >= 355 };
-}
-// option walls: where call writers and put writers sit, and who added more today
-function optionRead(ch, price) {
-  if (!ch || !ch.rows || !ch.rows.length || !ok(price)) return null;
-  const near = ch.rows.filter((r) => Math.abs(r.K - price) / price <= 0.1);
-  if (near.length < 4) return null;
-  let ce = 0, pe = 0, ceAdd = 0, peAdd = 0, cw = null, pw = null;
-  for (const r of near) {
-    ce += r.ce.oi; pe += r.pe.oi;
-    if (Math.abs(r.K - price) / price <= 0.05) { ceAdd += r.ce.oi - (r.ce.poi || r.ce.oi); peAdd += r.pe.oi - (r.pe.poi || r.pe.oi); }
-    if (r.K >= price && (!cw || r.ce.oi > cw.oi)) cw = { K: r.K, oi: r.ce.oi };
-    if (r.K <= price && (!pw || r.pe.oi > pw.oi)) pw = { K: r.K, oi: r.pe.oi };
-  }
-  if (!ce || !pe) return null;
-  return { expiry: ch.expiry, pcr: r2(pe / ce), callWall: cw && cw.oi ? cw.K : null, putWall: pw && pw.oi ? pw.K : null, ceAdd, peAdd };
-}
-const withTimeout = (p, ms, fb) => Promise.race([p, new Promise((res) => setTimeout(() => res(fb), ms))]);
-
-function pxFacts(rows, q, today) {
-  const closes = rows.map((r) => r[4]);
-  const last = rows[rows.length - 1] || null, qms = q && q.ts ? (+q.ts || Date.parse(q.ts)) : NaN, qDate = ok(qms) ? ymd(new Date(qms + 5.5 * 3600e3)) : null;
-  const liveDay = !!(q && qDate && last && qDate > last[0]);  // the quote is from a session newer than the last daily candle
-  const price = q && ok(q.price) ? q.price : last ? last[4] : null;
-  const base = liveDay ? rows : rows.slice(0, -1);              // completed sessions before the one the price belongs to
-  const ref = (n) => { const r = base[base.length - n]; return r && r[4] ? ((price - r[4]) / r[4]) * 100 : null; };
-  const lv = liveDay ? last : rows[rows.length - 2] || null;    // session the levels come from (yesterday when live)
-  const piv = lv ? (lv[2] + lv[3] + lv[4]) / 3 : null;
-  const cl = liveDay ? [...closes, price] : closes, yr = rows.slice(-250);
-  const vol20 = rows.slice(-21, -1).reduce((s, r) => s + (r[5] || 0), 0) / 20, volNow = liveDay ? q && q.vol : last && last[5];
-  const pc = q && ok(q.prevClose) ? q.prevClose : base.length ? base[base.length - 1][4] : null;
-  const px = { price: r2(price), chg: r2(pc ? ((price - pc) / pc) * 100 : null), prevClose: r2(pc), open: liveDay && q ? r2(q.open) : null, hi: liveDay && q ? r2(q.hi) : null, lo: liveDay && q ? r2(q.lo) : null,
-    session: liveDay ? today : last && last[0], r1w: r2(ref(5)), r1m: r2(ref(21)), r3m: r2(ref(63)), r1y: r2(ref(250)),
-    dma20: r2(smaOf(cl, 20)), dma50: r2(smaOf(cl, 50)), dma200: r2(smaOf(cl, 200)), rsi: r2(rsiOf(cl.slice(-120))),
-    hi52: yr.length ? r2(Math.max(...yr.map((r) => r[2]))) : null, lo52: yr.length ? r2(Math.min(...yr.map((r) => r[3]))) : null,
-    volX: vol20 && volNow ? r2(volNow / vol20) : null };
-  px.gap = liveDay && ok(px.open) && pc ? r2(((px.open - pc) / pc) * 100) : null;
-  const lev = lv ? { from: lv[0], pdh: r2(lv[2]), pdl: r2(lv[3]), pdc: r2(lv[4]), p: r2(piv), r1: r2(2 * piv - lv[3]), s1: r2(2 * piv - lv[2]) } : null;
-
-  if (!liveDay && last && last[2] > last[3]) px.clvDaily = r2((last[4] - last[3]) / (last[2] - last[3]));
-  return { liveDay, px, lev, last };
-}
-async function pulseFacts(env, S) {
-  const { key, sym, name } = S, phase = phaseNow(), today = ymd(istNow());
-  const [qm, D, F, B, P, N, O, RS, CD, CH, BAN, CAL, BRK, EARN] = await Promise.all([
-    shared('pq:' + key, 15000, () => up(env, '/v2/market-quote/quotes?instrument_key=' + enc(key))).then(quoteMap).catch(() => ({})),
-    daily(env, key).catch(() => ({ rows: [] })),
-    futFor(env, key, sym, 'NSE').catch(() => null),
-    bhavBuildup(env).catch(() => null),
-    participantOI(env).catch(() => null),
-    pulseNews(env, sym, name).catch(() => ({ items: [] })),
-    official(env).catch(() => ({ items: [] })),
-    results(env).catch(() => ({ items: [] })),
-    candles(env, key, 'NSE').catch(() => null),
-    chain(env, key).catch(() => null),
-    secBan(env).catch(() => null),
-    withTimeout(resultsCalendar(env).catch(() => null), 5000, null),
-    withTimeout(brokerCalls(env).catch(() => null), 5000, null),
-    (async () => memGet('earnings:v1') || (await env.KV.get('earnings:v1', 'json').catch(() => null)))(),
-  ]);
-  const q = qm[key] || null, rows = D.rows || [], last = rows[rows.length - 1] || null;
-  const { liveDay, px, lev } = pxFacts(rows, q, today), price = px.price;
-
-  // the session the price belongs to, read from 1-minute candles (today when live, else the last session)
-  const days = (CD && CD.days) || [], sessDate = liveDay ? today : last && last[0];
-  const sess = sessionRead(days.find((d) => d.date === sessDate)) || null;
-  if (liveDay && sess) sess.clv = null; // "where it closed" only means something once the day is over
-
-  // futures: live (today vs yesterday) and last completed session (yesterday vs day before), plus NSE's own all-expiry figure
-  const fut = { live: null, last: null, nse: null, expiry: F && F.expiry, lot: F && F.lot };
-  if (F && F.fkey) {
-    const fd = await daily(env, F.fkey).catch(() => ({ rows: [] })), fr = fd.rows || [];
-    const L = fr[fr.length - 1], P2 = fr[fr.length - 2];
-    if (L && P2) { const dp = ((L[4] - P2[4]) / P2[4]) * 100, doi = L[6] - P2[6]; fut.last = { date: L[0], b: buildOf(dp, doi), dp: r2(dp), doiPct: r2(P2[6] ? (doi / P2[6]) * 100 : null), oi: L[6] }; }
-    if (phase === 'live' || phase === 'open15') {
-      try {
-        const d = await shared('fintra:' + F.fkey, 45000, () => upAny(env, [`/v3/historical-candle/intraday/${enc(F.fkey)}/minutes/1`, `/v2/historical-candle/intraday/${enc(F.fkey)}/1minute`]));
-        const g = groupCandles(d && d.candles, 'NSE').filter((x) => x.date === today)[0];
-        if (g && g.c.length && L) {
-          const z = g.c[g.c.length - 1], dp = ((z[4] - L[4]) / L[4]) * 100, doi = (z[6] || 0) - L[6];
-          if (z[6]) fut.live = { at: z[0], b: buildOf(dp, doi), dp: r2(dp), doiPct: r2(L[6] ? (doi / L[6]) * 100 : null), oi: z[6], px: z[4] };
-        }
-      } catch (e) { if (e.code === 'UPSTOX_LOGIN') throw e; }
-    }
-  }
-  if (B) { const x = B.rows.find((r) => r.sym === sym); if (x) fut.nse = { date: B.date, b: x.b, dp: x.dp, doiPct: x.doiPct, oi: x.oi, clear: x.clear }; }
-
-  // FII positioning in index futures (market-wide mood)
-  let fii = null;
-  if (P && P.latest && P.latest.p && P.latest.p.FII) {
-    const f = P.latest.p.FII, pv = P.prev && P.prev.p && P.prev.p.FII, lp = (f.futL / (f.futL + f.futS || 1)) * 100;
-    fii = { date: P.latest.date, longPct: r2(lp), net: f.futL - f.futS, netChg: pv ? f.futL - f.futS - (pv.futL - pv.futS) : null };
-  }
-
-  // results: date (NSE calendar), how the stock reacted since, the numbers (profit / revenue YoY from headlines), or an upcoming date
-  const isMine = nameMatcher(name, sym);
-  let resEv = null;
-  const cal = ((CAL && CAL.items) || []).filter((x) => x.sym === sym && x.date).sort((a, b) => (a.date < b.date ? -1 : 1));
-  const past = cal.filter((x) => x.date <= today && x.date >= ymd(addDays(istNow(), -15))).pop(), next = cal.find((x) => x.date > today && x.date <= ymd(addDays(istNow(), 10)));
-  if (past) {
-    const i = rows.findIndex((r) => r[0] >= past.date), baseC = i > 0 ? rows[i - 1][4] : null;
-    const sessions = i >= 0 ? rows.length - i + (liveDay ? 1 : 0) : liveDay ? 1 : 0;
-    resEv = { kind: 'past', date: past.date, src: past.src, sinceBase: r2(baseC), react: baseC && ok(price) ? r2(((price - baseC) / baseC) * 100) : null, sessions };
-  } else if (next) resEv = { kind: 'next', date: next.date, src: next.src, inDays: Math.round((Date.parse(next.date) - Date.parse(today)) / 864e5) };
-  const er = ((EARN && EARN.items) || []).find((x) => x.sym === sym && x.ts > Date.now() - 21 * 864e5);
-  if (er) (resEv = resEv || { kind: 'news' }).nums = { q: er.q, pat: er.pat, rev: er.rev, s: er.s, t: er.t, src: er.src, link: er.link };
-
-  const news = checkNews(N.items || [], O.items || [], isMine, resEv && resEv.kind === 'past' && resEv.src === 'NSE' ? resEv.date : null);
-  const res = (RS.items || []).filter((x) => isMine(x.t + ' ' + (x.co || ''))).slice(0, 3).map((x) => ({ t: x.t, q: x.q, s: x.s, src: x.src, ts: x.ts, link: x.link }));
-  const brk = BRK ? [...(BRK.up || []), ...(BRK.down || [])].filter((x) => isMine(x.t) && x.ts > Date.now() - 7 * 864e5).slice(0, 4).map((x) => ({ t: x.t, kind: x.kind, src: x.src, ts: x.ts, link: x.link })) : [];
-  const opt = optionRead(CH, price);
-  const ban = BAN && (BAN.syms || []).includes(sym) ? { date: BAN.date } : null;
-  return { v: 2, ts: Date.now(), sym, name, key, phase, liveDay, px, lev, sess, fut, fii, news, results: res, resEv, brokers: brk, opt, ban };
-}
-
-// Rule-based lean, the way a careful desk trader reads a stock: positioning first (futures OI), then how the day
-// closed and who traded the last hour, then trend, results reaction, news quality, market. Every point is shown.
-const LABEL = { 'STRONG CALL': 'Strong CALL side', 'LEANS CALL': 'Leans CALL side', WAIT: 'No clear side: WAIT', 'LEANS PUT': 'Leans PUT side', 'STRONG PUT': 'Strong PUT side' };
-function pulseLean(f, mkt) {
-  const why = [], add = (pts, txt, tag) => { if (pts) why.push({ pts: r2(pts), txt, tag }); };
-  const sgn = (x) => (x > 0 ? '+' : '') + x;
-  const fb = f.fut.live || f.fut.nse || f.fut.last, src = f.fut.live ? 'today, live' : f.fut.nse ? `last session, NSE ${f.fut.nse.date}` : f.fut.last ? `last session ${f.fut.last.date}` : '';
-  let futStrength = 0; // 1 = clear confirmation, 0.5 = weak, 0 = none
-  if (fb && fb.b) {
-    const clear = Math.abs(fb.doiPct || 0) >= 2 && Math.abs(fb.dp || 0) >= 0.5;
-    futStrength = clear ? 1 : 0.5;
-    add({ LB: 2, SB: -2, SC: 1, LU: -1 }[fb.b] * futStrength, `Futures ${BUILD[fb.b].toLowerCase()} (${src}: price ${sgn(fb.dp)}%, OI ${sgn(fb.doiPct)}%)${clear ? '' : ', weak'}`, 'fut');
-  }
-  const p = f.px, s = f.sess;
-  // how the day closed and who traded the last hour (finished sessions only)
-  const clv = s && ok(s.clv) ? s.clv : p.clvDaily;
-  if (!f.liveDay && ok(clv) && ok(p.chg)) {
-    if (clv >= 0.8 && p.chg > 0) add(0.5, `Closed near the day's high (top ${Math.round((1 - clv) * 100) || 1}% of the range)`, 'day');
-    else if (clv <= 0.2 && p.chg < 0) add(-0.5, `Closed near the day's low (bottom ${Math.round(clv * 100) || 1}% of the range)`, 'day');
-    else if (clv <= 0.3 && p.chg > 0.5) add(-0.5, 'Up on the day but closed in the lower part of the range: selling into the rise', 'day');
-    else if (clv >= 0.7 && p.chg < -0.5) add(0.5, 'Down on the day but closed in the upper part of the range: buying on the dip', 'day');
-  }
-  if (s && s.complete && ok(s.lastHour) && Math.abs(s.lastHour) >= 0.4) {
-    const heavy = ok(s.lastHourVol) && s.lastHourVol >= 22;
-    add((s.lastHour > 0 ? 0.5 : -0.5) * (heavy ? 1 : 0.6), `${s.lastHour > 0 ? 'Buying' : 'Selling'} in the last hour (${sgn(s.lastHour)}% after 2:30${heavy ? `, ${Math.round(s.lastHourVol)}% of the day's volume` : ''})`, 'day');
-  }
-  if (s && ok(s.vwap) && ok(p.price)) {
-    const d = ((p.price - s.vwap) / s.vwap) * 100;
-    if (Math.abs(d) >= 0.2) add(d > 0 ? 0.5 : -0.5, `${f.liveDay ? 'Trading' : 'Closed'} ${d > 0 ? 'above' : 'below'} the day's VWAP ${s.vwap} (average price paid)`, 'day');
-  }
-  // trend
-  if (ok(p.dma20) && ok(p.dma50)) {
-    if (p.price > p.dma20 && p.dma20 > p.dma50) add(1, 'Price above the 20-day and 50-day averages (uptrend)', 'trend');
-    else if (p.price < p.dma20 && p.dma20 < p.dma50) add(-1, 'Price below the 20-day and 50-day averages (downtrend)', 'trend');
-    else if (p.price > p.dma20 && p.price > p.dma50) add(0.5, 'Price back above the 20-day and 50-day averages', 'trend');
-    else if (p.price < p.dma20 && p.price < p.dma50) add(-0.5, 'Price below the 20-day and 50-day averages', 'trend');
-  }
-  if (ok(p.r1w) && Math.abs(p.r1w) >= 5) add(p.r1w > 0 ? 0.5 : -0.5, `${p.r1w > 0 ? 'Up' : 'Down'} ${Math.abs(p.r1w).toFixed(1)}% in a week`, 'trend');
-  if (ok(p.rsi) && p.rsi >= 72) add(-0.5, `RSI ${p.rsi.toFixed(0)}: stretched, pullback risk`, 'trend');
-  if (ok(p.rsi) && p.rsi <= 28) add(0.5, `RSI ${p.rsi.toFixed(0)}: oversold, bounce risk`, 'trend');
-  if (ok(p.volX) && p.volX >= 1.5 && ok(p.chg) && Math.abs(p.chg) >= 1) add(p.chg > 0 ? 0.5 : -0.5, `Volume ${p.volX.toFixed(1)}× normal on a ${p.chg > 0 ? 'rise' : 'fall'}`, 'day');
-  if (f.liveDay && f.lev && ok(p.price)) {
-    if (p.price > f.lev.pdh) add(0.75, `Trading above yesterday's high ${f.lev.pdh}`, 'day');
-    else if (p.price < f.lev.pdl) add(-0.75, `Trading below yesterday's low ${f.lev.pdl}`, 'day');
-  }
-  // relative strength against Nifty (same session)
-  if (mkt && ok(mkt.niftyChg) && ok(p.chg)) {
-    const rs = p.chg - mkt.niftyChg;
-    if (Math.abs(rs) >= 1.5 && Math.sign(p.chg) !== -Math.sign(rs)) add(rs > 0 ? 0.5 : -0.5, `${rs > 0 ? 'Stronger' : 'Weaker'} than Nifty by ${Math.abs(rs).toFixed(1)}%`, 'mkt');
-  }
-  // results: the market's reaction is the verdict
-  const R = f.resEv;
-  if (R && R.kind === 'past' && ok(R.react) && R.sessions >= 1 && R.sessions <= 6 && Math.abs(R.react) >= 2) add(R.react > 0 ? 1 : -1, `Market ${R.react > 0 ? 'liked' : 'disliked'} the results (${R.date}): ${sgn(R.react)}% since`, 'res');
-  // news, weighted by how verified it is (results headlines are counted in the reaction above, so skipped here)
-  const it = f.news.items.filter((n) => ok(n.s) && Math.abs(n.s) >= 0.15 && Date.now() - n.ts < 4 * 864e5 && !(R && R.kind === 'past' && n.status === 'results'));
-  const verified = f.news.items.filter((n) => ['official', 'confirmed', 'results'].includes(n.status)).length;
-  if (it.length) {
-    const wOf = (n) => (ok(n.w) ? n.w : NEWS_W[n.status] || 0.15), w = it.reduce((t, n) => t + wOf(n), 0), avg = it.reduce((t, n) => t + n.s * wOf(n), 0) / (w || 1);
-    const v = it.filter((n) => ['official', 'confirmed', 'results'].includes(n.status)).length;
-    if (Math.abs(avg) >= 0.2) add(Math.max(-1.5, Math.min(1.5, avg * 2)) * Math.min(1, w / 1.5), `News leans ${avg > 0 ? 'positive' : 'negative'} (${it.length} headline${it.length > 1 ? 's' : ''}, ${v ? v + ' confirmed' : 'none confirmed'})`, 'news');
-  }
-  (f.brokers || []).slice(0, 2).forEach((b) => add(b.kind === 'up' ? 0.5 : -0.5, `Broker ${b.kind === 'up' ? 'upgrade / target raised' : 'downgrade / target cut'} (${b.src})`, 'news'));
-  // options positioning
-  const o = f.opt;
-  if (o && (Math.abs(o.ceAdd) + Math.abs(o.peAdd)) > 0) {
-    if (o.peAdd > 0 && o.peAdd > 1.5 * Math.max(0, o.ceAdd)) add(0.5, `Put writers adding more than call writers near the price (support building, PCR ${o.pcr})`, 'opt');
-    else if (o.ceAdd > 0 && o.ceAdd > 1.5 * Math.max(0, o.peAdd)) add(-0.5, `Call writers adding more than put writers near the price (supply building, PCR ${o.pcr})`, 'opt');
-  }
-  // market
-  if (mkt && ok(mkt.niftyChg) && Math.abs(mkt.niftyChg) >= 0.5) add(mkt.niftyChg > 0 ? 0.5 : -0.5, `Nifty ${mkt.niftyChg > 0 ? 'up' : 'down'} ${Math.abs(mkt.niftyChg).toFixed(2)}%`, 'mkt');
-  if (f.fii && ok(f.fii.netChg) && Math.abs(f.fii.netChg) >= 10000) add(f.fii.netChg > 0 ? 0.5 : -0.5, `FIIs ${f.fii.netChg > 0 ? 'cut shorts / added longs' : 'added shorts'} in index futures (${f.fii.longPct.toFixed(0)}% long)`, 'mkt');
-
-  const score = why.reduce((t, x) => t + x.pts, 0), pos = why.filter((x) => x.pts > 0).length, neg = why.filter((x) => x.pts < 0).length;
-  const side = score >= 1.5 ? 'CALL' : score <= -1.5 ? 'PUT' : 'WAIT';
-  let strong = Math.abs(score) >= 3.5;
-  const capped = [];
-  // a professional never calls it "strong" without positioning behind the price, or with an event or ban ahead
-  const futAgrees = fb && fb.b && futStrength === 1 && (side === 'CALL' ? ['LB', 'SC'] : ['SB', 'LU']).includes(fb.b);
-  if (strong && !futAgrees) { strong = false; capped.push('futures positioning does not clearly confirm the move'); }
-  const warn = [];
-  if (f.ban) { warn.push(`In the F&O ban list${f.ban.date ? ' (' + f.ban.date + ')' : ''}: no fresh positions allowed, only closing existing ones`); strong = false; }
-  if (R && R.kind === 'next' && R.inDays <= 3) { warn.push(`Results due ${R.date} (${R.inDays <= 0 ? 'today' : `in ${R.inDays} day${R.inDays > 1 ? 's' : ''}`}): option premiums usually drop sharply after results, and the stock can gap either way`); if (strong) { strong = false; capped.push('results are due'); } }
-  const lean = side === 'WAIT' ? 'WAIT' : (strong ? 'STRONG ' : 'LEANS ') + side;
-  let conf = strong ? 'high' : side !== 'WAIT' && Math.abs(score) >= 2.5 ? 'medium' : 'low';
-  if (side !== 'WAIT' && (side === 'CALL' ? neg : pos) >= 3) { conf = conf === 'high' ? 'medium' : 'low'; warn.push('Signals are mixed: several point the other way'); }
-  const rum = f.news.items.find((n) => n.status === 'report' && Math.abs(n.s || 0) >= 0.3 && Date.now() - n.ts < 3 * 864e5);
-  if (rum) { warn.push(`Big headline is an unconfirmed report: "${rum.t.slice(0, 90)}"`); if (conf === 'high') conf = 'medium'; }
-  if (fb && fb.b === 'SC' && side === 'CALL') warn.push('The rise is partly short covering (sellers exiting, not fresh buyers): such moves fade more often unless fresh longs join');
-  if (fb && fb.b === 'LU' && side === 'PUT') warn.push('The fall is partly long unwinding (buyers exiting, not fresh sellers): it can stop once they are out');
-  if (o && ok(p.price)) {
-    if (side === 'CALL' && o.callWall && (o.callWall - p.price) / p.price <= 0.012) warn.push(`Heavy call writing at ${o.callWall}, just above the price: expect resistance there`);
-    if (side === 'PUT' && o.putWall && (p.price - o.putWall) / p.price <= 0.012) warn.push(`Heavy put writing at ${o.putWall}, just below the price: expect support there`);
-  }
-  if (capped.length) warn.push(`Not marked strong: ${capped.join(', ')}`);
-  if (f.phase === 'open15') warn.push('First 15 minutes: opening moves often reverse. Recheck at 9:30');
-  if (f.phase === 'closed' || f.phase === 'pre') warn.push('Market closed: this reads the last session. It refreshes at 9:15 and 9:30');
-  if (ok(p.gap) && Math.abs(p.gap) >= 1) warn.push(`Opened with a ${p.gap > 0 ? 'gap up' : 'gap down'} of ${Math.abs(p.gap).toFixed(1)}%: gaps often fill partly in the first hour`);
-  return { lean, side, label: LABEL[lean], conf, score: r2(score), verified, why: why.sort((a, b) => Math.abs(b.pts) - Math.abs(a.pts)), warn, plan: tradePlan(f, side) };
-}
-// the levels a desk would write on the order ticket: trigger, where the view is wrong, first target
-function tradePlan(f, side) {
-  const p = f.px.price, L = f.lev, s = f.sess, o = f.opt; if (!ok(p) || !L) return null;
-  const hiRef = f.liveDay ? Math.max(L.pdh, f.px.hi || 0) : L.pdh, loRef = f.liveDay ? Math.min(L.pdl, f.px.lo || Infinity) : L.pdl;
-  const above = (arr) => arr.filter((x) => ok(x) && x > p * 1.001).sort((a, b) => a - b)[0] || null;
-  const below = (arr) => arr.filter((x) => ok(x) && x < p * 0.999).sort((a, b) => b - a)[0] || null;
-  const vw = s && s.vwap;
-  if (side === 'CALL') {
-    const trigger = above([hiRef, L.r1]) || r2(p), stop = below([vw, L.p, L.s1, loRef]), target = above([o && o.callWall, L.r1, f.px.hi52].filter((x) => x > trigger * 1.002));
-    return { side, trigger: r2(trigger), stop: r2(stop), target: r2(target) };
-  }
-  if (side === 'PUT') {
-    const trigger = below([loRef, L.s1]) || r2(p), stop = above([vw, L.p, L.r1, hiRef]), target = below([o && o.putWall, L.s1, f.px.lo52].filter((x) => x < trigger * 0.998));
-    return { side, trigger: r2(trigger), stop: r2(stop), target: r2(target) };
-  }
-  return { side, up: r2(above([hiRef, L.r1])), dn: r2(below([loRef, L.s1])) };
-}
-
-// plain-words summary built from the same numbers (used when the AI is off, slow, or says something the data does not support)
-function ruleSummary(f, L) {
-  const hi = [], en = [], fb = f.fut.live || f.fut.nse || f.fut.last, n0 = (x) => (ok(x) ? Math.round(x).toLocaleString('en-IN') : '–');
-  const BHI = { LB: 'खरीदार नई पोज़िशन बना रहे हैं (लॉन्ग बिल्डअप)', SB: 'बेचने वाले नई पोज़िशन बना रहे हैं (शॉर्ट बिल्डअप)', SC: 'बेचने वाले अपनी पोज़िशन काट रहे हैं (शॉर्ट कवरिंग)', LU: 'खरीदार अपनी पोज़िशन काट रहे हैं (लॉन्ग अनवाइंडिंग)' };
-  const BEN = { LB: 'buyers are building fresh positions (long buildup)', SB: 'sellers are building fresh positions (short buildup)', SC: 'sellers are cutting positions (short covering)', LU: 'buyers are cutting positions (long unwinding)' };
-  const closed = f.phase === 'closed' || f.phase === 'pre';
-  if (closed) { hi.push(`ये पिछले सत्र (${f.px.session}) का डेटा है, सुबह 9:30 के बाद दोबारा देखें।`); en.push(`This is last-session data (${f.px.session}); recheck after 9:30.`); }
-  if (fb && fb.b) { const weak = !(Math.abs(fb.doiPct || 0) >= 2 && Math.abs(fb.dp || 0) >= 0.5); hi.push(`फ्यूचर्स में ${BHI[fb.b]}${weak ? ', पर ये संकेत कमज़ोर है' : ''}: भाव ${fb.dp > 0 ? '+' : ''}${fb.dp}%, OI ${fb.doiPct > 0 ? '+' : ''}${fb.doiPct}%।`); en.push(`In futures, ${BEN[fb.b]}${weak ? ', but the signal is weak' : ''}: price ${fb.dp > 0 ? '+' : ''}${fb.dp}%, OI ${fb.doiPct > 0 ? '+' : ''}${fb.doiPct}%.`); }
-  const day = L.why.find((w) => w.tag === 'day');
-  if (day) { hi.push(day.pts > 0 ? 'दिन का अंत मज़बूत रहा: भाव ऊपरी हिस्से में या VWAP के ऊपर।' : 'दिन का अंत कमज़ोर रहा: भाव निचले हिस्से में या VWAP के नीचे।'); en.push(day.pts > 0 ? 'The day ended strong: price in the upper part of the range or above VWAP.' : 'The day ended weak: price in the lower part of the range or below VWAP.'); }
-  const R = f.resEv;
-  if (R && R.kind === 'past' && ok(R.react)) { hi.push(`नतीजे ${R.date} को आए${R.src === 'NSE' ? ' (तारीख़ NSE से पक्की)' : ''}; तब से भाव ${R.react > 0 ? '+' : ''}${R.react}%${R.nums && ok(R.nums.pat) ? `, मुनाफ़ा सालाना ${R.nums.pat > 0 ? '+' : ''}${R.nums.pat}% (ख़बरों के मुताबिक़)` : ''}।`); en.push(`Results came on ${R.date}${R.src === 'NSE' ? ' (date confirmed on NSE)' : ''}; price ${R.react > 0 ? '+' : ''}${R.react}% since${R.nums && ok(R.nums.pat) ? `, profit ${R.nums.pat > 0 ? '+' : ''}${R.nums.pat}% YoY (as reported)` : ''}.`); }
-  if (R && R.kind === 'next') { hi.push(`नतीजे ${R.date} को आने हैं: उससे पहले ऑप्शन महँगे रहते हैं और नतीजों के बाद प्रीमियम तेज़ी से गिरता है।`); en.push(`Results are due ${R.date}: option premiums stay high before and drop fast after.`); }
-  const news = f.news.items.slice(0, 6);
-  if (news.length) { const v = L.verified; hi.push(v ? `ख़बरों में से ${v} की पुष्टि हुई है (NSE/BSE या कई भरोसेमंद अख़बार)।` : 'ख़बरों में से किसी की पुष्टि नहीं हुई है: ये एक-एक स्रोत की ख़बरें या रिपोर्ट हैं।'); en.push(v ? `${v} of the headlines are confirmed (NSE/BSE or several trusted outlets).` : 'None of the headlines is confirmed yet: single-source stories or reports.'); }
-  const t = L.why.find((w) => w.tag === 'trend');
-  if (t) { hi.push(t.pts > 0 ? 'लंबा रुझान ऊपर की तरफ़ है।' : 'लंबा रुझान नीचे की तरफ़ है।'); en.push(t.pts > 0 ? 'The bigger trend points up.' : 'The bigger trend points down.'); }
-  const P = L.plan;
-  if (P && P.side === 'CALL') { hi.push(`ऊपर ${n0(P.trigger)} पार हो तो तेज़ी पक्की होती है${P.target ? `, अगला पड़ाव ${n0(P.target)}` : ''}; ${P.stop ? `${n0(P.stop)} के नीचे आए तो ये सोच ग़लत।` : ''}`); en.push(`Above ${n0(P.trigger)} the rise is confirmed${P.target ? `, next stop ${n0(P.target)}` : ''}; ${P.stop ? `below ${n0(P.stop)} the view is wrong.` : ''}`); }
-  else if (P && P.side === 'PUT') { hi.push(`नीचे ${n0(P.trigger)} टूटे तो कमज़ोरी पक्की होती है${P.target ? `, अगला पड़ाव ${n0(P.target)}` : ''}; ${P.stop ? `${n0(P.stop)} के ऊपर गया तो ये सोच ग़लत।` : ''}`); en.push(`Below ${n0(P.trigger)} the fall is confirmed${P.target ? `, next stop ${n0(P.target)}` : ''}; ${P.stop ? `above ${n0(P.stop)} the view is wrong.` : ''}`); }
-  else if (P) { hi.push(`साफ़ दिशा नहीं: ${P.up ? n0(P.up) + ' के ऊपर तेज़ी' : ''}${P.up && P.dn ? ', ' : ''}${P.dn ? n0(P.dn) + ' के नीचे कमज़ोरी' : ''} का संकेत होगा।`); en.push(`No clear side: ${P.up ? 'above ' + n0(P.up) + ' turns it up' : ''}${P.up && P.dn ? ', ' : ''}${P.dn ? 'below ' + n0(P.dn) + ' turns it down' : ''}.`); }
-  if (L.warn[0] && !/Market closed/.test(L.warn[0])) { hi.push('सबसे बड़ा जोखिम: ' + warnHi(L.warn[0])); en.push('Biggest risk: ' + L.warn[0] + '.'); }
-  const HL = { 'STRONG CALL': 'डेटा मज़बूती से कॉल की तरफ़ है', 'LEANS CALL': 'डेटा कॉल की तरफ़ झुका है, पर पक्का नहीं', WAIT: 'अभी कोई साफ़ दिशा नहीं है', 'LEANS PUT': 'डेटा पुट की तरफ़ झुका है, पर पक्का नहीं', 'STRONG PUT': 'डेटा मज़बूती से पुट की तरफ़ है' };
-  hi.push(`कुल मिलाकर: ${HL[L.lean]}। फ़ैसला आपका है।`); en.push(`Overall: ${L.label}. The decision is yours.`);
-  return { hi: hi.join('\n'), en: en.join('\n'), by: 'rules' };
-}
-function warnHi(w) {
-  if (/short covering/i.test(w)) return 'ये तेज़ी कुछ हद तक शॉर्ट कवरिंग से है; नए खरीदार न जुड़े तो कम टिकती है।';
-  if (/long unwinding/i.test(w)) return 'ये गिरावट कुछ हद तक लॉन्ग अनवाइंडिंग से है; खरीदार निकल जाने के बाद रुक सकती है।';
-  if (/unconfirmed report/i.test(w)) return 'बड़ी ख़बर अभी सिर्फ़ रिपोर्ट है, आधिकारिक पुष्टि नहीं; ग़लत निकली तो भाव तेज़ी से पलट सकता है।';
-  if (/ban list/i.test(w)) return 'शेयर F&O बैन में है: नई पोज़िशन नहीं बन सकती।';
-  if (/Results due/i.test(w)) return 'नतीजे पास हैं: ऑप्शन का प्रीमियम नतीजों के बाद तेज़ी से गिरता है और गैप किसी भी तरफ़ हो सकता है।';
-  if (/call writing/i.test(w)) return 'ठीक ऊपर कॉल राइटर्स का बड़ा दीवार है, वहाँ रुकावट आ सकती है।';
-  if (/put writing/i.test(w)) return 'ठीक नीचे पुट राइटर्स का सपोर्ट है, वहाँ गिरावट रुक सकती है।';
-  if (/mixed/i.test(w)) return 'संकेत मिले-जुले हैं, कई बातें उल्टी तरफ़ इशारा कर रही हैं।';
-  if (/First 15 minutes/i.test(w)) return 'पहले 15 मिनट की चाल अक्सर पलटती है, 9:30 के बाद देखें।';
-  if (/gap/i.test(w)) return 'गैप के साथ खुला है; पहले घंटे में गैप अक्सर कुछ भरता है।';
-  if (/Not marked strong/i.test(w)) return 'फ्यूचर्स की पोज़िशन इस चाल की पूरी पुष्टि नहीं कर रही।';
-  return w;
-}
-// does the AI text claim something the data does not support?
-function aiBad(ai, f, L) {
-  const hi = String(ai.hi || ''), en = String(ai.en || '');
-  if (!hi || hi.length < 40) return 'empty';
-  if (L.verified === 0 && (/(वेरिफ़?ाइड|वेरीफाइड|पुष्टि हो चुकी|पुष्ट हैं|आधिकारिक रूप से पुष्ट)(?![^।\n]{0,12}नहीं)/.test(hi) || /\b(?<!un)verified\b(?![^.\n]{0,12}\bnot\b)/i.test(en.replace(/not (been )?verified/gi, '')))) return 'claims verified news';
-  const HL = { 'STRONG CALL': /मज़बूत|मजबूत|strong/i, 'STRONG PUT': /मज़बूत|मजबूत|strong/i };
-  if (L.lean === 'WAIT' && /(कॉल|पुट)\s*(ख़रीद|खरीद)|buy (a )?(call|put)/i.test(hi + en)) return 'tells to buy';
-  if (/(ख़रीदें|खरीदें|बेचें|ज़रूर लें|सलाह है)/.test(hi)) return 'gives advice';
-  if (!HL[L.lean] && /(मज़बूत|मजबूत) (कॉल|पुट|तेज़ी|तेजी)/.test(hi)) return 'overstates';
-  // numbers: every figure the AI writes must exist in the data (allowing rounding)
-  const facts = JSON.stringify(f) + JSON.stringify(L), nums = (hi.match(/\d[\d,]*(\.\d+)?/g) || []).map((x) => +x.replace(/,/g, '')).filter((x) => x >= 10 && !(x >= 2020 && x <= 2030));
-  const known = (x) => facts.includes(String(x)) || facts.includes(String(Math.round(x))) || (facts.match(/-?\d+(\.\d+)?/g) || []).some((y) => Math.abs(Math.abs(+y) - x) <= Math.max(0.6, x * 0.002));
-  if (nums.filter((x) => !known(x)).length >= 2) return 'numbers not in the data';
-  return null;
-}
-
-/* ---------- news for one stock: gathered from everywhere, validated by trusted outlets ---------- */
-async function articleBlurb(link) { // the first lines of a trusted article (meta description), to give the AI real context
-  if (!link || /news\.google\.com/.test(link)) return '';
-  const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), 3500);
-  try {
-    const r = await fetch(link, { signal: ctl.signal, headers: { 'User-Agent': UA_BROWSER, Accept: 'text/html' } });
-    if (!r.ok || !r.body) return '';
-    const rd = r.body.getReader(); let html = '', n = 0;
-    while (n < 80000) { const { done, value } = await rd.read(); if (done) break; n += value.length; html += new TextDecoder().decode(value); if (/<\/head>/i.test(html)) break; }
-    try { rd.cancel(); } catch (e) { /* closed */ }
-    const m = html.match(/<meta[^>]+(?:property|name)=["'](?:og:description|description|twitter:description)["'][^>]*content=["']([^"']{40,600})["']/i) || html.match(/<meta[^>]+content=["']([^"']{40,600})["'][^>]*(?:property|name)=["'](?:og:description|description)["']/i);
-    return m ? xmlText(m[1]).replace(/\s+/g, ' ').trim().slice(0, 400) : '';
-  } catch (e) { return ''; } finally { clearTimeout(t); }
-}
-async function pulseNews(env, sym, name) {
-  const ck = 'pnews:' + sym, c = memGet(ck) || (await env.KV.get(ck, 'json').catch(() => null));
-  if (c && c.ts > Date.now() - 20 * 60e3) { memSet(ck, c, 20 * 60e3); return c; }
-  const isMine = nameMatcher(name, sym), clean = String(name || sym).replace(/\b(limited|ltd\.?)\b/gi, '').replace(/[^\w &.-]/g, '').trim().slice(0, 40);
-  // 1) trusted publishers (already scored by AI in newsFor), 2) the open web through Google News (any outlet)
-  const [T, W] = await Promise.all([
-    newsFor(env, sym, name).catch(() => ({ items: [] })),
-    fetchFeed(['Google News', `https://news.google.com/rss/search?q=${enc('"' + clean + '"')}+when:7d&hl=en-IN&gl=IN&ceid=IN:en`]).catch(() => []),
-  ]);
-  const items = (T.items || []).map((x) => ({ ...x, alsoBy: [...(x.alsoBy || [])] }));
-  const tw = items.map((x) => normWords(x.t));
-  for (const w of W) {
-    if (w.ts < Date.now() - 7 * 864e5 || !isMine(w.t)) continue;
-    const ww = normWords(w.t), i = tw.findIndex((t) => overlap(ww, t) >= 0.5);
-    if (i >= 0) { if (w.src !== items[i].src && !items[i].alsoBy.includes(w.src)) items[i].alsoBy.push(w.src); continue; } // another outlet carries the same story
-    const j = items.findIndex((x, k) => k >= (T.items || []).length && overlap(ww, normWords(x.t)) >= 0.5);
-    if (j >= 0) { if (!items[j].alsoBy.includes(w.src)) items[j].alsoBy.push(w.src); continue; }
-    items.push({ ...w, s: lexScore(w.t), imp: 'medium', alsoBy: [], wide: true }); tw.push(ww);
-  }
-  // context for the biggest trusted stories (first lines of the article)
-  const top = items.filter((x) => !x.wide && !x.d && Math.abs(x.s || 0) >= 0.25).sort((a, b) => Math.abs(b.s) - Math.abs(a.s)).slice(0, 3);
-  await Promise.all(top.map(async (x) => { x.d = await articleBlurb(x.link); }));
-  const res = { ts: Date.now(), items: items.sort((a, b) => b.ts - a.ts).slice(0, 24) };
-  memSet(ck, res, 20 * 60e3); env.KV.put(ck, JSON.stringify(res), { expirationTtl: 3600 }).catch(() => {});
-  return res;
-}
-
-/* ---------- Top 5 up / Top 5 down: the clearest data across all F&O stocks ----------
-   Stage 1 (free, all stocks): NSE's F&O bhavcopy (who built positions) + live movers from one Upstox quote call.
-   Stage 2 (about 30 stocks): the same rules as the single-stock Pulse on price, trend, levels, results, ban and FII.
-   Option walls, last-hour and news are only in the single-stock view (tap a stock). */
-async function moversScan(env, mkt0) {
-  const today = ymd(istNow()), phase = phaseNow();
-  const [U, B, BAN, CAL, P] = await Promise.all([universe(env), bhavBuildup(env).catch(() => null), secBan(env).catch(() => null), withTimeout(resultsCalendar(env).catch(() => null), 5000, null), participantOI(env).catch(() => null)]);
-  const uni = (U.items || []).filter((x) => x.key), byS = Object.fromEntries(uni.map((x) => [x.sym, x]));
-  // one quote call for every F&O stock + Nifty
-  const keys = [...uni.map((x) => x.key), 'NSE_INDEX|Nifty 50'];
-  const qm = {};
-  for (let i = 0; i < keys.length; i += 240) Object.assign(qm, await shared('mvq:' + i, 20000, () => up(env, '/v2/market-quote/quotes?instrument_key=' + keys.slice(i, i + 240).map(enc).join(','))).then(quoteMap).catch(() => ({})));
-  const nq = qm['NSE_INDEX|Nifty 50'], mkt = mkt0 || (nq && ok(nq.chg) ? { niftyChg: r2(nq.chg) } : null);
-  const rows = B ? B.rows.filter((x) => !x.idx && byS[x.sym]) : [];
-  const wS = (x) => (x.strength || 0) * (x.b === 'LB' || x.b === 'SB' ? 1 : 0.7) * (x.clear ? 1 : 0.6);
-  const pick = (ks, n) => rows.filter((x) => ks.includes(x.b)).sort((a, b) => wS(b) - wS(a)).slice(0, n).map((x) => x.sym);
-  const live = uni.map((x) => ({ sym: x.sym, q: qm[x.key] })).filter((x) => x.q && ok(x.q.chg) && x.q.vol > 0 && x.q.ts && ymd(new Date((+x.q.ts || Date.parse(x.q.ts)) + 5.5 * 3600e3)) === today);
-  const liveUp = live.sort((a, b) => b.q.chg - a.q.chg).slice(0, 7).map((x) => x.sym), liveDn = live.slice().sort((a, b) => a.q.chg - b.q.chg).slice(0, 7).map((x) => x.sym);
-  const pool = [...new Set([...pick(['LB', 'SC'], 12), ...pick(['SB', 'LU'], 12), ...liveUp, ...liveDn])];
-  let fii = null;
-  if (P && P.latest && P.latest.p && P.latest.p.FII) { const f = P.latest.p.FII, pv = P.prev && P.prev.p && P.prev.p.FII; fii = { date: P.latest.date, longPct: r2((f.futL / (f.futL + f.futS || 1)) * 100), net: f.futL - f.futS, netChg: pv ? f.futL - f.futS - (pv.futL - pv.futS) : null }; }
-  const out = [];
-  for (let i = 0; i < pool.length; i += 6) {
-    const part = await Promise.all(pool.slice(i, i + 6).map(async (sym) => {
-      try {
-        const u = byS[sym], D = await daily(env, u.key), q = qm[u.key] || null, r = D.rows || [];
-        if (r.length < 60) return null;
-        const { liveDay, px, lev } = pxFacts(r, q, today), bx = B && B.rows.find((x) => x.sym === sym);
-        const cal = ((CAL && CAL.items) || []).filter((x) => x.sym === sym && x.date).sort((a, b) => (a.date < b.date ? -1 : 1));
-        const past = cal.filter((x) => x.date <= today && x.date >= ymd(addDays(istNow(), -15))).pop(), next = cal.find((x) => x.date > today && x.date <= ymd(addDays(istNow(), 10)));
-        let resEv = null;
-        if (past) { const k = r.findIndex((x) => x[0] >= past.date), bc = k > 0 ? r[k - 1][4] : null; resEv = { kind: 'past', date: past.date, src: past.src, react: bc ? r2(((px.price - bc) / bc) * 100) : null, sessions: k >= 0 ? r.length - k + (liveDay ? 1 : 0) : 1 }; }
-        else if (next) resEv = { kind: 'next', date: next.date, inDays: Math.round((Date.parse(next.date) - Date.parse(today)) / 864e5) };
-        const f = { sym, name: u.name, key: u.key, phase, liveDay, px, lev, sess: null, opt: null, brokers: [], news: { items: [], official: [] }, fii, resEv,
-          fut: { live: null, last: null, nse: bx ? { date: B.date, b: bx.b, dp: bx.dp, doiPct: bx.doiPct, clear: bx.clear } : null }, ban: BAN && (BAN.syms || []).includes(sym) ? { date: BAN.date } : null };
-        const L = pulseLean(f, mkt);
-        return { sym, name: u.name, key: u.key, price: px.price, chg: px.chg, lean: L.lean, side: L.side, label: L.label, conf: L.conf, score: L.score, fut: bx ? bx.b : null,
-          why: L.why.slice(0, 3), risk: L.warn.find((w) => !/Market closed|First 15|refreshes/.test(w)) || null, plan: L.plan, ban: !!f.ban, liveMover: liveUp.includes(sym) || liveDn.includes(sym) };
-      } catch (e) { if (e.code === 'UPSTOX_LOGIN') throw e; return null; }
-    }));
-    out.push(...part.filter(Boolean));
-  }
-  const upL = out.filter((x) => x.side === 'CALL' && !x.ban).sort((a, b) => b.score - a.score).slice(0, 5);
-  const dnL = out.filter((x) => x.side === 'PUT' && !x.ban).sort((a, b) => a.score - b.score).slice(0, 5);
-  return { ts: Date.now(), phase, bhavDate: B && B.date, nifty: mkt && mkt.niftyChg, scanned: out.length, of: uni.length, up: upL, down: dnL };
-}
-async function movers(env, force) {
-  const ck = 'movers:v1', open = ['live', 'open15'].includes(phaseNow()), maxAge = open ? 8 * 60e3 : 3 * 3600e3, minAge = open ? 90e3 : 20 * 60e3;
-  const c = memGet(ck) || (await env.KV.get(ck, 'json').catch(() => null));
-  if (c && (Date.now() - c.ts < (force ? minAge : maxAge))) { memSet(ck, c, 60e3); return { ...c, cached: true }; }
-  if (Date.now() < RL.until || budgetTight()) { if (c) return { ...c, cached: true, stale: true }; }
-  const res = await shared('movers', 60e3, () => moversScan(env, null));
-  memSet(ck, res, 60e3); env.KV.put(ck, JSON.stringify(res), { expirationTtl: 86400 }).catch(() => {});
-  return res;
-}
-
-/* ---------- "if-then" for the news that matters, when the AI is off or wrong ---------- */
-function ruleScenarios(f) {
-  const out = [];
-  for (const n of f.news.items) {
-    if (out.length >= 3) break;
-    if (!ok(n.s) || Math.abs(n.s) < 0.25 || Date.now() - n.ts > 5 * 864e5) continue;
-    const up = n.s > 0, t = n.t.slice(0, 110);
-    if (n.status === 'report' || n.status === 'unverified') out.push({ t, status: n.status,
-      hi: `अगर कंपनी, NSE/BSE filing या रेगुलेटर इसकी पुष्टि करे, तो ${up ? 'तेज़ी' : 'गिरावट'} टिक सकती है; अगर ख़बर ग़लत निकले या खंडन आए, तो ${up ? 'चढ़ा हुआ भाव तेज़ी से वापस गिर' : 'गिरा हुआ भाव तेज़ी से वापस चढ़'} सकता है।`,
-      en: `If the company, an exchange filing or the regulator confirms it, the ${up ? 'rise' : 'fall'} can hold; if it is denied or proves wrong, the ${up ? 'rise can reverse fast' : 'fall can reverse fast'}.` });
-    else if (n.status === 'official' || n.status === 'results' || n.status === 'confirmed') out.push({ t, status: n.status,
-      hi: `ख़बर पक्की है, इसलिए असली सवाल ये है कि भाव इसे पहले ही कितना मान चुका है: ${up ? 'अच्छी ख़बर के बाद भी भाव न चढ़े तो कमज़ोरी का संकेत' : 'बुरी ख़बर के बाद भी भाव न गिरे तो मज़बूती का संकेत'} है।`,
-      en: `The news is confirmed, so the question is how much is already priced in: ${up ? 'if price fails to rise on good news, that is a warning' : 'if price holds up on bad news, that is a sign of strength'}.` });
-  }
-  return out;
-}
-
-async function pulse(env, body) {
-  const S = await resolveStock(env, body || {});
-  const f = await shared('pulsef2:' + S.key, 60000, () => pulseFacts(env, S));
-  const mkt = body && body.mkt && ok(+body.mkt.niftyChg) ? { niftyChg: +body.mkt.niftyChg } : null;
-  const lean = pulseLean(f, mkt), rule = ruleSummary(f, lean);
-  let ai = null;
-  if (hasAI(env) && body && body.ai !== false) {
-    const ck = `pulseai3:${S.sym}:${f.phase}:${Math.floor(Date.now() / 600e3)}:${lean.lean}`;
-    ai = memGet(ck) || (await env.KV.get(ck, 'json').catch(() => null));
-    if (!ai) {
-      const CHK = { official: 'NSE/BSE filing found (official)', confirmed: 'carried by several trusted outlets (confirmed)', results: 'results headline; results date confirmed on NSE, figures as reported', single: 'only one trusted outlet: NOT confirmed', report: 'only a report (may / likely / sources): NOT confirmed', unverified: 'only non-mainstream sites, no trusted outlet: NOT confirmed, treat as rumour' };
-      const facts = { stock: `${f.name} (${f.sym})`, marketPhase: f.phase, price: f.px, levels: f.lev, session: f.sess, futuresBuildup: f.fut, options: f.opt, fiiIndexFutures: f.fii,
-        results: f.resEv, brokerCalls: f.brokers.map((b) => `${b.kind === 'up' ? 'upgrade' : 'downgrade'}: ${b.t}`),
-        confirmedNewsCount: lean.verified, news: f.news.items.slice(0, 7).map((n, i) => ({ i, headline: n.t, detail: n.d || undefined, check: CHK[n.status], trustedOutlets: (n.trustedPubs || []).slice(0, 4), otherSites: n.others || 0, sentiment: n.s, daysAgo: r2((Date.now() - n.ts) / 864e5) })),
-        officialFilings: f.news.official.slice(0, 3).map((o) => o.t), inFnoBan: !!f.ban,
-        ruleVerdict: { label: lean.label, confidence: lean.conf, reasons: lean.why.map((w) => `${w.pts > 0 ? '+' : ''}${w.pts} ${w.txt}`), risks: lean.warn, plan: lean.plan } };
-      const prompt = `You are a senior Indian F&O desk trader explaining one stock to a retail trader in simple, natural spoken Hindi (as people speak in India, English market words like "buyers", "short covering", "VWAP" are fine).
-Use ONLY this data. Never invent numbers, news, reasons or targets. Every number you write must appear in the data.
-The rule verdict is "${lean.label}" (${lean.conf} confidence). Repeat it exactly; do not upgrade or downgrade it.
-News: exactly ${lean.verified} headline(s) are confirmed. ${lean.verified === 0 ? 'So you must say the news is NOT confirmed yet. Never call any of it verified or official.' : 'Say which part is confirmed and which is only reported.'}
-Data: ${JSON.stringify(facts).slice(0, 10000)}
-Write 7 to 9 short lines, no greeting, no "namaste", no headings:
-1) who is in control in futures and how strong that is; 2) how the day closed (range, last hour, VWAP) if given; 3) WHY the stock moved: the main news or results behind it, in plain words, with how confirmed each is; 4) the trend; 5) the plan levels: above which level the view is confirmed, below which it is wrong, and the next level; 6) the single biggest risk; 7) the verdict line, then "फ़ैसला आपका है।"
-${f.phase === 'closed' || f.phase === 'pre' ? 'Start by saying this is last-session data, to be rechecked after 9:30.' : ''}
-Then, for up to 3 news items that matter most for the price (from the news list only), write an "if-then" in Hindi and English:
-what has to happen for the move to continue, and what would reverse it, based only on that headline and its detail (for example: "if the regulator confirms the relief, the rally can extend; if the final rules are stricter, it can fall back"). If the news is not confirmed, the first condition must be its official confirmation. No numbers that are not in the data.
-Never tell them to buy or sell, never say "सलाह", never promise an outcome.
-Return ONLY JSON: {"hi": "Hindi (Devanagari), lines separated by \\n", "en": "same in simple English", "scen": [{"i": news index, "hi": "अगर ... तो ...; अगर ... तो ...", "en": "If ..., ...; if ..., ..."}]}`;
-      try {
-        const raw = await aiText(env, prompt, 1800, 'chat'), j = JSON.parse(raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1));
-        const cand = { hi: String(j.hi || '').replace(/^\s*(नमस्ते|नमस्कार|hello|hi)[^\n]*\n/i, '').trim(), en: String(j.en || '').replace(/^\s*(hello|hi)[^\n]*\n/i, '').trim(), by: 'ai' };
-        const NI = f.news.items;
-        cand.scen = (Array.isArray(j.scen) ? j.scen : []).filter((x) => x && Number.isInteger(x.i) && NI[x.i] && x.hi && x.hi.length > 20).slice(0, 3)
-          .map((x) => ({ t: NI[x.i].t.slice(0, 110), status: NI[x.i].status, hi: String(x.hi).trim(), en: String(x.en || '').trim() }))
-          .filter((x) => !aiBad({ hi: x.hi.padEnd(40, ' '), en: x.en }, f, lean));
-        const bad = aiBad(cand, f, lean);
-        ai = bad ? { rejected: bad } : cand;
-        memSet(ck, ai, 600e3); await env.KV.put(ck, JSON.stringify(ai), { expirationTtl: 3600 }).catch(() => {});
-      } catch (e) { ai = { err: String(e.message || e).slice(0, 160) }; }
-    }
-  }
-  const scen = ai && ai.hi && ai.scen && ai.scen.length ? ai.scen.map((x) => ({ ...x, by: 'ai' })) : ruleScenarios(f).map((x) => ({ ...x, by: 'rules' }));
-  return { ...f, lean, scen, ai: ai && ai.hi ? ai : null, aiNote: ai && (ai.rejected ? 'AI text did not match the data, so the summary below is built from the rules' : ai.err ? 'AI unavailable right now: ' + ai.err : null), rule };
-}
-
-// several stocks side by side, ranked (no AI, so it is fast and cheap)
-async function compare(env, body) {
-  const list = (Array.isArray(body && body.items) ? body.items : []).slice(0, 8);
-  if (!list.length) throw new HttpError(400, 'Add at least one stock to compare');
-  const mkt = body && body.mkt && ok(+body.mkt.niftyChg) ? { niftyChg: +body.mkt.niftyChg } : null, out = [];
-  for (let i = 0; i < list.length; i += 3) {            // three at a time, to stay gentle on Upstox
-    const part = await Promise.all(list.slice(i, i + 3).map(async (it) => {
-      try {
-        const S = await resolveStock(env, it), f = await shared('pulsef2:' + S.key, 60000, () => pulseFacts(env, S)), L = pulseLean(f, mkt);
-        return { sym: f.sym, name: f.name, key: f.key, price: f.px.price, chg: f.px.chg, lean: L.lean, label: L.label, conf: L.conf, score: L.score,
-          why: L.why.slice(0, 3), risk: L.warn.find((w) => !/Market closed|First 15/.test(w)) || null, plan: L.plan, fut: (f.fut.live || f.fut.nse || f.fut.last || {}).b || null, ban: !!f.ban };
-      } catch (e) { if (e.code === 'UPSTOX_LOGIN') throw e; return { sym: String(it.sym || '?').toUpperCase(), err: e.message }; }
-    }));
-    out.push(...part);
-  }
-  out.sort((a, b) => (a.err ? 1 : 0) - (b.err ? 1 : 0) || Math.abs(b.score || 0) - Math.abs(a.score || 0));
-  return { ts: Date.now(), phase: phaseNow(), items: out };
-}
-
-/* ---------- natural Indian voice (optional): Sarvam AI "Bulbul" text-to-speech ----------
-   Needs the secret SARVAM_API_KEY (sarvam.ai, paid per character after free credits). Without it the page keeps
-   using the phone's or computer's own voice. Same sentence = served from cache, so repeated alerts cost nothing. */
-async function sha1(t) { const b = await crypto.subtle.digest('SHA-1', new TextEncoder().encode(t)); return [...new Uint8Array(b)].map((x) => x.toString(16).padStart(2, '0')).join(''); }
-async function tts(env, body) {
-  if (!env.SARVAM_API_KEY) throw new HttpError(501, 'Natural voice is off: add SARVAM_API_KEY in the Worker', 'TTS_OFF');
-  const text = String((body && body.text) || '').replace(/\s+/g, ' ').trim().slice(0, 600);
-  if (!text) throw new HttpError(400, 'Nothing to speak');
-  const model = env.SARVAM_MODEL || 'bulbul:v3', speaker = String((body && body.voice) || env.SARVAM_SPEAKER || 'priya').toLowerCase().replace(/[^a-z_]/g, '').slice(0, 40);
-  const ck = 'tts:' + (await sha1(model + speaker + text));
-  const c = memGet(ck);
-  if (c) { return { audio: c, mime: 'audio/mpeg', cached: true }; }
-  const today = ymd(istNow()), uk = 'ttsuse:' + today, used = +(memGet(uk) || (await env.KV.get(uk).catch(() => 0)) || 0), cap = +(env.SARVAM_DAILY_CHARS || 8000);
-  if (used + text.length > cap) throw new HttpError(429, `Natural voice daily limit reached (${cap} characters). Using the device voice.`, 'TTS_CAP');
-  const r = await fetch('https://api.sarvam.ai/text-to-speech', { method: 'POST', headers: { 'api-subscription-key': env.SARVAM_API_KEY, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text, language_code: 'hi-IN', model, speaker, pace: +(env.SARVAM_PACE || 1.05), speech_sample_rate: 24000, output_audio_codec: 'mp3' }) });
-  if (!r.ok) { const e = await r.text().catch(() => ''); throw new HttpError(r.status === 429 ? 429 : 502, 'Natural voice error ' + r.status + ': ' + e.slice(0, 160), 'TTS_ERR'); }
-  const j = await r.json(), audio = j && j.audios && j.audios[0];
-  if (!audio) throw new HttpError(502, 'Natural voice returned no audio', 'TTS_ERR');
-  const nu = used + text.length; memSet(uk, nu, 6 * 3600e3);
-  if (Math.floor(nu / 2000) > Math.floor(used / 2000)) env.KV.put(uk, String(nu), { expirationTtl: 2 * 86400 }).catch(() => {}); // a KV write only every ~2,000 characters (free plan: 1,000 writes a day)
-  if (audio.length < 900000) memSet(ck, audio, 6 * 3600e3);
-  return { audio, mime: 'audio/mpeg', cached: false };
+  return { ts: Date.now(), n: Object.keys(out).length, q: out };
 }
 
 /* ---------------- रूटर ---------------- */
@@ -2116,7 +1476,7 @@ async function route(req, env, url) {
   switch (p) {
     case '/api/status': {
       const t = env.UPSTOX_ACCESS_TOKEN || (await env.KV.get('upstox_token'));
-      return R({ email, upstox: !!t, ai: hasAI(env), aiVia: env.GEMINI_API_KEY ? 'Gemini' : env.AI ? 'Workers AI' : env.ANTHROPIC_API_KEY ? 'Claude' : null, tokenMode: env.UPSTOX_ACCESS_TOKEN ? 'analytics' : 'oauth', v: 2, pulse: 3, tts: !!env.SARVAM_API_KEY, upCalls30m: UPC.length, rateWait: Math.max(0, Math.ceil((RL.until - Date.now()) / 1000)) });
+      return R({ email, upstox: !!t, ai: hasAI(env), aiVia: env.GEMINI_API_KEY ? 'Gemini' : env.AI ? 'Workers AI' : env.ANTHROPIC_API_KEY ? 'Claude' : null, tokenMode: env.UPSTOX_ACCESS_TOKEN ? 'analytics' : 'oauth', v: 2, upCalls30m: UPC.length, rateWait: Math.max(0, Math.ceil((RL.until - Date.now()) / 1000)) });
     }
     case '/api/snapshot': {
       const w = (url.searchParams.get('w') || '').split(',').filter((k) => KEY_RE.test(k)).slice(0, 40);
@@ -2164,15 +1524,14 @@ async function route(req, env, url) {
       const only = (url.searchParams.get('syms') || '').toUpperCase().split(',').map((x) => x.replace(/[^A-Z0-9&-]/g, '')).filter(Boolean).slice(0, 60);
       return R(await shared('eod:' + only.join(','), 20e3, () => eodQuotes(env, only)));
     }
-    case '/api/buildup': return R(await buildupLists(env));
-    case '/api/movers': return R(await movers(env, url.searchParams.get('force') === '1'));
-    case '/api/compare': { if (req.method !== 'POST') throw new HttpError(405, 'POST required'); return R(await compare(env, await req.json().catch(() => ({})))); }
-    case '/api/tts': { if (req.method !== 'POST') throw new HttpError(405, 'POST required'); return R(await tts(env, await req.json().catch(() => ({})))); }
-    case '/api/pulse': {
-      if (req.method !== 'POST') throw new HttpError(405, 'POST required');
-      return R(await pulse(env, await req.json().catch(() => ({}))));
-    }
     case '/api/earnings': return R(await shared('earnings', 30e3, () => earningsRadar(env)));
+    case '/api/nsefile': return nseFile(req, env, url);
+    case '/api/intra': return intraRaw(req, env, url);
+    case '/api/foq': {
+      const toks = [...new Set((url.searchParams.get('t') || '').split(',').map((x) => x.replace(/\D/g, '')).filter(Boolean))].slice(0, 750);
+      if (!toks.length) throw new HttpError(400, 'No tokens');
+      return R(await shared('foq:' + toks.length + ':' + toks[0] + ':' + toks[toks.length - 1], 20e3, () => foQuotes(env, toks)));
+    }
     case '/api/stt': {
       if (req.method !== 'POST') throw new HttpError(405, 'POST required');
       return json(await stt(env, await req.json()), 200, req, env);

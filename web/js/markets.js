@@ -128,6 +128,7 @@ const Markets = (() => {
     ['orders', 'Big Order Wins', 'Order-win headlines from the last 7 days (trusted business news).'],
     ['brokers', 'Broker Upgrades And Downgrades', 'Rating and target-price changes reported in the last 7 days.'],
     ['results', 'Results This Week', 'F&O companies with board meetings for results in the next 7 days (NSE calendar).'],
+    ['orb', 'Intraday Breakouts (ORB)', 'Live, every 2 minutes: F&O stocks breaking above or below their 9:15–9:30 range, with volume pace and where the idea is wrong.'],
     ['multi', 'Multibagger Watch', 'Early signs of a long run: a rising 200 DMA, price above the 50 and 200 DMA, beating Nifty over a year, buying volume heavier than selling, a tight base near the high, plus order wins and broker upgrades. Price, volume and news only: check sales, profit and debt in the results before investing.'],
   ];
   async function loadScr() {
@@ -228,14 +229,16 @@ const Markets = (() => {
   function renderScr() {
     const b = $m('mkBody'); if (!b) return;
     const S = SCREENS.find((s) => s[0] === scr);
-    const counts = {}; const keep = scr; SCREENS.forEach(([k]) => { if (['orders', 'brokers', 'results'].includes(k)) return; scr = k; counts[k] = results().length; }); scr = keep;
+    const counts = {}; const keep = scr; SCREENS.forEach(([k]) => { if (['orders', 'brokers', 'results', 'orb'].includes(k)) return; scr = k; counts[k] = results().length; }); scr = keep;
     if (calls) { counts.orders = (calls.orders || []).length; counts.brokers = (calls.up || []).length + (calls.down || []).length; }
     if (rescal) counts.results = soonResults().length;
+    if (typeof Orb !== 'undefined') counts.orb = Orb.count();
     let h = `<section class="mk-panel scr"><aside><div class="sec" style="margin-top:0">Ready-Made Screens</div><div class="presets">${SCREENS.map(([k, n, d]) => `<button class="preset ${k === scr ? 'on' : ''} ${k === 'red' ? 'red' : ''}" onclick="Markets.setScr('${k}')"><em>${counts[k] ?? ''}</em><b>${n}</b><small>${d}</small></button>`).join('')}</div></aside><div>`;
     const sc = scan ? `Last scan ${scan.day} (${new Date(scan.ts).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' })}), ${scan.rows.length} F&O stocks${live() ? '' : ', sample data'}` : 'No scan yet';
-    h += `<div class="scan-bar"><div><span id="scTxt">${scanning ? 'Scanning…' : sc}</span><div class="rp-pbar"><i id="scProg"></i></div></div><button class="btn" onclick="Markets.runScan()" ${scanning ? 'disabled' : ''}>${scan ? 'Rescan Now' : 'Run First Scan'} (about 1 minute)</button></div>`;
+    if (scr !== 'orb') h += `<div class="scan-bar"><div><span id="scTxt">${scanning ? 'Scanning…' : sc}</span><div class="rp-pbar"><i id="scProg"></i></div></div><button class="btn" onclick="Markets.runScan()" ${scanning ? 'disabled' : ''}>${scan ? 'Rescan Now' : 'Run First Scan'} (about 1 minute)</button></div>`;
     h += `<div class="ph"><h2>${S[1]}</h2></div><p class="mut" style="font-size:13px;margin:-6px 0 10px">${S[2]}</p>`;
-    if (scr === 'multi' && scan && !scan.rows.some((x) => ok(x.udv))) h += `<div class="alert i">This screen needs a fresh scan (it reads buying versus selling volume). Tap Scan once; it takes about a minute.</div>`;
+    if (scr === 'orb') h += typeof Orb !== 'undefined' ? Orb.panelHTML() : '<div class="mut">ORB scanner did not load.</div>';
+    else if (scr === 'multi' && scan && !scan.rows.some((x) => ok(x.udv))) h += `<div class="alert i">This screen needs a fresh scan (it reads buying versus selling volume). Tap Scan once; it takes about a minute.</div>`;
     else if (scr === 'orders' || scr === 'brokers') {
       const list = scr === 'orders' ? headlinesFor(calls && calls.orders) : [...headlinesFor(calls && calls.up).map((x) => ({ ...x, kind: 'up' })), ...headlinesFor(calls && calls.down).map((x) => ({ ...x, kind: 'down' }))].sort((p, q) => q.ts - p.ts);
       h += list.length ? `<div class="tblw"><table><thead><tr><th class="l">Headline</th><th class="l">Stock</th>${scr === 'orders' ? '<th>Order (₹ cr)</th>' : '<th class="l">Type</th>'}<th>Price</th><th>1D</th><th>1W</th><th></th></tr></thead><tbody>${list.map((x) => `<tr><td class="l"><a href="${esc(x.link)}" target="_blank" rel="noopener">${esc(x.t)}</a><br><small class="mut">${esc(x.src)} · ${new Date(x.ts).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}</small></td>

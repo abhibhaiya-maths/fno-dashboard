@@ -85,7 +85,14 @@ const Report = (() => {
       add('news', 1, c >= 0.12 ? 'ok' : c <= -0.25 ? 'bad' : 'warn', 'Is today\'s news with you?',
         `News leans ${NI.lean} for ${a.cf.label} (${NI.n} stor${NI.n === 1 ? 'y' : 'ies'})${NI.top ? `. Biggest: "${String(NI.top.t).slice(0, 90)}"` : ''}.`, 'आज की ख़बरें');
     }
-    // 13. how this grade has really done for you
+    // 13. Time Machine: what happened to this exact plan on past days (indices with Replay history)
+    const TMr = typeof TimeMachine !== 'undefined' ? TimeMachine.forSignal(a, s) : null;
+    if (TMr && TMr.res && TMr.res.mc.n) {
+      const m = TMr.res.mc;
+      add('tm', 1.5, m.avgR >= 0.15 && m.tgt - m.stop >= 0.05 ? 'ok' : m.avgR <= -0.15 || m.tgt - m.stop <= -0.15 ? 'bad' : 'warn', 'What happened to this plan on past days?',
+        `Time Machine: target first ${Math.round(m.tgt * 100)}%, stop first ${Math.round(m.stop * 100)}%, average ${m.avgR >= 0 ? '+' : ''}${m.avgR.toFixed(2)}R (10,000 simulated rests of today from ${TMr.res.days} past days).`, 'पुराने दिनों में ये प्लान');
+    }
+    // 14. how this grade has really done for you
     if (s.grade && typeof Paper !== 'undefined' && Paper.gradeStats) {
       const g = Paper.gradeStats().find((x) => x.g === s.grade), n = g ? g.sig.dec : 0, pct = g ? g.sig.pct : null;
       add('record', 1, n < 20 ? 'info' : pct >= 55 ? 'ok' : pct >= 45 ? 'warn' : 'bad', `How has grade ${s.grade} really done?`,
@@ -115,7 +122,7 @@ const Report = (() => {
     if (!s.setup || !a.cf.opt || !a.lot) return null;
     const st = s.setup, q = optQuote(a, st.K, st.dir), slipPct = (APP_CONFIG.PAPER && APP_CONFIG.PAPER.SLIPPAGE_PCT) || 0.5;
     const px = q.ask > 0 ? q.ask : tick05(q.ltp * (1 + slipPct / 100) + 0.05);
-    const lots = s.lots || (Paper.opts ? Paper.opts().lots : 1), qty = lots * a.lot;
+    const lots = Paper.lotsFor ? Paper.lotsFor(a, s) : s.lots || 1, qty = lots * a.lot;
     const slP = tick05(Math.max(0.05, px - (st.P - st.pSL))), tgP = tick05(px + (st.pT1 - st.P));
     const ch = (side, p) => (Paper.charges ? Paper.charges(side, p, qty, a.cf.exch).total : 0);
     const buyC = ch('BUY', px), loss = (px - slP) * qty + buyC + ch('SELL', slP), gain = (tgP - px) * qty - buyC - ch('SELL', tgP);
@@ -146,6 +153,8 @@ const Report = (() => {
       const same = D.open.filter((t) => t.key === a.key);
       if (same.length) out.push(['i', `You already hold ${same.length} position${same.length > 1 ? 's' : ''} on ${a.cf.label} (${same.map((t) => `${t.K} ${t.type}`).join(', ')}). A new one adds to the same bet.`, 'इसी पर पहले से पोज़िशन है।']);
     }
+    // your own Journal: weak spots you asked to be warned about
+    try { if (typeof Journal !== 'undefined') Journal.warnings(a, s).forEach((t) => out.push(['w', `From your Journal: ${t}`, 'आपके जर्नल के हिसाब से इस हालत में आपके ट्रेड अक्सर हारे हैं, सावधान।'])); } catch (e) { /* journal not ready */ }
     return out;
   }
 
@@ -203,6 +212,21 @@ const Report = (() => {
       <div class="legend">No grade is a guarantee, ★ included: in the 1-year backtest ★ made about ₹105–140 back for every ₹100 lost, and still lost on many days. Trust a grade only after 20+ of your own results.</div>`;
   }
 
+  /* ---------- Time Machine box ---------- */
+  function tmHTML(a, s) {
+    const T = typeof TimeMachine !== 'undefined' ? TimeMachine.forSignal(a, s) : null; if (!T) return '';
+    if (T.loading) return '<div class="sec">Time Machine</div><div class="mut rc-p">Loading the 1-minute history…</div>';
+    if (T.na) return `<div class="sec">Time Machine</div><div class="alert i">${esc(T.na)}${T.need ? ' <button class="btn-ghost" onclick="Report.close();Replay.open()">Open Replay</button>' : ''}</div>`;
+    const R = T.res, row = (n, x, help) => x.n ? `<tr><td class="l">${n}<br><small class="mut">${help}</small></td><td>${x.n.toLocaleString('en-IN')}</td><td class="up">${Math.round(x.tgt * 100)}%</td><td class="down">${Math.round(x.stop * 100)}%</td><td>${Math.round(x.none * 100)}%</td><td class="${x.avgR >= 0 ? 'up' : 'down'}">${x.avgR >= 0 ? '+' : ''}${x.avgR.toFixed(2)}R</td></tr>` : `<tr><td class="l">${n}<br><small class="mut">${help}</small></td><td colspan="5" class="mut">too few days</td></tr>`;
+    const rr = T.plan.tp / T.plan.sl, fair = 1 / (1 + rr);
+    return `<div class="sec">Time Machine: this exact plan on past days</div>
+      <div class="rc-p">Plan: enter now (${hm(T.plan.m0)}), stop ${(T.plan.sl * 100).toFixed(2)}% away, target 1 ${(T.plan.tp * 100).toFixed(2)}% away (${rr.toFixed(1)}R), exit by 15:20 if neither. History ${esc(T.from)} to ${esc(T.to)}${T.demo ? ' (demo: made-up history)' : ''}.</div>
+      <div class="tbl"><table><thead><tr><th class="l">Test</th><th>Cases</th><th>Target first</th><th>Stop first</th><th>Neither</th><th>Avg result</th></tr></thead><tbody>
+      ${row('Every past day', R.replay, 'same time, same distances')}${row('Days like today', R.similar, 'same side of TWAP, same 30-min direction')}${row('10,000 simulations', R.mc, 'rest of today built from real 1-min moves')}</tbody></table></div>
+      <div class="alert i"><b>Simple meaning:</b> ${esc(TimeMachine.meaning(R))} For a ${rr.toFixed(1)}R target, pure chance gives about ${Math.round(fair * 100)}% target-first; above that is an edge.</div>
+      <div class="legend">Counts on the index, after a small cost. The option premium also loses time value, so the real option result is a little worse. 1R = the money you lose if the stop hits.</div>`;
+  }
+
   /* ---------- build the page ---------- */
   function build() {
     if ($c('rc')) return;
@@ -252,6 +276,7 @@ const Report = (() => {
         <div class="row"><span>Win : loss size</span><b>${ok(M.rr) ? `1 : ${f2(M.rr)}` : '–'}</b></div>${ok(M.theta) ? `<div class="row"><span>Time decay if price stands still</span><b class="down">about ₹${f0(M.theta)} a day</b></div>` : ''}<div class="legend">After brokerage, STT, exchange charges, stamp duty and GST. A stop-loss can fill worse in a fast market.</div>`;
       else if (s.setup) h += `<div class="sec">Levels</div><div class="lv"><div><small>Entry</small><b>${f1(s.setup.e)}</b></div><div><small>Stop-loss</small><b class="down">${f1(s.setup.sl)}</b></div><div><small>Target 1 / 2</small><b class="up">${f1(s.setup.t1)} / ${f1(s.setup.t2)}</b></div></div>`;
       // we are wrong if
+      h += tmHTML(a, s);
       if (W.length) h += `<div class="sec">We are wrong if… (decide now, not after entering)</div>${W.map((x) => `<div class="rc-li">${esc(x)}</div>`).join('')}`;
       // advice
       h += `<div class="sec">Senior trader's advice</div>${adv.length ? adv.map(([c, t]) => `<div class="alert ${c === 'd' ? 'd' : c === 'i' ? 'i' : ''}">${esc(t)}</div>`).join('') : '<div class="alert i">Nothing worrying about your size, your day or your recent trades.</div>'}<div class="legend">Advice only. Nothing here blocks a trade.</div>`;
@@ -279,5 +304,5 @@ const Report = (() => {
     } catch (e) { box.innerHTML = `<div class="alert">AI couldn't answer: ${esc(String(e.message).slice(0, 200))}</div>`; }
   }
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && $c('rc') && $c('rc').classList.contains('on')) close(); });
-  return { open, close, say, take, ai, checklist, quality };
+  return { open, close, say, take, ai, checklist, quality, refresh: () => { if (document.getElementById('rc') && document.getElementById('rc').classList.contains('on')) render(); } };
 })();

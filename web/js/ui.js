@@ -69,7 +69,7 @@ function renderControls() {
   $('tabs').innerHTML = [['chain', a.cf.opt ? 'Option chain' : 'Futures & volatility'], ['mood', 'Market mood'], ['struct', 'Structure & OI'], ['sig', `All ${a.intra.sigs.length + (a.short ? a.short.sigs.length : 0) + (a.long ? a.long.sigs.length : 0)} signals`]].map(([k, l]) => `<button class="btn ${k === tab ? 'on' : ''}" onclick="setTab('${k}')">${l}</button>`).join('');
   $('newsTabs').innerHTML = [['all', 'All'], ['official', 'Official'], ['market', a.cf.core ? 'Market' : a.cf.label], ['results', 'Results'], ['watch', 'Watchlist']].map(([k, l]) => `<button class="${k === newsTab ? 'on' : ''}" onclick="setNewsTab('${k}')" aria-pressed="${k === newsTab}">${esc(l)}</button>`).join('');
   const cf = a.cf;
-  $('qchips').innerHTML = (cf.opt ? [`Should I buy ${cf.label} ${a.ch.atm} CE?`, `Should I buy ${cf.label} ${a.ch.atm} PE?`] : [`Is ${cf.label} bullish or bearish now?`, `Where is the stop-loss for ${cf.label}?`]).concat([`How far did ${cf.label} move today?`, 'Hold or exit my position?'])
+  $('qchips').innerHTML = (cf.opt ? [`Should I buy ${cf.label} ${a.ch.atm} CE?`, `Should I buy ${cf.label} ${a.ch.atm} PE?`] : [`Is ${cf.label} bullish or bearish now?`, `Where is the stop-loss for ${cf.label}?`]).concat([`How far did ${cf.label} move today?`, 'Hold or exit my position?', 'Aaj kin companies ke results hain?'])
     .map((t) => `<button class="chip" onclick="$('q').value='${t}';Voice.ask()">${t}</button>`).join('');
 }
 
@@ -357,22 +357,23 @@ const GNAME = [[/gift|sgx/i, 'GIFT Nifty'], [/dow|\^dji|us 30/i, 'Dow'], [/s&p|g
 function shortG(n) { const m = GNAME.find(([re]) => re.test(n)); return m ? m[1] : n; }
 function renderGlobal() {
   const C = Source.calendar ? Source.calendar() : { items: [] };
-  const CK = premarketChecklist(), W = CK.W;
+  const CK = premarketChecklist(), W = worldReadFor(A[cur]) || CK.W;
   const MI = macroImpact();
   let h = `<div class="g-a"><div class="sec" style="margin-top:0">Macro impact on Indian sectors</div><div class="mi-read ${MI.net > 0 ? 'up' : MI.net < 0 ? 'down' : ''}">${esc(MI.read)}</div>` +
     MI.items.map((o) => `<div class="mi ${o.idx > 0 ? 'ok' : o.idx < 0 ? 'bad' : 'n'}"><b>${esc(o.name)}</b><small>${esc(o.why)}</small>
       ${o.good.length ? `<div class="mi-l up">Helps: ${o.good.map(([n, t]) => `${esc(n)} <span>(${esc(t)})</span>`).join('; ')}</div>` : ''}
       ${o.bad.length ? `<div class="mi-l down">Hurts: ${o.bad.map(([n, t]) => `${esc(n)} <span>(${esc(t)})</span>`).join('; ')}</div>` : ''}
       ${o.mineGood.length || o.mineBad.length ? `<div class="mi-me">In your watchlist: ${[...o.mineGood.map((x) => `<span class="up">${esc(x)} ▲</span>`), ...o.mineBad.map((x) => `<span class="down">${esc(x)} ▼</span>`)].join(', ')}</div>` : ''}</div>`).join('') +
-    `<div class="sec">Before you trade: ${CK.good} supportive, ${CK.bad} against</div>` +
+    `<div class="sec">Before you trade (whole market, Nifty): ${CK.good} supportive, ${CK.bad} against</div>` +
     CK.items.map((x) => `<div class="ck ${x.st}"><div><b>${esc(x.t)}</b><span>${esc(x.v)}</span></div><small>${esc(x.m)}</small></div>`).join('') +
     '<div class="legend">Green = supportive for Nifty, red = against, grey = neutral. A professional checks these before the first trade; none of them decides the day alone.</div>';
   h += '</div><div class="g-b"><div class="sec" style="margin-top:0">World markets and what they mean for India</div>';
   if (W) {
     const groups = [...new Set(W.rows.map((x) => x.cue.grp))];
-    h += `<div class="tbl wtbl"><table><thead><tr><th class="l">Market</th><th>Last</th><th>Change</th><th class="l">For Nifty</th><th class="l">Why it matters</th></tr></thead><tbody>` +
-      groups.map((g) => `<tr><td colspan="5" class="l mut" style="padding-top:12px">${esc(g)}</td></tr>` + W.rows.filter((x) => x.cue.grp === g).map((x) => `<tr><td class="l"><b>${esc(x.name)}</b>${x.note ? `<br><small class="mut">${esc(x.note)}</small>` : ''}</td><td>${pxFmt(x)}</td><td class="${x.chg >= 0 ? 'up' : 'down'}">${ok(x.chg) ? sgn(x.chg) + f2(x.chg) + '%' : '–'}</td><td class="l"><span class="pill ${x.imp > 0 ? 'b' : x.imp < 0 ? 's' : 'n'}">${x.imp > 0 ? 'Positive' : x.imp < 0 ? 'Negative' : 'Neutral'}</span></td><td class="l why">${esc(x.cue.why)}</td></tr>`).join('')).join('') + '</tbody></table></div>';
+    h += `<div class="tbl wtbl"><table><thead><tr><th class="l">Market</th><th>Last</th><th>Change</th><th class="l">For ${esc(W.short)}</th><th class="l">Why it matters</th></tr></thead><tbody>` +
+      groups.map((g) => `<tr><td colspan="5" class="l mut" style="padding-top:12px">${esc(g)}</td></tr>` + W.rows.filter((x) => x.cue.grp === g).map((x) => `<tr><td class="l"><b>${esc(x.name)}</b>${x.note ? `<br><small class="mut">${esc(x.note)}</small>` : ''}</td><td>${pxFmt(x)}</td><td class="${x.chg >= 0 ? 'up' : 'down'}">${ok(x.chg) ? sgn(x.chg) + f2(x.chg) + '%' : '–'}</td><td class="l"><span class="pill ${x.imp > 0 ? 'b' : x.imp < 0 ? 's' : 'n'}">${x.imp > 0 ? 'Positive' : x.imp < 0 ? 'Negative' : x.off ? 'Not relevant' : 'Neutral'}</span></td><td class="l why">${esc(x.cue.why)}</td></tr>`).join('')).join('') + '</tbody></table></div>';
     const wi = worldItems();
+    if (W.prof) h += `<div class="alert i" style="margin-top:8px">Read for ${esc(W.label)} (${esc(W.prof.name)}): ${esc(W.prof.tip)}</div>`;
     h += `<div class="legend">Inverse markets: crude, the dollar index, US yields, USD/INR and US VIX are bad for Nifty when they rise. "Neutral" means the move is too small to matter. Sources: Yahoo Finance (world, 1–15 min delayed), NSE (GIFT Nifty), Upstox.${wi.stale ? ' Showing the last saved values; live fetch failed.' : ''}${wi.missing.length ? ` Not available now: ${esc(wi.missing.slice(0, 6).join(', '))}${wi.missing.length > 6 ? '…' : ''}.` : ''}</div>`;
   } else h += `<div class="mut">World markets load from the Worker (/api/world). If this stays empty, deploy the latest Worker code.</div>`;
   // calendar
@@ -612,14 +613,16 @@ const CUE_SHORT = { gift: 'GIFT Nifty', indicative: 'Pre-open', dowF: 'Dow fut',
 const pxFmt = (x) => (x.id === 'us10y' ? f2(x.price) + '%' : x.price >= 1000 ? f0(x.price) : f2(x.price));
 function renderCues() {
   const box = $('cues'); if (!box) return;
-  const W = worldRead(A[cur]);
+  const W = worldReadFor(A[cur]);
   if (!W) { box.innerHTML = `<div class="cu-lead n"><b>World cues</b><span>${Source.mode === 'live' ? 'Loading GIFT Nifty, US futures, Asia, crude, dollar…' : 'Not available'}</span></div>`; return; }
   const order = ['gift', 'indicative', 'dowF', 'nasF', 'spxF', 'nikkei', 'hsi', 'brent', 'dxy', 'us10y', 'usdinr', 'usvix', 'gold', 'infy', 'hdb'];
-  const tiles = order.map((id) => W.rows.find((x) => x.id === id)).filter(Boolean);
+  // for a stock / Bank Nifty / MCX: the markets that matter most for it come first; markets that don't matter are hidden
+  const ord = W.prof ? [...Object.keys(W.prof.o).filter((id) => W.prof.o[id][0] > 0), ...order] : order;
+  const tiles = [...new Set(ord)].map((id) => W.rows.find((x) => x.id === id)).filter((x) => x && !x.off);
   const cls = W.score >= 15 ? 'up' : W.score <= -15 ? 'dn' : 'n';
   const g = W.gift, gTxt = g && ok(W.base) ? `GIFT Nifty ${sgn(g.price - W.base)}${f0(g.price - W.base)} pts ${W.beforeOpen ? '→ expected open ' + (Math.abs(g.price - W.base) < Math.max(30, W.base * 0.0015) ? 'flat' : g.price > W.base ? 'gap-up' : 'gap-down') : 'vs prev. close'}` : '';
-  box.innerHTML = `<button class="cu-lead ${cls}" onclick="document.getElementById('below').scrollIntoView({behavior:'smooth'})"><b>World cues for Nifty: ${W.lean}</b><span>${gTxt || 'Score ' + W.score} · Full checklist ↓</span></button>` +
-    `<div class="cu-row">${tiles.map((x) => `<div class="cu ${x.imp > 0 ? 'up' : x.imp < 0 ? 'dn' : 'n'}" title="${esc(x.cue.why)}"><small>${CUE_SHORT[x.id] || esc(x.name)}</small><b>${pxFmt(x)}</b><span>${ok(x.chg) ? sgn(x.chg) + f2(x.chg) + '%' : ''}</span><i>${x.imp > 0 ? '▲ good for Nifty' : x.imp < 0 ? '▼ bad for Nifty' : 'neutral'}</i></div>`).join('')}</div>`;
+  box.innerHTML = `<button class="cu-lead ${cls}" onclick="document.getElementById('below').scrollIntoView({behavior:'smooth'})"><b>World cues for ${esc(W.short)}: ${W.lean}</b><span>${W.prof ? esc(W.prof.tip) + ' · ' : ''}${gTxt || 'Score ' + W.score} · Full checklist ↓</span></button>` +
+    `<div class="cu-row">${tiles.map((x) => `<div class="cu ${x.imp > 0 ? 'up' : x.imp < 0 ? 'dn' : 'n'}" title="${esc(x.cue.why)}"><small>${CUE_SHORT[x.id] || esc(x.name)}</small><b>${pxFmt(x)}</b><span>${ok(x.chg) ? sgn(x.chg) + f2(x.chg) + '%' : ''}</span><i>${x.imp > 0 ? '▲ good for ' + esc(W.short) : x.imp < 0 ? '▼ bad for ' + esc(W.short) : x.off ? 'not relevant' : 'neutral'}</i></div>`).join('')}</div>`;
 }
 function premarketChecklist() {
   const N = A.NIFTY, W = worldRead(N), out = [], add = (st, t, v, m) => out.push({ st, t, v, m });
