@@ -21,8 +21,6 @@ const Guide = (() => {
     'bf:lists': 'Next-Day Brief: कल के लिए मज़बूत 5 और कमज़ोर 5 F&O शेयर, हर एक के कारण के साथ। 3 बजे के बाद provisional, शाम 7 बजे के बाद final। यह research है, guarantee नहीं।',
     'bf:sectors': 'Sectors: हर sector (financial, IT, pharma, auto…) आज, 2 दिन और 5 दिन में कितना चला, और futures में खरीदारी या बिकवाली का झुकाव।',
     'bf:all': 'All F&O Stocks: हर शेयर के points और कारण। column के नाम पर tap करके sort करें।',
-    'bf:rec': 'Track Record: पुरानी lists अगले दिन कितनी सही निकलीं। 20 दिन से कम record हो तो भरोसा न करें।',
-    'bf:how': 'How It Works: points किन नियमों से बनते हैं — सब कुछ दिखता है, कुछ छुपा नहीं।',
     gd: 'यह Guide है: हर page और हर शब्द का आसान मतलब।',
   };
   const SECTIONS = [
@@ -33,6 +31,15 @@ const Guide = (() => {
       <li><b>3:00–3:15 pm:</b> <b>Brief</b> का provisional version देखें; BTST सोच रहे हों तो <b>Overnight</b> भी देखें।</li>
       <li><b>शाम 7 बजे के बाद:</b> final Brief देखें; <b>Journal</b> में आज के trades पर tag लगाएँ।</li></ol>
       <p>याद रखें: कोई भी signal या list guarantee नहीं है। ★ भी सिर्फ़ "पुराने record में सबसे अच्छा" है, पक्का नहीं। Stop-loss हमेशा रखें।</p>`],
+    ['it', 'Overview (पूरा बाज़ार एक page पर)', `<p>ऊपर पहला बटन <b>Overview</b>। इसमें: बाज़ार का मूड (risk-on / risk-off की सुई), दुनिया के बाज़ार, Nifty/Bank Nifty/Sensex/VIX, FII/DII, sector heatmap, कल के मज़बूत-कमज़ोर शेयर, असामान्य volume और OI, ज़रूरी खबरें, आने वाले results, market regime, prediction audit, बचने वाले शेयर और data कितना ताज़ा है।</p>
+      <p><b>लेबल:</b> ACTUAL = NSE/exchange ने बताया; LIVE = broker का अभी का भाव; EOD FILE = NSE की शाम की file; ESTIMATE = भाव और volume से निकाला अंदाज़ा (जैसे money flow); MODEL = हमारे नियमों का score; N/A = data नहीं। जो data नहीं है वहाँ "–" दिखता है, कुछ भी गढ़ा नहीं जाता।</p>
+      <p><b>Strength & Money Flow:</b> Nifty से आगे/पीछे वाले शेयर और sector-वार पैसे का अंदाज़ा; "↑ rising" = sector की रैंक सुधर रही है। <b>Sector Rotation:</b> Leading / Improving / Weakening / Lagging और 0–100 score (weights आप बदल सकते हैं)। <b>Regime & Calm Zone:</b> बाज़ार का मौसम, पिछले ~60 दिन की रंगीन पट्टी, किस मौसम में कौन सा तरीका, और शांत/तूफ़ानी शेयर। <b>IV, Basis & Avoid:</b> options कितने महँगे, futures premium/discount, daily RSI, और F&O ban / कल results / कम trading वाले शेयर। <b>Data & Usage:</b> Upstox और AI की limit कितनी भरी है।</p>`],
+    ['tools', 'नए छोटे औज़ार', `<p><b>Ctrl+K या / दबाएँ</b> (या ऊपर 🔎): कुछ भी टाइप करें — "brief", "orb", "INFY" — और सीधे वहाँ पहुँचें।</p>
+      <p><b>Chart पर "Options range":</b> chart के chips में इसे चालू करें — options आज के लिए जितनी चाल price कर रहे हैं (कल के close ± ATM IV), उसकी दो बैंगनी लकीरें। लगभग 3 में से 2 दिन भाव इसके अंदर रहता है।</p>
+      <p><b>Option chain की तस्वीर:</b> chain tab में ऊपर हर strike पर call OI (लाल) और put OI (हरा), आज जोड़ा/घटाया, भाव और max pain की लकीर।</p>
+      <p><b>Radar (Screener → Intraday Radar & ORB):</b> असामान्य तेज़ चाल (इस समय के हिसाब से), volume spike, futures OI का उछाल, दिन का high/low।</p>
+      <p><b>Brief का Track Record:</b> अब हर list Firestore में हमेशा के लिए save (कभी बदली नहीं जाती), अगले दिन की सबसे अच्छी/बुरी चाल (MFE/MAE), और दो सीधे नियमों से तुलना — ताकि पता चले पूरा model कुछ फ़ायदा देता है या नहीं।</p>
+      <p class="mut">यह dashboard research और पढ़ाई के लिए है, निवेश सलाह नहीं; यह SEBI-registered adviser या research analyst नहीं है। फ़ैसला और जोखिम आपका।</p>`],
     ['home', 'मुख्य screen: CALL / PUT / WAIT', `<p><b>CALL (CE)</b> = engine को ऊपर की चाल दिख रही है। <b>PUT (PE)</b> = नीचे की चाल। <b>WAIT</b> = अभी साफ़ मौका नहीं।</p>
       <p><b>Grade:</b> ★ Prime = trend वाले दिन का pullback, पुराने test में सबसे अच्छा (पूरा size)। <b>A</b> = अच्छा, आधा size। <b>B</b> = कुछ बातें खिलाफ़, कम से कम size। <b>S (Scalp)</b> = 1 मिनट की छोटी चाल, पुराने record में खर्चे के बाद घाटा — सिर्फ़ paper या 1 lot।</p>
       <p><b>Score:</b> कितनी बातें signal के साथ हैं। <b>Entry / SL / Target:</b> कहाँ घुसें, कहाँ गलत मानें (stop-loss), कहाँ मुनाफ़ा लें। <b>Market Brain:</b> पूरे बाज़ार का मूड (trend day है या range day)।</p>`],
@@ -87,7 +94,7 @@ const Guide = (() => {
   function close() { const el = $g('gd'); if (el) el.classList.remove('on'); if (!document.querySelector('.rp.on')) document.body.style.overflow = ''; }
   function go(k) { const s = $g('gd-' + k); if (s) s.scrollIntoView({ block: 'start' }); }
   // which guide section belongs to which page
-  const SEC_OF = { rc: 'rc', mk: 'mk', rp: 'rp', ov: 'ov', im: 'im', jr: 'jr', al: 'al', bf: 'bf' };
+  const SEC_OF = { rc: 'rc', mk: 'mk', rp: 'rp', ov: 'ov', im: 'im', jr: 'jr', al: 'al', bf: 'bf', it: 'it' };
   function keyOf(el) { const t = el.querySelector('.mk-tabs button.on'); return t && t.dataset.t ? el.id + ':' + t.dataset.t : el.id; }
   function tips() {
     document.querySelectorAll('.rp.on').forEach((el) => {
@@ -106,7 +113,30 @@ const Guide = (() => {
     top.insertAdjacentElement('afterend', s);
   }
   function hideHome() { Store.setPref('gd_home_hide', true); const s = $g('gdHome'); if (s) s.remove(); }
+  /* first-visit tour: 6 short steps pointing at the buttons */
+  const TOUR = [
+    ['.navbtns .itbtn', 'Overview: पूरे बाज़ार का एक page — मूड, दुनिया, FII/DII, sectors, कल के शेयर, खबरें। शुरुआत यहीं से करें।'],
+    ['.navbtns .bfbtn', 'Brief: 3 बजे के बाद और शाम को — कल के लिए 5 मज़बूत और 5 कमज़ोर F&O शेयर, कारणों के साथ।'],
+    ['.navbtns [onclick^="Markets.open(\'scr\')"]', 'Screener: तैयार lists। "Intraday Radar & ORB" में market के दौरान असामान्य चाल और breakouts।'],
+    ['#q', 'यहाँ सवाल पूछें, जैसे "Bank Nifty 57300 CE लूँ?" या "कल किसके results हैं?" — mic से बोल भी सकते हैं।'],
+    ['.navbtns .palbtn', 'Search (Ctrl+K): कोई भी page या शेयर टाइप करके सीधे खोलें।'],
+    ['.navbtns .gdbtn', 'Guide: हर page और हर शब्द आसान हिंदी में। हर page के ऊपर "आसान मतलब" की पट्टी भी है।'],
+  ];
+  let ti = -1;
+  function tour() { ti = 0; step(); }
+  function tourEnd() { ti = -1; Store.setPref('tour_done', true); const o = $g('gdTour'); if (o) o.remove(); }
+  function step() {
+    let o = $g('gdTour'); if (!o) { o = document.createElement('div'); o.id = 'gdTour'; o.className = 'gd-tour'; document.body.appendChild(o); }
+    while (ti < TOUR.length && !document.querySelector(TOUR[ti][0])) ti++;
+    if (ti >= TOUR.length) return tourEnd();
+    const el = document.querySelector(TOUR[ti][0]); el.scrollIntoView({ block: 'nearest' }); const r = el.getBoundingClientRect(), W = window.innerWidth;
+    const top = r.bottom + 10, left = Math.max(12, Math.min(W - 332, r.left));
+    o.innerHTML = `<div class="gd-hole" style="left:${r.left - 4}px;top:${r.top - 4}px;width:${r.width + 8}px;height:${r.height + 8}px"></div>
+      <div class="gd-step" style="left:${left}px;top:${top}px"><b>${ti + 1} / ${TOUR.length}</b><p>${TOUR[ti][1]}</p><div><button onclick="Guide.tourEnd()">Skip</button><button class="go" onclick="Guide.next()">${ti === TOUR.length - 1 ? 'Done' : 'Next →'}</button></div></div>`;
+  }
+  function next() { ti++; if (ti >= TOUR.length) tourEnd(); else step(); }
+  setTimeout(() => { if (!Store.pref('tour_done', false) && !document.querySelector('.rp.on') && !/[?&]notour/.test(location.search) && !navigator.webdriver) tour(); }, 3500);
   setInterval(tips, 700);
   setTimeout(home, 1500);
-  return { open, close, go, hideHome, TIP };
+  return { open, close, go, hideHome, TIP, tour, tourEnd, next };
 })();

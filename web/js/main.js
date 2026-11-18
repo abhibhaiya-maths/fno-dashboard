@@ -132,7 +132,7 @@ async function startLive() {
   const onTick = () => { if (pending) return; pending = true; setTimeout(() => { pending = false; refreshAll(); }, P.RENDER_MS); };
   if (APP_CONFIG.STREAM !== false) LiveSource.stream.connect(onTick);
   const anyOpen = () => KEYS.some((k) => A[k] && A[k].sessionLive);
-  const slow = (ms) => (anyOpen() ? ms : Math.max(ms, 60000)); // market closed: poll gently (saves your free quota)
+  const slow = (ms) => (anyOpen() && !document.hidden ? ms : Math.max(ms, 60000)); // market closed, or this tab hidden / phone locked: poll gently (saves your free quota)
   // REST snapshot: every 5 s without the stream, every 20 s with it (OI change, ATM window, new strikes)
   // Stream on: full snapshot every 60 s. Stream off: prices every 6 s (1 call) and option chains every 30 s.
   let lastFull = Date.now();

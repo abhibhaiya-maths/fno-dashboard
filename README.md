@@ -1,3 +1,22 @@
+# ✅ नया (19 नवंबर 2026, भाग 7): Overview (पूरा बाज़ार एक page पर) + Market Intelligence — यही सबसे ताज़ा वर्ज़न है
+
+**अपलोड:** इस ZIP का `web`, `worker`, `firebase`, `README.md` GitHub पर डालें → Commit। **Worker दोबारा Deploy करें** (`worker/src/index.js`): नए हिस्से `/api/usage` (limit मीटर) और NSE की F&O ban file। कोई नई key नहीं। फिर Ctrl + Shift + R।
+
+1. **Overview (ऊपर पहला बटन):** मूड की सुई (risk-on/off), दुनिया, Nifty/Bank Nifty/Sensex/VIX, FII/DII, sector heatmap, कल के top शेयर, असामान्य volume और OI, खबरें, results, regime, prediction audit, बचने वाले शेयर, data कितना ताज़ा। हर डिब्बे पर tap = पूरा page। हर संख्या पर लेबल: ACTUAL / LIVE / EOD FILE / ESTIMATE / MODEL / N/A।
+2. **Strength & Money Flow:** Nifty से आगे/पीछे वाले शेयर और sector; sector-वार पैसे का अंदाज़ा (ESTIMATE); sector पर tap = उसके शेयर।
+3. **Sector Rotation:** आज/5/20 दिन, Leading-Improving-Weakening-Lagging, 0–100 score (weights आप बदल सकते हैं), heatmap।
+4. **Regime & Calm Zone:** बाज़ार का मौसम (trend/sideways, शांत/तूफ़ानी, event), पिछले ~60 दिन की पट्टी, किस मौसम में क्या चलता है; सबसे शांत/तूफ़ानी शेयर।
+5. **IV, Basis & Avoid:** ATM IV (NSE file से), IV ÷ असली चाल, futures basis, daily RSI; F&O ban, कल results, कम trading, बहुत भागे शेयर।
+6. **Data & Usage:** Upstox की calls (मिनट/30 मिनट), "slow down" कितनी बार, AI calls/fail, इस browser की calls। Tab छिपा हो या phone lock हो तो refresh 1 मिनट में एक बार।
+7. **Brief का Track Record:** हर list Firestore में हमेशा के लिए (कभी बदली नहीं जाती), अगले दिन MFE/MAE, और दो सीधे नियमों से तुलना।
+8. **Screener → Intraday Radar & ORB:** असामान्य तेज़ चाल, volume spike, futures OI उछाल, दिन का high/low।
+9. **Chart पर "Options range"** और **Option chain में OI की तस्वीर** (call/put OI, आज का बदलाव, max pain, expected range)।
+10. **Ctrl+K / 🔎 quick search**, पहली बार खोलने पर 6 कदम का tour, Guide में नए हिस्से।
+
+CALL/PUT सिग्नल, स्कोर, ग्रेड और पेपर ट्रेडिंग के नियम पहले जैसे हैं। Research और पढ़ाई के लिए; SEBI-registered सलाह नहीं।
+
+---
+
 # ✅ नया (19 नवंबर 2026, भाग 6): Next-Day Brief + ORB Scanner + Time Machine + Lots by risk + Guide — यही सबसे ताज़ा वर्ज़न है
 
 **अपलोड:** इस ZIP का `web`, `worker`, `firebase`, `README.md` GitHub पर डालें → Commit। **Worker दोबारा Deploy करना ज़रूरी है** (`worker/src/index.js`): नए हिस्से `/api/nsefile` (NSE की F&O और delivery files), `/api/intra` (आज की 1-मिनट candles), `/api/foq` (live futures OI)। कोई नई key नहीं। फिर साइट पर Ctrl + Shift + R।

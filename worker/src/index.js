@@ -161,7 +161,7 @@ async function up(env, path, force) {
     const ra = +r.headers.get('retry-after') || 0, up = (j.errors && j.errors[0] && (j.errors[0].message || j.errors[0].errorCode)) || '';
     RL.n = Date.now() - RL.last < 20 * 60e3 ? RL.n + 1 : 0; RL.last = Date.now();
     const wait = ra ? ra * 1000 : Math.min(15 * 60e3, 60e3 * 2 ** RL.n);
-    RL.until = Date.now() + wait;
+    RL.until = Date.now() + wait; USE.rl++; USE.rlLast = Date.now();
     RL.msg = `Upstox rate limit (${up || 'too many requests'}). Pausing data requests for ${Math.round(wait / 60000) || 1} min.`;
     const e = new HttpError(429, RL.msg, 'UPSTOX_RATE'); e.retryAfter = Math.ceil(wait / 1000); throw e;
   }
@@ -173,6 +173,8 @@ async function up(env, path, force) {
 }
 // पहला रास्ता फ़ेल हो तो दूसरा आज़माओ (v3 → v2)
 const RL = { until: 0, n: 0, last: 0, msg: '' }, UPC = [];
+// usage meter (this Worker instance only; Cloudflare may run several, so read these as a rough guide)
+const USE = { since: Date.now(), req: 0, byPath: {}, ai: 0, aiFail: 0, aiLast: 0, aiErr: '', rl: 0, rlLast: 0 };
 async function upAny(env, paths) {
   let last;
   for (const p of paths) {
@@ -1302,7 +1304,7 @@ async function aiJSON(env, prompt, maxTokens) {
   if (env.AI) steps.push(() => workersAI(env, prompt, maxTokens));
   if (env.ANTHROPIC_API_KEY) steps.push(() => anthropic(env, prompt, maxTokens));
   let last = new Error('No AI configured');
-  for (const fn of steps) { try { return parseAIArray(await fn()); } catch (e) { last = e; } }
+  for (const fn of steps) { USE.ai++; try { const r = parseAIArray(await fn()); USE.aiLast = Date.now(); return r; } catch (e) { last = e; USE.aiFail++; USE.aiErr = String(e.message || e).slice(0, 120); } }
   throw last;
 }
 // F&O symbols (from the NSE list the Screener already uses), to keep only real tickers
@@ -1416,7 +1418,7 @@ async function histRaw(req, env, url) {
   const t = await upstoxToken(env);
   UPC.push(Date.now());
   const r = await fetch(`${UP}/v3/historical-candle/${enc(key)}/${unit}/${iv}/${to}/${from}`, { headers: { Accept: 'application/json', Authorization: 'Bearer ' + t } });
-  if (r.status === 429) { RL.until = Date.now() + 60e3; RL.msg = 'Upstox rate limit while downloading history. Pausing 1 min.'; const e = new HttpError(429, RL.msg, 'UPSTOX_RATE'); e.retryAfter = 60; throw e; }
+  if (r.status === 429) { USE.rl++; USE.rlLast = Date.now(); RL.until = Date.now() + 60e3; RL.msg = 'Upstox rate limit while downloading history. Pausing 1 min.'; const e = new HttpError(429, RL.msg, 'UPSTOX_RATE'); e.retryAfter = 60; throw e; }
   if (r.status === 401) throw new HttpError(502, 'Upstox token is invalid or expired.', 'UPSTOX_TOKEN_BAD');
   return new Response(r.body, { status: r.ok ? 200 : 502, headers: { 'content-type': 'application/json; charset=utf-8', ...corsHeaders(req, env) } });
 }
@@ -1428,6 +1430,7 @@ const NSE_FILES = {
   fo: (d) => `https://nsearchives.nseindia.com/content/fo/BhavCopy_NSE_FO_0_0_0_${d}_F_0000.csv.zip`,                       // F&O bhavcopy (OI), ~6:30 pm
   sec: (d) => `https://nsearchives.nseindia.com/products/content/sec_bhavdata_full_${d.slice(6, 8)}${d.slice(4, 6)}${d.slice(0, 4)}.csv`, // prices + delivery %, ~6 pm
   n500: () => 'https://nsearchives.nseindia.com/content/indices/ind_nifty500list.csv',                                    // sector (industry) of each stock
+  ban: (d) => `https://nsearchives.nseindia.com/archives/fo/sec_ban/fo_secban_${d.slice(6, 8)}${d.slice(4, 6)}${d.slice(0, 4)}.csv`, // F&O ban list for that day
 };
 async function nseFile(req, env, url) {
   const f = url.searchParams.get('f') || '', d = url.searchParams.get('d') || '';
@@ -1446,7 +1449,7 @@ async function intraRaw(req, env, url) {
   const t = await upstoxToken(env);
   UPC.push(Date.now());
   const r = await fetch(`${UP}/v3/historical-candle/intraday/${enc(key)}/minutes/1`, { headers: { Accept: 'application/json', Authorization: 'Bearer ' + t } });
-  if (r.status === 429) { RL.until = Date.now() + 60e3; RL.msg = 'Upstox rate limit. Pausing 1 min.'; const e = new HttpError(429, RL.msg, 'UPSTOX_RATE'); e.retryAfter = 60; throw e; }
+  if (r.status === 429) { USE.rl++; USE.rlLast = Date.now(); RL.until = Date.now() + 60e3; RL.msg = 'Upstox rate limit. Pausing 1 min.'; const e = new HttpError(429, RL.msg, 'UPSTOX_RATE'); e.retryAfter = 60; throw e; }
   if (r.status === 401) throw new HttpError(502, 'Upstox token is invalid or expired.', 'UPSTOX_TOKEN_BAD');
   return new Response(r.body, { status: r.ok ? 200 : 502, headers: { 'content-type': 'application/json; charset=utf-8', ...corsHeaders(req, env) } });
 }
@@ -1469,6 +1472,7 @@ async function route(req, env, url) {
   if (p === '/' || p === '/health') return json({ ok: true, name: 'F&O Terminal Worker' }, 200, req, env);
 
   const email = await verifyUser(req, env);
+  USE.req++; USE.byPath[p] = (USE.byPath[p] || 0) + 1;
   const idx = (url.searchParams.get('index') || '').toUpperCase();
   const sess = url.searchParams.get('s') === 'MCX' ? 'MCX' : 'NSE';
   const R = (d) => json(d, 200, req, env);
@@ -1526,6 +1530,10 @@ async function route(req, env, url) {
     }
     case '/api/earnings': return R(await shared('earnings', 30e3, () => earningsRadar(env)));
     case '/api/nsefile': return nseFile(req, env, url);
+    case '/api/usage': {
+      const now = Date.now(), top = Object.entries(USE.byPath).sort((x, y) => y[1] - x[1]).slice(0, 12);
+      return R({ ts: now, since: USE.since, req: USE.req, top, up1m: UPC.filter((t) => t > now - 60e3).length, up30m: UPC.filter((t) => t > now - 1800e3).length, rlWait: Math.max(0, Math.ceil((RL.until - now) / 1000)), rlMsg: RL.until > now ? RL.msg : '', rlHits: USE.rl, rlLast: USE.rlLast, ai: USE.ai, aiFail: USE.aiFail, aiLast: USE.aiLast, aiErr: USE.aiErr, limits: { upstoxPerMin: 500, upstoxPer30m: 2000 } });
+    }
     case '/api/intra': return intraRaw(req, env, url);
     case '/api/foq': {
       const toks = [...new Set((url.searchParams.get('t') || '').split(',').map((x) => x.replace(/\D/g, '')).filter(Boolean))].slice(0, 750);

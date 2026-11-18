@@ -5,9 +5,9 @@ const COL = {
 };
 const FONT = '600 12px Rajdhani, system-ui, sans-serif';
 let lastActiveTk = null, sub = 'rsi', tab = 'chain', tf = 5, CI = null, newsTab = 'all', newsMore = false, lastOrb = null;
-const OV = Store.pref('overlays', { vwap: true, ema20: true, ema50: false, bb: false, st: true, fib: true, cpr: true, piv: false, orb: false, vp: false });
-const OVL = { vwap: 'VWAP', ema20: 'EMA 20', ema50: 'EMA 50', bb: 'Bollinger', st: 'Supertrend', fib: 'Fibonacci', cpr: 'CPR', piv: 'Pivots', orb: 'Opening range', vp: 'Volume profile' };
-const OVC = { vwap: COL.vwap, ema20: COL.ema20, ema50: COL.ema50, bb: COL.bb, st: COL.call, fib: COL.brass, cpr: COL.cpr, piv: COL.muted, orb: COL.text, vp: COL.vwap };
+const OV = Object.assign({ vwap: true, ema20: true, ema50: false, bb: false, st: true, fib: true, cpr: true, piv: false, orb: false, vp: false, exr: false }, Store.pref('overlays', {}));
+const OVL = { vwap: 'VWAP', ema20: 'EMA 20', ema50: 'EMA 50', bb: 'Bollinger', st: 'Supertrend', fib: 'Fibonacci', cpr: 'CPR', piv: 'Pivots', orb: 'Opening range', vp: 'Volume profile', exr: 'Options range' };
+const OVC = { vwap: COL.vwap, ema20: COL.ema20, ema50: COL.ema50, bb: COL.bb, st: COL.call, fib: COL.brass, cpr: COL.cpr, piv: COL.muted, orb: COL.text, vp: COL.vwap, exr: COL.violet };
 const VIEW = { 1: 90, 5: 75, 15: 50, 60: 21 }, TFL = { 1: '1m', 5: '5m', 15: '15m', 60: '1h' };
 const FIB_KEY = [0.382, 0.5, 0.618];
 const ALL_HV = ['HDFC Bank', 'ICICI Bank', 'Reliance', 'Infosys', 'Bharti Airtel', 'L&T', 'ITC', 'TCS', 'SBI', 'Kotak', 'Axis Bank', 'IndusInd', 'Federal Bank', 'AU Bank'];
@@ -201,7 +201,7 @@ function renderTab() {
     if (!ch.rows.length) { $('tabBody').innerHTML = '<div class="mut">No option chain data yet. It refreshes every 15–30 seconds.</div>' + futVolHTML(a); return; }
     const L = (v) => f1(v / 1e5), mxOI = Math.max(...ch.view.map((r) => Math.max(r.ce.oi, r.pe.oi))) || 1;
     const bar = (v, c) => `<span class="oibar" style="width:${Math.round((v / mxOI) * 46)}px;background:${c}"></span>`;
-    h = `<div class="tbl"><table class="chain"><thead><tr><th>CE OI (L)</th><th>OI chg</th><th>IV</th><th>Delta</th><th>CE LTP</th><th class="k">Strike</th><th class="l">PE LTP</th><th class="l">Delta</th><th class="l">IV</th><th class="l">OI chg</th><th class="l">PE OI (L)</th></tr></thead><tbody>` +
+    h = oiPicture(a, ch) + `<div class="tbl"><table class="chain"><thead><tr><th>CE OI (L)</th><th>OI chg</th><th>IV</th><th>Delta</th><th>CE LTP</th><th class="k">Strike</th><th class="l">PE LTP</th><th class="l">Delta</th><th class="l">IV</th><th class="l">OI chg</th><th class="l">PE OI (L)</th></tr></thead><tbody>` +
       ch.view.map((r) => {
         const ci = r.K < a.price ? 'itm' : '', pi = r.K > a.price ? 'itm' : '', cc = r.ce.oi - (r.ce.poi || r.ce.oi), pc = r.pe.oi - (r.pe.poi || r.pe.oi);
         return `<tr class="${r.K === ch.atm ? 'atm' : ''}"><td class="${ci}">${bar(r.ce.oi, COL.put)}${L(r.ce.oi)}</td><td class="${ci} ${cc >= 0 ? 'up' : 'down'}">${sgn(cc)}${L(cc)}</td><td class="${ci}">${f1(r.ce.iv * 100)}</td><td class="${ci}">${f2(r.ce.de)}</td><td class="${ci}">${f2(r.ce.ltp)}</td>
@@ -437,6 +437,8 @@ function drawChart() {
   if (OV.piv) [['R1', COL.put], ['R2', COL.put], ['R3', COL.put], ['S1', COL.call], ['S2', COL.call], ['S3', COL.call]].forEach(([nm, c]) => lv.push([nm, a.piv[nm], c, 1]));
   if (OV.fib) a.fib.forEach((f) => lv.push([`Fib ${(f.r * 100).toFixed(1)}%`, f.v, COL.brass, FIB_KEY.includes(f.r) ? 1.6 : 0.8]));
   if (OV.orb) lv.push(['OR high', a.ORH, COL.text, 1], ['OR low', a.ORL, COL.text, 1]);
+  // the day's range the options are pricing in: previous close ± ATM IV for one day (about 2 in 3 days stay inside)
+  if (OV.exr && a.ch && ok(a.ch.atmIV) && a.ch.atmIV > 0 && ok(a.PC)) { const d = (a.PC * a.ch.atmIV) / Math.sqrt(252); lv.push(['Options range high', a.PC + d, COL.violet, 1.4], ['Options range low', a.PC - d, COL.violet, 1.4]); }
   // लाइनें खींचो, लेबल तभी जब पास वाले लेबल से टकराए नहीं
   const placed = [];
   lv.filter(([, v]) => v >= mn && v <= mx).sort((p, q) => q[3] - p[3]).forEach(([nm, v, c, w]) => {
@@ -760,3 +762,26 @@ function zoomBy(f) { const N = CI ? CI.k.length : 0, n0 = ZM.n || VIEW[tf]; ZM.n
   new MutationObserver(() => { if (!q) { q = true; requestAnimationFrame(run); } }).observe(document.body, { childList: true, subtree: true });
   run();
 })();
+
+/* Option chain as a picture: call OI (red) and put OI (green) at each strike, today's change as a lighter cap, the price and max pain marked */
+function oiPicture(a, ch) {
+  try {
+    const R = ch.view || []; if (R.length < 3) return '';
+    const n = R.length, bw = 30, H = 150, mx = Math.max(1, ...R.map((r) => Math.max(r.ce.oi, r.pe.oi, r.ce.poi || 0, r.pe.poi || 0)));
+    const y = (v) => H - (v / mx) * (H - 16), Ks = R.map((r) => r.K), kx = (K) => { let i = 0; while (i < n - 1 && Ks[i + 1] <= K) i++; const f = i < n - 1 ? (K - Ks[i]) / (Ks[i + 1] - Ks[i]) : 0; return i * bw + bw / 2 + Math.max(0, Math.min(1, f)) * bw; };
+    let g = '';
+    R.forEach((r, i) => {
+      const x = i * bw, cp = r.ce.poi || r.ce.oi, pp = r.pe.poi || r.pe.oi;
+      g += `<rect x="${x + 4}" y="${y(Math.min(cp, r.ce.oi))}" width="10" height="${H - y(Math.min(cp, r.ce.oi))}" fill="${COL.put}" opacity=".8"/>`;
+      if (r.ce.oi !== cp) g += `<rect x="${x + 4}" y="${y(Math.max(cp, r.ce.oi))}" width="10" height="${Math.abs(y(cp) - y(r.ce.oi))}" fill="${r.ce.oi > cp ? COL.put : 'none'}" stroke="${COL.put}" stroke-dasharray="${r.ce.oi > cp ? '0' : '2 2'}" opacity=".35"/>`;
+      g += `<rect x="${x + 16}" y="${y(Math.min(pp, r.pe.oi))}" width="10" height="${H - y(Math.min(pp, r.pe.oi))}" fill="${COL.call}" opacity=".8"/>`;
+      if (r.pe.oi !== pp) g += `<rect x="${x + 16}" y="${y(Math.max(pp, r.pe.oi))}" width="10" height="${Math.abs(y(pp) - y(r.pe.oi))}" fill="${r.pe.oi > pp ? COL.call : 'none'}" stroke="${COL.call}" stroke-dasharray="${r.pe.oi > pp ? '0' : '2 2'}" opacity=".35"/>`;
+      if (i % Math.ceil(n / 12) === 0 || r.K === ch.atm) g += `<text x="${x + bw / 2}" y="${H + 13}" text-anchor="middle" font-size="9" fill="${r.K === ch.atm ? COL.cyan : COL.muted}">${r.K}</text>`;
+    });
+    const px = kx(a.price); g += `<line x1="${px}" y1="4" x2="${px}" y2="${H}" stroke="${COL.cyan}" stroke-width="1.5"/><text x="${px + 3}" y="12" font-size="10" fill="${COL.cyan}">Price ${f0(a.price)}</text>`;
+    if (ok(ch.mp) && ch.mp >= Ks[0] && ch.mp <= Ks[n - 1]) { const mxp = kx(ch.mp); g += `<line x1="${mxp}" y1="18" x2="${mxp}" y2="${H}" stroke="${COL.brass}" stroke-dasharray="4 3"/><text x="${mxp + 3}" y="26" font-size="10" fill="${COL.brass}">Max pain ${f0(ch.mp)}</text>`; }
+    if (ok(ch.straddle)) { const l = kx(a.price - ch.straddle), r2 = kx(a.price + ch.straddle); g = `<rect x="${l}" y="0" width="${Math.max(0, r2 - l)}" height="${H}" fill="${COL.violet}" opacity=".08"/>` + g; }
+    return `<div class="oipic"><svg viewBox="0 0 ${n * bw} ${H + 18}" role="img" aria-label="Open interest by strike">${g}</svg>
+      <div class="legend"><span style="color:${COL.put}">■ Call OI</span> (writers' resistance) · <span style="color:${COL.call}">■ Put OI</span> (writers' support) · light cap = added today, dashed = cut today · shaded band = range the options price in to expiry. OI zones are not walls: news can clear them fast.</div></div>`;
+  } catch (e) { return ''; }
+}

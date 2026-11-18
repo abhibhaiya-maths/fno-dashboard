@@ -128,7 +128,7 @@ const Markets = (() => {
     ['orders', 'Big Order Wins', 'Order-win headlines from the last 7 days (trusted business news).'],
     ['brokers', 'Broker Upgrades And Downgrades', 'Rating and target-price changes reported in the last 7 days.'],
     ['results', 'Results This Week', 'F&O companies with board meetings for results in the next 7 days (NSE calendar).'],
-    ['orb', 'Intraday Breakouts (ORB)', 'Live, every 2 minutes: F&O stocks breaking above or below their 9:15–9:30 range, with volume pace and where the idea is wrong.'],
+    ['orb', 'Intraday Radar & Breakouts (ORB)', 'Live, every 2 minutes: unusual moves, volume spikes and futures OI jumps, plus stocks breaking out of their 9:15–9:30 range.'],
     ['multi', 'Multibagger Watch', 'Early signs of a long run: a rising 200 DMA, price above the 50 and 200 DMA, beating Nifty over a year, buying volume heavier than selling, a tight base near the high, plus order wins and broker upgrades. Price, volume and news only: check sales, profit and debt in the results before investing.'],
   ];
   async function loadScr() {

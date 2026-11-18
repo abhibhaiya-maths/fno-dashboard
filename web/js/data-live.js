@@ -7,15 +7,20 @@ const LiveSource = (() => {
   let glob = [], cal = { items: [], sources: {} }, fii = null, off = { items: [], sources: {} }, vixDaily = null, geo = null;
 
   let rateUntil = 0;
+  // this browser's own calls to the Worker (for the Overview → Data & Usage tab)
+  const USE = [], USE_RL = [];
+  function usage() { const t = Date.now() - 600e3, L = USE.filter((x) => x[0] > t), c = {}; L.forEach(([, p]) => { c[p] = (c[p] || 0) + 1; }); return { n10: L.length, top: Object.entries(c).sort((a, b) => b[1] - a[1]).slice(0, 10), rate: USE_RL.filter((x) => x > t).length }; }
   const rateLimited = () => Date.now() < rateUntil;
   async function api(path, opts = {}) {
     if (rateLimited() && /\/api\/(snapshot|chain|candles|fut|daily|global|search|inst|map)/.test(path)) { const e = new Error(`Upstox rate limit: data requests paused, retry in ${Math.ceil((rateUntil - Date.now()) / 1000)} s`); e.code = 'UPSTOX_RATE'; throw e; }
+    USE.push([Date.now(), path.split('?')[0]]); if (USE.length > 3000) USE.splice(0, 1000);
     const t = await Store.idToken();
     const r = await fetch(APP_CONFIG.WORKER_URL.replace(/\/$/, '') + path, { ...opts, headers: { ...(opts.headers || {}), Authorization: 'Bearer ' + t, 'Content-Type': 'application/json' } });
     const j = await r.json().catch(() => ({ error: 'Bad response from Worker (' + r.status + ')' }));
     if (!r.ok) {
       const e = new Error(j.error || (j.errors && j.errors[0] && (j.errors[0].message || j.errors[0].errorCode)) || 'HTTP ' + r.status); e.code = j.code; e.status = r.status;
       if (e.code === 'UPSTOX_RATE') rateUntil = Date.now() + 1000 * Math.max(60, j.retryAfter || 90); // Upstox blocked us: pause as long as it asks
+      if (e.code === 'UPSTOX_RATE') USE_RL.push(Date.now());
       throw e;
     }
     return j;
@@ -334,7 +339,7 @@ const LiveSource = (() => {
   async function stt(audio, mime) { return api('/api/stt', { method: 'POST', body: JSON.stringify({ audio, mime }) }); }
   async function ask(question, context, history) { return api('/api/ask', { method: 'POST', body: JSON.stringify({ question, context, history: history || [] }) }); }
   function connectUrl(idToken) { return APP_CONFIG.WORKER_URL.replace(/\/$/, '') + '/auth/login?id_token=' + encodeURIComponent(idToken); }
-  return { mode: 'live', raw: (p) => api(p), init, refreshSnapshot, refreshChains, refreshCandles, refreshFut, refreshDaily, refreshNews, refreshResults, refreshGlobal, refreshCalendar, refreshFII, refreshOfficial,
+  return { mode: 'live', usage, raw: (p) => api(p), init, refreshSnapshot, refreshChains, refreshCandles, refreshFut, refreshDaily, refreshNews, refreshResults, refreshGlobal, refreshCalendar, refreshFII, refreshOfficial,
     search, instInfo, get, clock, rateLimited, stt, rateWait: () => Math.max(0, Math.ceil((rateUntil - Date.now()) / 1000)), ask, connectUrl, results: () => resultsData, stream: Stream, drop: (k) => { delete raw[k]; },
     global: () => glob, calendar: () => cal, official: () => off, fiiAuto: () => fii, geo: () => geo, refreshGeo, world: () => world, maps: () => maps, hvNews: () => hvNews, refreshMaps, refreshHvNews, participant: () => part, refreshWorld, refreshParticipant,
     get status() { return status; }, get error() { return lastErr; }, newsAI: (k) => R(k).newsAI, newsSources: (k) => R(k).sources };

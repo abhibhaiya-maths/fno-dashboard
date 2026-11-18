@@ -59,13 +59,15 @@ const Brief = (() => {
         f.oi += oi; f.doi += d; f.toks.push([+r[iId] || 0, x, oi]);
         if (!f.near || x < f.near.x) f.near = { x, c: +r[iC] || null, pc: +r[iP] || null, u: iU >= 0 ? +r[iU] || null : null, tok: +r[iId] || 0 };
       } else if ((tp === 'STO' || tp === 'IDO') && x > date) {
-        const o = opt[s] || (opt[s] = { x, ce: {}, pe: {} });
-        if (x < o.x) { o.x = x; o.ce = {}; o.pe = {}; } if (x !== o.x) continue;
-        const K = +r[iK], side = (r[iO] || '').trim() === 'CE' ? 'ce' : 'pe'; if (ok(K)) o[side][K] = (o[side][K] || 0) + oi;
+        const o = opt[s] || (opt[s] = { x, ce: {}, pe: {}, cp: {}, pp: {}, u: null });
+        if (x < o.x) { o.x = x; o.ce = {}; o.pe = {}; o.cp = {}; o.pp = {}; o.u = null; } if (x !== o.x) continue;
+        const K = +r[iK], side = (r[iO] || '').trim() === 'CE' ? 'ce' : 'pe'; if (ok(K)) { o[side][K] = (o[side][K] || 0) + oi; const px = +r[iC]; if (px > 0) o[side === 'ce' ? 'cp' : 'pp'][K] = px; }
+        if (iU >= 0 && +r[iU] > 0) o.u = +r[iU];
       }
     }
     const walls = {};
-    for (const s in opt) { const o = opt[s], top = (m) => { let k = null, v = 0; for (const K in m) if (m[K] > v) { v = m[K]; k = +K; } return k; }, sum = (m) => Object.values(m).reduce((a, b) => a + b, 0), ce = sum(o.ce), pe = sum(o.pe); walls[s] = { x: o.x, ce: top(o.ce), pe: top(o.pe), pcr: ce ? pe / ce : null }; }
+    for (const s in opt) { const o = opt[s], top = (m) => { let k = null, v = 0; for (const K in m) if (m[K] > v) { v = m[K]; k = +K; } return k; }, sum = (m) => Object.values(m).reduce((a, b) => a + b, 0), ce = sum(o.ce), pe = sum(o.pe); walls[s] = { x: o.x, ce: top(o.ce), pe: top(o.pe), pcr: ce ? pe / ce : null };
+      if (o.u) { const Ks = Object.keys(o.cp).filter((K) => o.pp[K]).map(Number).sort((a, b) => Math.abs(a - o.u) - Math.abs(b - o.u)); if (Ks.length) walls[s].atm = { K: Ks[0], c: o.cp[Ks[0]], p: o.pp[Ks[0]], u: o.u }; } }
     return { date, fut, walls };
   }
   // full equity bhavcopy with delivery: [close, prevClose, open, high, low, volume, delivery %]
@@ -174,7 +176,12 @@ const Brief = (() => {
     const resTom = S.filter((x) => x.res && x.res <= nextD && x.res > I.date).sort((a, b) => Math.abs(b.sc) - Math.abs(a.sc));
     const elig = S.filter((x) => !(x.res && x.res <= nextD && x.res > I.date) && x.agree >= 3 && x.against <= 1);
     const pos = elig.filter((x) => x.sc >= 1.75).sort((a, b) => b.sc - a.sc).slice(0, 5), neg = elig.filter((x) => x.sc <= -1.75).sort((a, b) => a.sc - b.sc).slice(0, 5);
-    return { stocks: S, sectors: SEC, pos, neg, resTom, market: market(I, S, nf), next: nextD };
+    // simple baselines, saved with the picks so the Track Record can compare: is the full model better than plain rules?
+    const ok2 = S.filter((x) => !(x.res && x.res <= nextD && x.res > I.date)), rel = (x) => x.r1 - (ok(nf) ? nf : 0);
+    const mom = { pos: ok2.slice().sort((a, b) => rel(b) - rel(a)).slice(0, 5), neg: ok2.slice().sort((a, b) => rel(a) - rel(b)).slice(0, 5) };
+    const big = SEC.filter((x) => x.n >= 3), bs1 = big[0], ws1 = big[big.length - 1];
+    const secB = { pos: bs1 ? ok2.filter((x) => x.ind === bs1.ind).sort((a, b) => b.r1 - a.r1).slice(0, 5) : [], neg: ws1 && ws1 !== bs1 ? ok2.filter((x) => x.ind === ws1.ind).sort((a, b) => a.r1 - b.r1).slice(0, 5) : [] };
+    return { stocks: S, sectors: SEC, pos, neg, resTom, market: market(I, S, nf), next: nextD, base: { mom, sec: secB } };
   }
   // the whole market: breadth, FII/DII, world, GIFT Nifty → a tone
   function market(I, S, nf) {
@@ -215,16 +222,16 @@ const Brief = (() => {
     const p = parseSec(txt, keep); if (!p.date || Object.keys(p.s).length < 20) return null;
     await idbSet(k, p);
     const idx = (await idbGet('brief_sec_idx')) || []; if (!idx.includes(d8)) idx.push(d8); idx.sort();
-    while (idx.length > 20) await idbDel('brief_sec_' + idx.shift());
+    while (idx.length > 26) await idbDel('brief_sec_' + idx.shift());
     await idbSet('brief_sec_idx', idx);
     return p;
   }
   async function foFor(d8) {
-    const k = 'brief_fo_' + d8, c = await idbGet(k); if (c) return c;
+    const k = 'brief_fo2_' + d8, c = await idbGet(k); if (c) return c;
     const txt = await nse('fo', d8); if (!txt) return null;
     const p = parseFO(txt); if (!p.date) return null;
-    const old = await idbGet('brief_fo_last'); if (old && old !== d8) await idbDel('brief_fo_' + old);
-    await idbSet(k, p); await idbSet('brief_fo_last', d8);
+    const old = await idbGet('brief_fo2_last'); if (old && old !== d8) await idbDel('brief_fo2_' + old);
+    await idbSet(k, p); await idbSet('brief_fo2_last', d8);
     return p;
   }
   async function sectors() {
@@ -292,7 +299,10 @@ const Brief = (() => {
     const nx = nextWeekday(I.date), nowS = ist().toISOString().slice(0, 16).replace('T', ' ');
     if (nowS >= nx + ' 09:15') return;
     const rec = Store.pref(recKey(), {}), d = I.date, e = rec[d] || {};
-    e[I.mode] = { ts: Date.now(), picks: [...R.pos.map((x) => ({ s: x.sym, side: 1, sc: +x.sc.toFixed(2), c: x.price })), ...R.neg.map((x) => ({ s: x.sym, side: -1, sc: +x.sc.toFixed(2), c: x.price }))] };
+    const pk = (P, N) => [...P.map((x) => ({ s: x.sym, side: 1, sc: +x.sc.toFixed(2), c: x.price })), ...N.map((x) => ({ s: x.sym, side: -1, sc: +x.sc.toFixed(2), c: x.price }))];
+    e[I.mode] = { ts: Date.now(), picks: pk(R.pos, R.neg) };
+    if (I.mode === 'final' && R.base) { e.mom = { ts: Date.now(), picks: pk(R.base.mom.pos, R.base.mom.neg) }; e.sec = { ts: Date.now(), picks: pk(R.base.sec.pos, R.base.sec.neg) }; }
+    cloudSave(d, I.mode, { date: d, mode: I.mode, ts: Date.now(), picks: e[I.mode].picks, mom: e.mom ? e.mom.picks : null, sec: e.sec ? e.sec.picks : null, nifty: e.nifty || null, oiNote: I.oiNote || '', miss: (B && B.miss) || [] });
     if (I.nifty && !I.nifty.fut && I.mode === 'final') e.nifty = [I.nifty.c, I.nifty.pc];
     rec[d] = e; const keys = Object.keys(rec).sort(); while (keys.length > 120) delete rec[keys.shift()];
     Store.setPref(recKey(), rec);
@@ -305,8 +315,10 @@ const Brief = (() => {
       const nd = Object.keys(secByDate).map(d8to10).filter((x) => x > d).sort()[0]; if (!nd) return;
       const T = secByDate[nd.replace(/-/g, '')], base = secByDate[d.replace(/-/g, '')]; if (!T) return;
       const nf = rec[nd] && rec[nd].nifty ? rec[nd].nifty[0] / rec[nd].nifty[1] - 1 : null;
-      e.res = {}; ['prov', 'final'].forEach((m) => { if (!e[m]) return; e.res[m] = e[m].picks.map((p) => { const r = T.s[p.s], c0 = base && base.s[p.s] ? base.s[p.s][0] : p.c; if (!r || !c0) return null; return { s: p.s, side: p.side, gap: r[2] / c0 - 1, mv: r[0] / c0 - 1, nf }; }).filter(Boolean); });
-      e.next = nd; dirty = true;
+      e.res = {}; ['prov', 'final', 'mom', 'sec'].forEach((m) => { if (!e[m]) return; e.res[m] = e[m].picks.map((p) => { const r = T.s[p.s], c0 = base && base.s[p.s] ? base.s[p.s][0] : p.c; if (!r || !c0) return null;
+        const hi = ok(r[3]) ? r[3] / c0 - 1 : null, lo = ok(r[4]) ? r[4] / c0 - 1 : null;
+        return { s: p.s, side: p.side, gap: r[2] / c0 - 1, mv: r[0] / c0 - 1, nf, mfe: p.side > 0 ? hi : ok(lo) ? -lo : null, mae: p.side > 0 ? lo : ok(hi) ? -hi : null }; }).filter(Boolean); });
+      e.next = nd; dirty = true; cloudRes(d, e.res, nd);
     });
     if (dirty) Store.setPref(recKey(), rec);
     return rec;
@@ -316,8 +328,20 @@ const Brief = (() => {
     const pos = L.filter((x) => x.side > 0), neg = L.filter((x) => x.side < 0), days = new Set(L.map((x) => x.d)).size;
     const hit = (A) => (A.length ? A.filter((x) => x.side * x.mv > 0).length / A.length : null);
     const avg = (A, f) => (A.length ? A.reduce((s, x) => s + f(x), 0) / A.length : null);
-    const vsN = L.filter((x) => ok(x.nf));
-    return { n: L.length, days, pos: pos.length, neg: neg.length, hitPos: hit(pos), hitNeg: hit(neg), edge: avg(L, (x) => x.side * x.mv), gapEdge: avg(L, (x) => x.side * x.gap), vsN: avg(vsN, (x) => x.side * (x.mv - x.nf)), nVs: vsN.length };
+    const vsN = L.filter((x) => ok(x.nf)), M = L.filter((x) => ok(x.mfe) && ok(x.mae));
+    return { n: L.length, days, pos: pos.length, neg: neg.length, hitPos: hit(pos), hitNeg: hit(neg), edge: avg(L, (x) => x.side * x.mv), gapEdge: avg(L, (x) => x.side * x.gap), vsN: avg(vsN, (x) => x.side * (x.mv - x.nf)), nVs: vsN.length, mfe: avg(M, (x) => x.mfe), mae: avg(M, (x) => x.mae), hit: L.length ? L.filter((x) => x.side * x.mv > 0).length / L.length : null };
+  }
+
+  const fsCol = () => (live() && Store.cloud && Store.user && window.firebase ? firebase.firestore().collection('users').doc(Store.user.uid).collection('briefpred') : null);
+  async function cloudSave(d, mode, doc) { const c = fsCol(); if (!c) return; try { const ref = c.doc(d + '_' + mode), got = await ref.get(); if (got.exists) return; await ref.set(doc); } catch (e) { /* offline: the browser copy stays */ } }
+  async function cloudRes(d, res, nd) { const c = fsCol(); if (!c) return; try { for (const m of ['prov', 'final']) { if (!res[m]) continue; const ref = c.doc(d + '_' + m), got = await ref.get(); if (got.exists && !got.data().res) await ref.update({ res: res, next: nd }); } } catch (e) { /* later */ } }
+  // other devices: copy the cloud record into this browser (never overwrites what is here)
+  async function cloudPull() {
+    const c = fsCol(); if (!c) return; try {
+      const q = await c.orderBy('date', 'desc').limit(120).get(), rec = Store.pref(recKey(), {}); let dirty = false;
+      q.docs.forEach((x) => { const v = x.data(), e = rec[v.date] || (rec[v.date] = {}); if (!e[v.mode]) { e[v.mode] = { ts: v.ts, picks: v.picks }; dirty = true; } if (v.mode === 'final') { if (!e.mom && v.mom) { e.mom = { ts: v.ts, picks: v.mom }; dirty = true; } if (!e.sec && v.sec) { e.sec = { ts: v.ts, picks: v.sec }; dirty = true; } if (!e.nifty && v.nifty) { e.nifty = v.nifty; dirty = true; } } if (!e.res && v.res) { e.res = v.res; e.next = v.next; dirty = true; } });
+      if (dirty) { Store.setPref(recKey(), rec); if (tab === 'rec') render(); }
+    } catch (e) { /* offline */ }
   }
 
   /* ---------- build ---------- */
@@ -344,7 +368,7 @@ const Brief = (() => {
       <span class="mut" id="bfNote"></span><button class="x" onclick="Brief.close()" aria-label="Close">✕</button></div><div id="bfBody"></div>`;
     document.body.appendChild(el);
   }
-  function open(t) { mk(); $b('bf').classList.add('on'); document.body.style.overflow = 'hidden'; show(t || tab); if (!B || Date.now() - B.ts > 10 * 60e3) build(); }
+  function open(t) { mk(); $b('bf').classList.add('on'); document.body.style.overflow = 'hidden'; show(t || tab); if (!B || Date.now() - B.ts > 10 * 60e3) build(); cloudPull(); }
   function close() { const el = $b('bf'); if (el) el.classList.remove('on'); document.body.style.overflow = ''; }
   function show(t) { tab = t; render(); }
   function sort(k) { sortK = k; render(); }
@@ -405,16 +429,17 @@ const Brief = (() => {
       <td class="l" style="font-size:12px">${x.f.slice().sort((a, b) => Math.abs(b.pts) - Math.abs(a.pts)).slice(0, 2).map((y) => esc(y.t)).join(' ')}</td></tr>`).join('')}</tbody></table></div>`;
   }
   function recHTML() {
-    const rec = Store.pref(recKey(), {}), F = stats(rec, 'final'), P = stats(rec, 'prov');
-    const row = (n, s) => `<tr><td class="l"><b>${n}</b></td><td>${s.days}</td><td>${s.pos ? `${f0(s.hitPos * 100)}% <small class="mut">of ${s.pos}</small>` : '–'}</td><td>${s.neg ? `${f0(s.hitNeg * 100)}% <small class="mut">of ${s.neg}</small>` : '–'}</td><td class="${cl(s.gapEdge)}">${pc(s.gapEdge, 2)}</td><td class="${cl(s.edge)}">${pc(s.edge, 2)}</td><td class="${cl(s.vsN)}">${s.nVs ? pc(s.vsN, 2) : '–'}</td></tr>`;
+    const rec = Store.pref(recKey(), {}), F = stats(rec, 'final'), P = stats(rec, 'prov'), MO = stats(rec, 'mom'), SE = stats(rec, 'sec');
+    const row = (n, s) => `<tr><td class="l"><b>${n}</b></td><td>${s.days}</td><td>${s.pos ? `${f0(s.hitPos * 100)}% <small class="mut">of ${s.pos}</small>` : '–'}</td><td>${s.neg ? `${f0(s.hitNeg * 100)}% <small class="mut">of ${s.neg}</small>` : '–'}</td><td class="${cl(s.gapEdge)}">${pc(s.gapEdge, 2)}</td><td class="${cl(s.edge)}">${pc(s.edge, 2)}</td><td class="${cl(s.vsN)}">${s.nVs ? pc(s.vsN, 2) : '–'}</td><td class="up">${pc(s.mfe, 2)}</td><td class="dn">${pc(s.mae, 2)}</td></tr>`;
     let h = `<div class="gd-mean"><b>आसान मतलब:</b> हर दिन की list यहाँ save होती है और अगले दिन के close से जाँची जाती है। "Positive सही" = जितने positive शेयर अगले दिन सच में ऊपर बंद हुए। 50% से ऊपर लगातार रहे, तभी list पर भरोसा बढ़ाइए। कम से कम 20 दिन का record देखें।</div>`;
     const few = F.days < 20;
-    h += `<div class="tblw"><table><thead><tr><th class="l">Version</th><th>Days checked</th><th>Positive picks closed up</th><th>Negative picks closed down</th><th>Avg next-day gap (in pick's direction)</th><th>Avg next-day close move</th><th>vs Nifty</th></tr></thead><tbody>${row('Final (evening)', F)}${row('Provisional (3 pm)', P)}</tbody></table></div>`;
+    h += `<div class="tblw"><table><thead><tr><th class="l">Version</th><th>Days</th><th>Positives up</th><th>Negatives down</th><th>Avg gap</th><th>Avg move</th><th>vs Nifty</th><th>Best in favour</th><th>Worst against</th></tr></thead><tbody>${row('Brief, final (all signs)', F)}${row('Brief, provisional (3 pm)', P)}${row('Plain rule: biggest movers vs Nifty', MO)}${row('Plain rule: strongest / weakest sector', SE)}</tbody></table></div>
+      <div class="legend" style="margin-top:-2px">The two "plain rule" rows are simple strategies saved on the same days, to check whether the full Brief adds anything. If a plain rule does as well, the extra signs aren't helping. Every list is saved before the next session opens and is never changed later${Store.cloud && Store.user ? ' (also kept in your Firestore, so phone and computer share it)' : ''}.</div>`;
     h += `<div class="alert ${few ? 'i' : F.edge > 0 ? 'i' : 'd'}">${F.days ? few ? `Only ${F.days} day${F.days > 1 ? 's' : ''} checked so far: too few to judge (needs at least 20). Keep opening the brief each evening.` : F.edge > 0.002 ? 'So far the picks moved in their direction on average. Keep watching: an edge can fade.' : 'So far the picks have NOT beaten a coin flip. Treat the lists as a reading of today, not a forecast.' : 'No day checked yet. Each brief is checked after the next trading day\'s NSE file is out.'}</div>`;
     const days = Object.keys(rec).sort().reverse().slice(0, 15);
     if (days.length) h += `<section class="mk-panel"><div class="ph"><h2>Last days</h2></div>${days.map((d) => { const e = rec[d], r = e.res && (e.res.final || e.res.prov), P2 = (e.final || e.prov || { picks: [] }).picks;
       return `<div class="bf-day"><b>${nice(d)}</b> <span class="mut">${e.final ? 'final' : 'provisional'}${e.next ? ` → checked on ${nice(e.next)}` : ' → waiting for the next day'}</span><div class="why">${(r || P2).map((p) => { const mv = p.mv; return `<span class="${ok(mv) ? (p.side * mv > 0 ? 'up' : 'dn') : ''}">${p.side > 0 ? '▲' : '▼'} ${esc(p.s)}${ok(mv) ? ` ${pc(mv)}` : ''}</span>`; }).join('') || '<span class="mut">no picks</span>'}</div></div>`; }).join('')}</section>`;
-    h += `<div class="legend">Move = next trading day's close vs the brief day's close (NSE files). Gap = next day's open vs that close. Saved in this browser${live() ? '' : ' (sample data)'}.</div>`;
+    h += `<div class="legend">Move = next trading day's close vs the brief day's close (NSE files), in the pick's direction. Gap = next day's open vs that close. Best in favour / worst against = the next day's high and low (MFE / MAE): how far it went your way and against you. Saved in this browser${live() ? '' : ' (sample data)'}.</div>`;
     return h;
   }
   function howHTML() {
@@ -481,6 +506,20 @@ const Brief = (() => {
     return { I, miss: [], ts: Date.now(), files: {}, live: false };
   }
 
-  return { open, close, show, build, sort, analyze, score, parseFO, parseSec, parseN500, unzip, evaluate, stats, nextWeekday, get data() { return B; } };
+  // history for the Overview page: the last n trading days' NSE files (cached in this browser)
+  async function history(n) {
+    const now = ist(), hmin = now.getUTCHours() * 60 + now.getUTCMinutes(), today8 = ymd8(now), cands = [];
+    for (let i = 0; cands.length < n + 8 && i < n * 2 + 14; i++) { const d = new Date(now.getTime() - i * 864e5); if (d.getUTCDay() > 0 && d.getUTCDay() < 6) cands.push(ymd8(d)); }
+    let fo = null, foD = ''; for (const d of cands.slice(0, 6)) { if (d === today8 && hmin < 17 * 60) continue; try { fo = await foFor(d); } catch (e) { break; } if (fo) { foD = d; break; } }
+    const keep = fo ? new Set(Object.keys(fo.fut).filter((s) => !fo.fut[s].idx)) : null, sec = {};
+    for (const d of cands) { if (Object.keys(sec).length >= n) break; if (d === today8 && hmin < 17 * 60) continue; let p = null; try { p = await secFor(d, keep); } catch (e) { if (/Deploy/.test(e.message)) throw e; } if (p) sec[d] = p; }
+    return { sec, fo, foD, sectors: await sectors() };
+  }
+  async function banList() {
+    const now = ist(), out = { date: '', syms: [] };
+    for (let i = -3; i < 6; i++) { const d = new Date(now.getTime() - i * 864e5); if (d.getUTCDay() === 0 || d.getUTCDay() === 6) continue; const d8 = ymd8(d); let t = null; /* the next day's list comes out the evening before */ try { t = await nse('ban', d8); } catch (e) { return { err: e.message, syms: [] }; } if (t) { out.date = d8to10(d8); out.syms = t.split(/\r?\n/).map((l) => (l.split(',')[1] || '').trim()).filter((x) => /^[A-Z0-9&-]+$/.test(x) && x !== 'SYMBOL'); return out; } }
+    return out;
+  }
+  return { open, close, show, build, sort, analyze, score, parseFO, parseSec, parseN500, unzip, evaluate, stats, nextWeekday, history, banList, secName, d8to10, get data() { return B; } };
 })();
 if (typeof module !== 'undefined') module.exports = Brief;

@@ -63,7 +63,8 @@ const Orb = (() => {
       if (!live()) { demo(); return; }
       if (m < OR_END) { Q = null; return; }
       await loadAvg();
-      const r = await Source.raw('/api/eod'); Q = r.q || {};
+      const r = typeof EodCache !== 'undefined' ? await EodCache.get(60e3) : await Source.raw('/api/eod'); Q = r.q || {};
+      oiScan();
       const all = Object.entries(Q).filter(([, x]) => !x.idx && x.c > 0 && x.h > x.l);
       const want = all.filter(([s, x]) => !box[s] && ((x.h - x.c) / x.c <= 0.004 || (x.c - x.l) / x.c <= 0.004 || Math.abs(x.c / x.pc - 1) >= 0.012))
         .sort((a, b) => Math.abs(b[1].c / b[1].pc - 1) - Math.abs(a[1].c / a[1].pc - 1)).slice(0, MAXNEW);
@@ -92,6 +93,41 @@ const Orb = (() => {
   };
   const count = () => { const L = lists(); return Q ? L.up.length + L.dn.length : ''; };
 
+  /* ---------- Radar: unusual activity across all F&O stocks (fast move for the time of day, volume spike, OI jump, new day high/low) ---------- */
+  let OI = { base: null, last: null, prev: null, at: 0, err: '' };
+  async function oiBase() {
+    if (OI.base) return OI.base;
+    const d = await idbGet('brief_fo2_last'); if (!d) return null; const fo = await idbGet('brief_fo2_' + d); if (!fo) return null;
+    const t = day(), toks = [], base = {};
+    for (const s in fo.fut) { const f = fo.fut[s]; if (f.idx) continue; f.toks.forEach(([k, x, o]) => { if (k && x > t) { toks.push(k); base[k] = [s, o]; } }); }
+    OI.base = { toks, base, date: fo.date }; return OI.base;
+  }
+  async function oiScan() {
+    if (!live() || Date.now() - OI.at < 5 * 60e3) return; OI.at = Date.now();
+    try { const B = await oiBase(); if (!B || !B.toks.length) { OI.err = 'Open the Brief once (it saves NSE\'s F&O file) to see OI jumps.'; return; }
+      const L = await Source.raw('/api/foq?t=' + B.toks.join(',')), agg = {};
+      for (const k in L.q || {}) { const b = B.base[k]; if (!b) continue; const a = agg[b[0]] || (agg[b[0]] = { now: 0, base: 0 }); a.now += L.q[k][1]; a.base += b[1]; }
+      OI.prev = OI.last; OI.last = { at: Date.now(), agg }; OI.err = '';
+    } catch (e) { OI.err = e.message; }
+  }
+  function radar() {
+    if (!Q) return [];
+    const m = live() ? mins() : 150, I = typeof Intel !== 'undefined' && Intel.data ? Intel.data.S : [], st = {}; I.forEach((x) => { st[x.sym] = x; });
+    const out = [];
+    for (const s in Q) {
+      const q = Q[s]; if (q.idx || !(q.c > 0) || !(q.pc > 0)) continue;
+      const f = [], r1 = q.c / q.pc - 1, x = st[s], atr = x && x.atrP, exp = atr ? atr * Math.sqrt(Math.max(0.05, Math.min(1, (m + 1) / 375))) : null;
+      if (ok(exp) && Math.abs(r1) >= 1.6 * exp && Math.abs(r1) >= 0.012) f.push([`fast move: ${f1(Math.abs(r1) / exp)}× usual for this time`, r1 > 0 ? 'up' : 'dn']);
+      const avg = (avgVol && avgVol[s]) || (x && x.tv20 && x.c ? x.tv20 / x.c : null), pace = avg && q.v ? q.v / (avg * volShare(m)) : null;
+      if (ok(pace) && pace >= 2.5) f.push([`volume ${f1(pace)}× normal`, '']);
+      const o = OI.last && OI.last.agg[s], p0 = OI.prev && OI.prev.agg[s];
+      if (o && o.base > 0) { const ch = o.now / o.base - 1, ch5 = p0 && p0.now > 0 ? o.now / p0.now - 1 : null; if (Math.abs(ch) >= 0.1 || (ok(ch5) && Math.abs(ch5) >= 0.03)) f.push([`futures OI ${ch >= 0 ? '+' : ''}${f1(ch * 100)}% today${ok(ch5) && Math.abs(ch5) >= 0.01 ? ` (${ch5 >= 0 ? '+' : ''}${f1(ch5 * 100)}% in 5 min)` : ''}`, ch > 0 ? (r1 >= 0 ? 'up' : 'dn') : '']); }
+      if (q.h > q.l && q.c >= q.h * 0.999 && r1 > 0.008) f.push(['at the day\'s high', 'up']); else if (q.h > q.l && q.c <= q.l * 1.001 && r1 < -0.008) f.push(['at the day\'s low', 'dn']);
+      if (f.length >= 2 || (f.length && /fast|OI/.test(f[0][0]))) out.push({ sym: s, r1, c: q.c, f });
+    }
+    return out.sort((a, b) => b.f.length - a.f.length || Math.abs(b.r1) - Math.abs(a.r1)).slice(0, 15);
+  }
+
   /* ---------- screen (a panel inside the Screener) ---------- */
   function rerender() { if (document.getElementById('orbPanel') && typeof Markets !== 'undefined' && Markets.setScr) Markets.setScr('orb'); }
   function tick() { if (!document.getElementById('orbPanel')) { clearInterval(timer); timer = null; return; } scan(false); }
@@ -109,6 +145,9 @@ const Orb = (() => {
       <td>${f2(x.lo)}–${f2(x.hi)}</td><td class="${side === 'up' ? 'up' : 'dn'}">${f2(Math.abs(x.dist) * 100)}%</td><td>${ok(x.at) ? hhmm(x.at) : '–'}</td><td>${ok(x.pace) ? f1(x.pace) + '×' : '<span class="mut">no history</span>'}</td>
       <td>${x.stop ? `${f2(x.stop)} <small class="mut">(${f1(x.risk * 100)}%)</small>` : '–'}</td><td class="l"><div class="why">${x.notes.map((t) => `<span>${esc(t)}</span>`).join('')}</div></td>
       <td><button class="btn ghost" onclick="Markets.analyze('${esc(x.sym)}')">Analyze</button></td></tr>`).join('')}</tbody></table></div>` : `<div class="mut">${Q ? 'None right now.' : busy ? 'Reading…' : ''}</div>`;
+    const RD = radar();
+    h += `<div class="ph"><h2>⚡ Radar: unusual activity now</h2></div>${RD.length ? `<div class="tblw"><table><thead><tr><th class="l">Stock</th><th>Price</th><th>Today</th><th class="l">What is unusual</th><th></th></tr></thead><tbody>${RD.map((x) => `<tr><td class="l"><b>${esc(x.sym)}</b></td><td>${f2(x.c)}</td><td class="${x.r1 >= 0 ? 'up' : 'dn'}">${x.r1 >= 0 ? '+' : ''}${f2(x.r1 * 100)}%</td><td class="l"><div class="why">${x.f.map(([t, c]) => `<span class="${c}">${esc(t)}</span>`).join('')}</div></td><td><button class="btn ghost" onclick="Markets.analyze('${esc(x.sym)}')">Analyze</button></td></tr>`).join('')}</tbody></table></div>` : `<div class="mut">${Q ? 'Nothing unusual right now.' : ''}</div>`}${OI.err ? `<div class="mut" style="font-size:12px">${esc(OI.err)}</div>` : ''}
+      <div class="legend" style="margin-bottom:14px">"Fast move" compares today's move with the stock's usual daily swing for this time of day (needs the Overview page's history). OI is read every 5 minutes from live futures quotes vs NSE's last file. Unusual is not the same as tradeable: check news, the level and volume first.</div>`;
     h += `<div class="ph"><h2 class="up">▲ Breaking above the box (${L.up.length})</h2></div>${tbl(L.up, 'up')}`;
     h += `<div class="ph" style="margin-top:14px"><h2 class="dn">▼ Breaking below the box (${L.dn.length})</h2></div>${tbl(L.dn, 'dn')}`;
     if (L.near.length) h += `<div class="ph" style="margin-top:14px"><h2>Watch: sitting at the edge of the box</h2></div><div class="why" style="margin-bottom:8px">${L.near.slice(0, 12).map((x) => `<span class="${x.near === 'up' ? 'up' : 'dn'}">${esc(x.sym)} ${x.near === 'up' ? 'at the top' : 'at the bottom'}</span>`).join('')}</div>`;
@@ -124,7 +163,8 @@ const Orb = (() => {
       Q[s] = { c, pc: p * (1 - d * 0.006), h: Math.max(hi, c), l: Math.min(lo, c), v: 1e6 * (1 + (i % 5) * 0.5) };
       box[s] = { hi, lo, v: 2e5, up: d > 0 ? 40 + i * 7 : i === 7 ? 30 : null, dn: d < 0 ? 55 + i * 6 : null, n: 15, ts: Date.now() };
       (avgVol || (avgVol = {}))[s] = 1.1e6; });
+    if (!OI.last) { OI.last = { at: Date.now(), agg: { TATASTEEL: { now: 1.15e7, base: 1e7 }, TRENT: { now: 1.12e7, base: 1e7 }, BEL: { now: 1.04e7, base: 1e7 } } }; }
   }
-  return { scan, panelHTML, count, lists, boxOf, read, parseIntra };
+  return { scan, panelHTML, count, lists, boxOf, read, parseIntra, radar };
 })();
 if (typeof module !== 'undefined') module.exports = Orb;
