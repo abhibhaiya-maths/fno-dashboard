@@ -171,7 +171,9 @@ const Brief = (() => {
       // 8. world cues for this kind of company
       CUES.forEach((c) => { const q = W[c.id]; if (!q || !ok(q.chg) || Math.abs(q.chg) < c.min || !c.test(x.sym, x.ind)) return; const s = Math.sign(q.chg) * c.sign; add('world', s * c.w, `${c.name} ${q.chg >= 0 ? '+' : ''}${f1(q.chg)}%: ${c.why}.`); });
       // 9. option writers from NSE's file: OI change + premium change, strike by strike (end of day)
-      if (x.wall && x.wall.rows && x.wall.rows.length >= 5 && typeof Writers !== 'undefined') {
+      // only today's file counts: at 3 pm NSE's file is still yesterday's, so the option read is left out (not used stale)
+      if (x.wall && x.wall.rows && I.foDate && I.foDate !== I.date) { if (!I._optNote) { I._optNote = 1; } }
+      else if (x.wall && x.wall.rows && x.wall.rows.length >= 5 && typeof Writers !== 'undefined') {
         try { const rows = x.wall.rows.map((r) => ({ K: r[0], ce: { oi: r[1], poi: r[1] - r[2], ltp: r[3], cp: r[4] }, pe: { oi: r[5], poi: r[5] - r[6], ltp: r[7], cp: r[8] } }));
           const WR = Writers.read(rows, x.wall.u || x.price, null, { all: true }); x.wr = WR;
           if (WR && !WR.noData && WR.hasPrem && WR.verdict !== 'neutral') add('opt', cap(WR.score / 2, 1), `Option writers ${WR.verdict === 'bullish' ? 'lean bullish' : 'lean bearish'}: OI-change PCR ${WR.pcrChg > 9 ? 'very high' : f2(WR.pcrChg)}${WR.itmPW.length ? `, ITM put writing at ${WR.itmPW.join(', ')}` : ''}${WR.itmCW.length ? `, ITM call writing at ${WR.itmCW.join(', ')}` : ''}; support wall ${WR.supW || '–'}, resistance wall ${WR.resW || '–'}.`);
@@ -300,7 +302,7 @@ const Brief = (() => {
     const nifty = nq && (prov || D === today8) ? { c: nq.c, pc: nq.pc, h: nq.h, l: nq.l } : fo && fo.fut.NIFTY && fo.fut.NIFTY.near ? { c: fo.fut.NIFTY.near.c, pc: fo.fut.NIFTY.near.pc, fut: true } : null;
     // average volume for the ORB scanner's "volume pace"
     try { const v = {}; keep.forEach((s) => { const a = mean((hist[s] || []).map((r) => r[5])); if (a) v[s] = a; }); idbSet('brief_sec_avg', { ts: Date.now(), v }); } catch (e) { /* fine */ }
-    const I = { date: d8to10(D), mode: prov ? 'prov' : 'final', px, hist, dToday, dNote, oi, oiNote, walls: fo ? fo.walls : {}, sector: secMap || {}, nifty, newsCo, newsSec, world: W, fii: fii && !fii.none ? fii : null, part: part && !part.none ? part : null, results };
+    const I = { date: d8to10(D), mode: prov ? 'prov' : 'final', px, hist, dToday, dNote, oi, oiNote, walls: fo ? fo.walls : {}, foDate: fo ? fo.date : '', sector: secMap || {}, nifty, newsCo, newsSec, world: W, fii: fii && !fii.none ? fii : null, part: part && !part.none ? part : null, results };
     return { I, miss, ts: Date.now(), files: { fo: foD, sec: sd }, live: true, secCache: sec };
   }
 
@@ -423,7 +425,7 @@ const Brief = (() => {
     h += `<div class="bf-cols"><section><div class="ph"><h2 class="up">▲ Top ${R.pos.length || ''} positive for ${nice(R.next)}</h2></div>${R.pos.length ? R.pos.map((x) => card(x, 1)).join('') : '<div class="mut">No stock passed the bar today (at least 3 signs agreeing, +1.75 points). That is an answer too: no clear long idea.</div>'}</section>
       <section><div class="ph"><h2 class="dn">▼ Top ${R.neg.length || ''} negative for ${nice(R.next)}</h2></div>${R.neg.length ? R.neg.map((x) => card(x, -1)).join('') : '<div class="mut">No stock passed the bar today (at least 3 signs agreeing, −1.75 points).</div>'}</section></div>`;
     if (R.resTom.length) h += `<section class="mk-panel" style="margin-top:12px"><div class="ph"><h2>⚠ Results due ${nice(R.next)} (left out of the lists)</h2></div><div class="mut" style="font-size:13px;margin-bottom:6px">A results day can gap 5–10% either way; the signs above don't predict that.</div><div class="why">${R.resTom.map((x) => `<span class="${cl(x.sc)}">${esc(x.sym)} · ${x.res} · today ${pc(x.r1)}</span>`).join('')}</div></section>`;
-    h += `<div class="legend">Points come from simple rules you can see on each card (How It Works tab). "Signs agree" counts the rules pointing the same way; a pick needs at least 3 and at most 1 against. ${B.I.oiNote ? `OI: ${esc(B.I.oiNote)}.` : 'OI: not available this time.'} NSE does not publish daily FII buying or selling in single stocks or sectors; OI buildup and delivery are the closest public signs. Research only, not a recommendation. Check the Track Record tab before trusting it.</div>`;
+    h += `<div class="legend">Points come from simple rules you can see on each card (How It Works tab). "Signs agree" counts the rules pointing the same way; a pick needs at least 3 and at most 1 against. ${B.I.oiNote ? `OI: ${esc(B.I.oiNote)}.` : 'OI: not available this time.'}${B.I.foDate && B.I.foDate !== B.I.date ? ' Option writers (call/put writing) are left out of this version: NSE\'s options file for today comes in the evening, and yesterday\'s would be stale. The final brief includes them.' : ''} NSE does not publish daily FII buying or selling in single stocks or sectors; OI buildup and delivery are the closest public signs. Research only, not a recommendation. Check the Track Record tab before trusting it.</div>`;
     return h;
   }
   function sectorsHTML() {
