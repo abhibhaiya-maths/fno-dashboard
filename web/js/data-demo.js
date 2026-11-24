@@ -70,7 +70,8 @@ const DemoSource = (() => {
       const ceC = ceL * ((hrand(K, pc.seed + 9) - 0.5) * 0.3 - bias * 0.25), peC = peL * ((hrand(K, pc.seed + 13) - 0.5) * 0.3 + bias * 0.25);
       const side = (type, oiL, chL) => {
         const b = bs(Sp, K, T, iv, type), ltp = tick05(b.price), spr = Math.max(0.05, tick05(ltp * 0.003));
-        return { ltp, bid: tick05(ltp - spr), ask: tick05(ltp + spr), oi: Math.round(oiL * 1e5), poi: Math.round((oiL - chL) * 1e5), iv, de: b.delta, ga: b.gamma, th: b.theta, ve: b.vega };
+        const cp = tick05(bs(Sp / (1 + (chg || 0) / 100), K, T + 1 / 365, iv, type).price); // yesterday's close of this option (for premium change)
+        return { ltp, cp, bid: tick05(ltp - spr), ask: tick05(ltp + spr), oi: Math.round(oiL * 1e5), poi: Math.round((oiL - chL) * 1e5), vol: Math.round(Math.abs(chL) * 4e5 + oiL * 2e4), iv, de: b.delta, ga: b.gamma, th: b.theta, ve: b.vega };
       };
       rows.push({ K, ce: side('CE', ceL, ceC), pe: side('PE', peL, peC) });
     }

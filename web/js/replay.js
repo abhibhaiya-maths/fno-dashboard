@@ -70,7 +70,7 @@ const Replay = (() => {
   function spanUI() { const c = $r('rpSpan').value === 'custom'; $r('rpCustom').style.display = c ? 'inline-flex' : 'none'; }
   async function fetchRetry(p) {
     for (let i = 0; i < 3; i++) {
-      try { return await Source.raw(p); } catch (e) { if (e.code === 'UPSTOX_RATE' && i < 2) { $r('rpDataTxt').textContent = 'Upstox asked to slow down, waiting 60 s…'; await sleep(61000); continue; } throw e; }
+      try { return await Source.raw(p); } catch (e) { if (e.code === 'UPSTOX_RATE' && i < 8) { $r('rpDataTxt').textContent = 'Upstox asked to slow down, waiting 60 s…'; await sleep(61000); continue; } throw e; }
     }
   }
   function saveFile() {

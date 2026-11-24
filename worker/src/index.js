@@ -137,7 +137,7 @@ async function upstoxToken(env) {
   if (env.UPSTOX_ACCESS_TOKEN) return env.UPSTOX_ACCESS_TOKEN.trim();
   let t = memGet('upstox_token');
   if (t) return t;
-  t = await env.KV.get('upstox_token');
+  t = await kvGet(env, 'upstox_token');
   if (!t) throw new HttpError(428, 'Connect Upstox (once each morning)', 'UPSTOX_LOGIN');
   memSet('upstox_token', t, 5 * 60e3);
   return t;
@@ -153,16 +153,17 @@ async function up(env, path, force) {
   }
   if (r.status === 401) {
     MEM.delete('upstox_token');
-    await env.KV.delete('upstox_token');
+    await kvDel(env, 'upstox_token');
     throw new HttpError(428, 'Upstox token expired. Connect again.', 'UPSTOX_LOGIN');
   }
+  if (r.ok && RL.n && Date.now() - RL.last > 120e3) RL.n = 0; // calm again: next back-off starts short
   if (r.status === 429) {
     // back off longer each time Upstox says "too many": 1, 2, 4, 8 … up to 15 minutes, or what Upstox asks for
     const ra = +r.headers.get('retry-after') || 0, up = (j.errors && j.errors[0] && (j.errors[0].message || j.errors[0].errorCode)) || '';
     RL.n = Date.now() - RL.last < 20 * 60e3 ? RL.n + 1 : 0; RL.last = Date.now();
-    const wait = ra ? ra * 1000 : Math.min(15 * 60e3, 60e3 * 2 ** RL.n);
+    const wait = ra ? Math.min(ra * 1000, 10 * 60e3) : Math.min(5 * 60e3, 30e3 * 2 ** RL.n);
     RL.until = Date.now() + wait; USE.rl++; USE.rlLast = Date.now();
-    RL.msg = `Upstox rate limit (${up || 'too many requests'}). Pausing data requests for ${Math.round(wait / 60000) || 1} min.`;
+    RL.msg = `Upstox rate limit (${up || 'too many requests'}). Pausing optional data for ${wait < 60e3 ? Math.round(wait / 1000) + ' s' : Math.round(wait / 60000) + ' min'}; prices and candles retry every 20 s.`;
     const e = new HttpError(429, RL.msg, 'UPSTOX_RATE'); e.retryAfter = Math.ceil(wait / 1000); throw e;
   }
   if (!r.ok || j.status === 'error') {
@@ -172,9 +173,27 @@ async function up(env, path, force) {
   return j.data;
 }
 // पहला रास्ता फ़ेल हो तो दूसरा आज़माओ (v3 → v2)
-const RL = { until: 0, n: 0, last: 0, msg: '' }, UPC = [];
+const RL = { until: 0, n: 0, last: 0, msg: '', probe: 0 }, UPC = [];
+// KV can run out of its free daily quota (reads 100,000, writes 1,000). It is only a cache here, so a KV error must never
+// stop prices or candles: these wrappers swallow it and the code falls back to asking Upstox / the source.
+async function kvGet(env, ...a) { try { return await env.KV.get(...a); } catch (e) { USE.kvErr++; USE.kvLast = String(e.message || e).slice(0, 100); return null; } }
+async function kvPut(env, ...a) { try { return await env.KV.put(...a); } catch (e) { USE.kvErr++; USE.kvLast = String(e.message || e).slice(0, 100); return null; } }
+async function kvDel(env, ...a) { try { return await env.KV.delete(...a); } catch (e) { USE.kvErr++; return null; } }
+/* Upstox budget (2,000 calls per 30 minutes, 500 per minute). Prices and candles come first: when this Worker has
+   already used a lot, optional work (bulk history, scans, ORB, maps, end-of-day lists) is told to wait instead of
+   spending the calls that keep the candles moving. Counts are for this Worker copy, so the limits are set low. */
+const PRIO_LOW = new Set(['/api/hist', '/api/daily', '/api/map', '/api/eod', '/api/intra', '/api/foq', '/api/universe']), PRIO_MID = new Set(['/api/chain', '/api/fut']), PRIO_HIGH = new Set(['/api/snapshot', '/api/candles']);
+function upCount() { const now = Date.now(); let m1 = 0; for (let i = UPC.length - 1; i >= 0 && UPC[i] > now - 60e3; i--) m1++; return { m1, m30: UPC.filter((t) => t > now - 1800e3).length }; }
+function budgetGate(p) {
+  const c = upCount(), low = PRIO_LOW.has(p), mid = PRIO_MID.has(p);
+  if ((low && (c.m1 >= 250 || c.m30 >= 1200)) || (mid && (c.m1 >= 400 || c.m30 >= 1650))) {
+    USE.held++; const e = new HttpError(429, `Saving Upstox calls for prices and candles (${c.m30} used in 30 min). This will retry by itself.`, 'UPSTOX_BUDGET'); e.retryAfter = low ? 60 : 30; throw e;
+  }
+  // prices and candles may test the water every 20 s while Upstox has us paused, so they recover as soon as Upstox allows
+  if (PRIO_HIGH.has(p) && Date.now() < RL.until && Date.now() - RL.probe > 20e3) { RL.probe = Date.now(); RL.until = 0; }
+}
 // usage meter (this Worker instance only; Cloudflare may run several, so read these as a rough guide)
-const USE = { since: Date.now(), req: 0, byPath: {}, ai: 0, aiFail: 0, aiLast: 0, aiErr: '', rl: 0, rlLast: 0 };
+const USE = { since: Date.now(), req: 0, byPath: {}, ai: 0, aiFail: 0, aiLast: 0, aiErr: '', rl: 0, rlLast: 0, kvErr: 0, kvLast: '', held: 0 };
 async function upAny(env, paths) {
   let last;
   for (const p of paths) {
@@ -202,7 +221,7 @@ function nextTokenExpiry() {
 async function authLogin(req, env, url) {
   await verifyUser(req, env, url.searchParams.get('id_token'));
   const state = crypto.randomUUID();
-  await env.KV.put('oauth_state:' + state, '1', { expirationTtl: 600 });
+  await kvPut(env, 'oauth_state:' + state, '1', { expirationTtl: 600 });
   const u = new URL(UP + '/v2/login/authorization/dialog');
   u.searchParams.set('response_type', 'code');
   u.searchParams.set('client_id', env.UPSTOX_API_KEY);
@@ -216,9 +235,9 @@ async function authCallback(req, env, url) {
   const back = (q) => Response.redirect(front + '/?' + q, 302);
   const code = url.searchParams.get('code'), state = url.searchParams.get('state');
   if (!code || !state) return back('upstox=error&msg=' + enc('Login cancelled'));
-  const ok = await env.KV.get('oauth_state:' + state);
+  const ok = await kvGet(env, 'oauth_state:' + state);
   if (!ok) return back('upstox=error&msg=' + enc('Login session expired, try again'));
-  await env.KV.delete('oauth_state:' + state);
+  await kvDel(env, 'oauth_state:' + state);
   const body = new URLSearchParams({
     code, client_id: env.UPSTOX_API_KEY, client_secret: env.UPSTOX_API_SECRET,
     redirect_uri: env.UPSTOX_REDIRECT_URI, grant_type: 'authorization_code',
@@ -228,7 +247,7 @@ async function authCallback(req, env, url) {
   });
   const j = await r.json().catch(() => ({}));
   if (!r.ok || !j.access_token) return back('upstox=error&msg=' + enc('No token received: ' + ((j.errors && j.errors[0] && j.errors[0].message) || r.status)));
-  await env.KV.put('upstox_token', j.access_token, { expiration: nextTokenExpiry() });
+  await kvPut(env, 'upstox_token', j.access_token, { expiration: nextTokenExpiry() });
   memSet('upstox_token', j.access_token, 5 * 60e3);
   return back('upstox=connected');
 }
@@ -239,14 +258,14 @@ async function contracts(env, ukey) {
   const ck = 'contracts:' + ukey + ':' + today;
   let c = memGet(ck);
   if (c) return c;
-  const kv = await env.KV.get(ck, 'json');
+  const kv = await kvGet(env, ck, 'json');
   if (kv) { memSet(ck, kv, 3600e3); return kv; }
   const data = await up(env, '/v2/option/contract?instrument_key=' + enc(ukey));
   const exp = {};
   for (const x of data || []) { if (!exp[x.expiry]) exp[x.expiry] = x.lot_size; }
   const expiries = Object.keys(exp).sort();
   c = { expiries, lots: exp };
-  await env.KV.put(ck, JSON.stringify(c), { expirationTtl: 26 * 3600 });
+  await kvPut(env, ck, JSON.stringify(c), { expirationTtl: 26 * 3600 });
   memSet(ck, c, 3600e3);
   return c;
 }
@@ -259,7 +278,7 @@ function pickExpiry(c) {
 function slimSide(o) {
   const m = (o && o.market_data) || {}, g = (o && o.option_greeks) || {};
   return {
-    key: (o && o.instrument_key) || null, ltp: m.ltp || 0, bid: m.bid_price || 0, ask: m.ask_price || 0, oi: m.oi || 0, poi: m.prev_oi || 0, vol: m.volume || 0,
+    key: (o && o.instrument_key) || null, ltp: m.ltp || 0, cp: m.close_price || 0, bid: m.bid_price || 0, ask: m.ask_price || 0, oi: m.oi || 0, poi: m.prev_oi || 0, vol: m.volume || 0,
     iv: g.iv ? g.iv / 100 : 0, de: g.delta || 0, ga: g.gamma || 0, th: g.theta || 0, ve: g.vega || 0,
   };
 }
@@ -331,7 +350,7 @@ function groupCandles(arr, sess) {
 async function candles(env, key, sess) {
   const n = istNow(), today = ymd(n);
   const hk = 'hist:' + key + ':' + today;
-  let hist = memGet(hk) || (await env.KV.get(hk, 'json'));
+  let hist = memGet(hk) || (await kvGet(env, hk, 'json'));
   if (!hist) {
     const to = ymd(addDays(n, -1)), from = ymd(addDays(n, -10));
     const d = await upAny(env, [
@@ -339,7 +358,7 @@ async function candles(env, key, sess) {
       `/v2/historical-candle/${enc(key)}/1minute/${to}/${from}`,
     ]);
     hist = groupCandles(d && d.candles, sess).filter((x) => x.date < today).slice(-3);
-    await env.KV.put(hk, JSON.stringify(hist), { expirationTtl: 20 * 3600 });
+    await kvPut(env, hk, JSON.stringify(hist), { expirationTtl: 20 * 3600 });
     memSet(hk, hist, 3600e3);
   } else memSet(hk, hist, 3600e3);
   let todayDays = [], todayErr = null;
@@ -389,11 +408,11 @@ async function gemini(env, prompt, maxTokens, models) {
   let last = new Error('Gemini: all free models are out of quota for today');
   for (const m of list) {
     const ck = 'gq:' + m;
-    if (memGet(ck) || (await env.KV.get(ck))) { last.quota = true; continue; }
+    if (memGet(ck) || (await kvGet(env, ck))) { last.quota = true; continue; }
     try { return await gemini1(env, m, prompt, maxTokens); }
     catch (e) {
       last = e;
-      if (e.quota) { const ttl = Math.max(60, Math.round((nextPacificMidnight() - Date.now()) / 1000)); memSet(ck, 1, ttl * 1000); await env.KV.put(ck, '1', { expirationTtl: ttl }).catch(() => {}); }
+      if (e.quota) { const ttl = Math.max(60, Math.round((nextPacificMidnight() - Date.now()) / 1000)); memSet(ck, 1, ttl * 1000); await kvPut(env, ck, '1', { expirationTtl: ttl }).catch(() => {}); }
     }
   }
   throw last;
@@ -514,7 +533,7 @@ function lexScore(t) { const p = POS.test(t), n = NEG.test(t); return p && !n ? 
 // सारी फ़ीड एक बार लाओ, 8 मिनट कैश (ख़बरें और नतीजे दोनों इसी से)
 async function allFeeds(env) {
   const ck = 'feeds:all';
-  const c = memGet(ck) || (await env.KV.get(ck, 'json'));
+  const c = memGet(ck) || (await kvGet(env, ck, 'json'));
   if (c && c.ts > Date.now() - 8 * 60e3) { memSet(ck, c, 8 * 60e3); return c; }
   const all = (await Promise.all(FEEDS.map(fetchFeed))).flat();
   const seen = new Set();
@@ -524,7 +543,7 @@ async function allFeeds(env) {
   all.forEach((i) => { sources[i.feed] = (sources[i.feed] || 0) + 1; });
   FEEDS.forEach(([n]) => { if (!(n in sources)) sources[n] = 0; });
   const res = { ts: Date.now(), items, sources };
-  await env.KV.put(ck, JSON.stringify(res), { expirationTtl: 3600 });
+  await kvPut(env, ck, JSON.stringify(res), { expirationTtl: 3600 });
   memSet(ck, res, 8 * 60e3);
   return res;
 }
@@ -532,7 +551,7 @@ function parseAIArray(out) { return JSON.parse(out.slice(out.indexOf('['), out.l
 
 async function news(env, idx) {
   const ck = 'news:' + idx;
-  const c = memGet(ck) || (await env.KV.get(ck, 'json'));
+  const c = memGet(ck) || (await kvGet(env, ck, 'json'));
   if (c && c.ts > Date.now() - 20 * 60e3) { memSet(ck, c, 10 * 60e3); return c; }
   const feed = await allFeeds(env);
   const items = feed.items.filter((i) => i.ts > Date.now() - 36 * 3600e3 && NEWS_KW[idx].test(i.t) && !RESULT_RE.test(i.t)).slice(0, 24);
@@ -557,15 +576,15 @@ ${items.map((x, i) => `${i}. ${x.t}`).join('\n')}`;
   const res = { ts: Date.now(), ai, items: mergeDupes(scored), sources: feed.sources };
   // 7-day memory: headlines older than today's window are kept (with their score) for the dashboard's news pressure
   try {
-    const mk = 'newsmem:' + idx, old = (await env.KV.get(mk, 'json')) || [], seen = new Set(), cut = Date.now() - 7 * 864e5;
+    const mk = 'newsmem:' + idx, old = (await kvGet(env, mk, 'json')) || [], seen = new Set(), cut = Date.now() - 7 * 864e5;
     const all = [...res.items.map((x) => ({ t: x.t, s: x.s, imp: x.imp, ts: x.ts, src: x.src })), ...old]
       .filter((x) => { const k = String(x.t).toLowerCase().slice(0, 70); if (x.ts < cut || seen.has(k)) return false; seen.add(k); return true; })
       .sort((x, y) => y.ts - x.ts).slice(0, 150);
-    await env.KV.put(mk, JSON.stringify(all), { expirationTtl: 8 * 86400 });
+    await kvPut(env, mk, JSON.stringify(all), { expirationTtl: 8 * 86400 });
     const now = new Set(res.items.map((x) => String(x.t).toLowerCase().slice(0, 70)));
     res.mem = all.filter((x) => !now.has(String(x.t).toLowerCase().slice(0, 70)));
   } catch (e) { res.mem = []; }
-  await env.KV.put(ck, JSON.stringify(res), { expirationTtl: 3600 });
+  await kvPut(env, ck, JSON.stringify(res), { expirationTtl: 3600 });
   memSet(ck, res, 10 * 60e3);
   return res;
 }
@@ -573,7 +592,7 @@ ${items.map((x, i) => `${i}. ${x.t}`).join('\n')}`;
 // तिमाही नतीजे (Q1-Q4): पिछले 3 दिन की ख़बरों में से
 async function results(env) {
   const ck = 'results:v1';
-  const c = memGet(ck) || (await env.KV.get(ck, 'json'));
+  const c = memGet(ck) || (await kvGet(env, ck, 'json'));
   if (c && c.ts > Date.now() - 30 * 60e3) { memSet(ck, c, 15 * 60e3); return c; }
   const feed = await allFeeds(env);
   const items = feed.items.filter((i) => i.ts > Date.now() - 72 * 3600e3 && RESULT_RE.test(i.t)).slice(0, 16);
@@ -594,7 +613,7 @@ ${items.map((x, i) => `${i}. ${x.t}`).join('\n')}`;
     } catch (e) { /* सरल स्कोर */ }
   }
   const res = { ts: Date.now(), ai, items: out };
-  await env.KV.put(ck, JSON.stringify(res), { expirationTtl: 3600 });
+  await kvPut(env, ck, JSON.stringify(res), { expirationTtl: 3600 });
   memSet(ck, res, 15 * 60e3);
   return res;
 }
@@ -693,26 +712,26 @@ async function instInfo(env, ukey) {
 // Nearest futures contract of an index / stock
 async function futFor(env, ukey, sym, exch) {
   const today = ymd(istNow()), ck = 'fut:' + ukey + ':' + today;
-  const c = memGet(ck) || (await env.KV.get(ck, 'json'));
+  const c = memGet(ck) || (await kvGet(env, ck, 'json'));
   if (c) { memSet(ck, c, 3600e3); return c.fkey ? c : null; }
   const list = await upSearch(env, { query: sym, exchanges: exch === 'BSE' ? 'BSE' : 'NSE', instrument_types: 'FUT' }).catch(() => []);
   const f = list.filter((x) => x.underlying_key === ukey && (normExp(x.expiry) || '0') >= today).sort((a, b) => (normExp(a.expiry) < normExp(b.expiry) ? -1 : 1))[0];
   const r = f ? { fkey: f.instrument_key, expiry: normExp(f.expiry), lot: f.lot_size || null } : { fkey: null };
-  await env.KV.put(ck, JSON.stringify(r), { expirationTtl: 26 * 3600 });
+  await kvPut(env, ck, JSON.stringify(r), { expirationTtl: 26 * 3600 });
   memSet(ck, r, 3600e3);
   return r.fkey ? r : null;
 }
 // Daily candles (about one year), cached for the day: HV, IV percentile (VIX), 52-week range, previous week
 async function daily(env, key) {
   const today = ymd(istNow()), ck = 'daily:' + key + ':' + today;
-  const c = memGet(ck) || (await env.KV.get(ck, 'json'));
+  const c = memGet(ck) || (await kvGet(env, ck, 'json'));
   if (c) { memSet(ck, c, 3600e3); return c; }
   const to = ymd(addDays(istNow(), -1)), from = ymd(addDays(istNow(), -380));
   const d = await upAny(env, [`/v3/historical-candle/${enc(key)}/days/1/${to}/${from}`, `/v2/historical-candle/${enc(key)}/day/${to}/${from}`]);
   const rows = (d && d.candles || []).map((x) => [String(x[0]).slice(0, 10), x[1], x[2], x[3], x[4], x[5] || 0, x[6] || 0])
     .filter((x) => x[0] < today).sort((a, b) => (a[0] < b[0] ? -1 : 1)).slice(-260);
   const res = { key, rows };
-  await env.KV.put(ck, JSON.stringify(res), { expirationTtl: 26 * 3600 });
+  await kvPut(env, ck, JSON.stringify(res), { expirationTtl: 26 * 3600 });
   memSet(ck, res, 3600e3);
   return res;
 }
@@ -743,7 +762,7 @@ const GLOBAL_FALLBACK = [
 ];
 async function globalList(env) {
   const today = ymd(istNow()), ck = 'glist:' + today;
-  const c = memGet(ck) || (await env.KV.get(ck, 'json'));
+  const c = memGet(ck) || (await kvGet(env, ck, 'json'));
   if (c) { memSet(ck, c, 6 * 3600e3); return c; }
   let list = null;
   try {
@@ -759,7 +778,7 @@ async function globalList(env) {
     }
   } catch (e) { list = null; }
   if (!list || !list.length) return GLOBAL_FALLBACK;
-  await env.KV.put(ck, JSON.stringify(list), { expirationTtl: 26 * 3600 });
+  await kvPut(env, ck, JSON.stringify(list), { expirationTtl: 26 * 3600 });
   memSet(ck, list, 6 * 3600e3);
   return list;
 }
@@ -839,13 +858,13 @@ async function world(env) {
     if (g && g.ind) items.push({ id: 'indicative', sym: 'NIFTY PRE-OPEN', name: 'Nifty pre-open (indicative)', grp: 'india', src: 'NSE', price: g.ind.price, chg: g.ind.chg, pts: g.ind.pts, ts: Date.now(), tsText: g.ind.ts });
     const res = { ts: Date.now(), items, missing: WORLD.filter(([id]) => !items.some((x) => x.id === id)).map((x) => x[2]) };
     if (items.length) await kvKeep(env, 'world:last', res, 600e3);
-    else { const last = await env.KV.get('world:last', 'json'); if (last) return { ...last, stale: true }; }
+    else { const last = await kvGet(env, 'world:last', 'json'); if (last) return { ...last, stale: true }; }
     return res;
   });
 }
 // KV write at most once per `every` ms (free plan: 1000 writes a day)
 const KVW = {};
-async function kvKeep(env, key, val, every) { const now = Date.now(); if (KVW[key] && now - KVW[key] < every) return; KVW[key] = now; try { await env.KV.put(key, JSON.stringify(val), { expirationTtl: 7 * 86400 }); } catch (e) { /* ignore */ } }
+async function kvKeep(env, key, val, every) { const now = Date.now(); if (KVW[key] && now - KVW[key] < every) return; KVW[key] = now; try { await kvPut(env, key, JSON.stringify(val), { expirationTtl: 7 * 86400 }); } catch (e) { /* ignore */ } }
 
 /* FII / Pro / Client positions in index futures and options (NSE daily archive, published around 7 pm) */
 function parseParticipant(text) {
@@ -868,13 +887,13 @@ async function participantOI(env) {
     const d = new Date(n.getTime() - i * 864e5), wd = d.getUTCDay(); if (wd === 0 || wd === 6) continue;
     if (i === 0 && n.getUTCHours() * 60 + n.getUTCMinutes() < 18 * 60 + 30) continue; // today's file comes in the evening
     const dd = String(d.getUTCDate()).padStart(2, '0') + String(d.getUTCMonth() + 1).padStart(2, '0') + d.getUTCFullYear();
-    const ck = 'part:' + dd, kv = await env.KV.get(ck, 'json');
+    const ck = 'part:' + dd, kv = await kvGet(env, ck, 'json');
     if (kv) { got.push({ date: ymd(d), ...kv }); continue; }
     try {
       const r = await fetch(`https://nsearchives.nseindia.com/content/nsccl/fao_participant_oi_${dd}.csv`, { headers: { 'User-Agent': UA_BROWSER, Accept: 'text/csv,*/*' } });
       if (!r.ok) continue;
       const p = parseParticipant(await r.text()); if (!p) continue;
-      await env.KV.put(ck, JSON.stringify(p), { expirationTtl: 15 * 86400 });
+      await kvPut(env, ck, JSON.stringify(p), { expirationTtl: 15 * 86400 });
       got.push({ date: ymd(d), ...p });
     } catch (e) { /* skip that day */ }
   }
@@ -935,8 +954,8 @@ async function fiiDii(env) {
       if (f && d) res = { fii: +f.netValue, dii: +d.netValue, date: f.date || d.date, src: 'NSE', ts: Date.now() };
     }
   } catch (e) { /* NSE often blocks cloud servers */ }
-  if (res && ok(res.fii)) { await env.KV.put('fiidii:last', JSON.stringify(res), { expirationTtl: 7 * 86400 }); memSet('fiidii', res, 30 * 60e3); return res; }
-  const last = await env.KV.get('fiidii:last', 'json');
+  if (res && ok(res.fii)) { await kvPut(env, 'fiidii:last', JSON.stringify(res), { expirationTtl: 7 * 86400 }); memSet('fiidii', res, 30 * 60e3); return res; }
+  const last = await kvGet(env, 'fiidii:last', 'json');
   const out = last ? { ...last, stale: true } : { none: true };
   memSet('fiidii', out, 10 * 60e3);
   return out;
@@ -1068,7 +1087,7 @@ async function geoRisk(env) {
 async function newsFor(env, id, name) {
   name = String(name || id).replace(/[^\w &.-]/g, '').trim().slice(0, 40);
   const ck = 'wnews:' + id;
-  const c = memGet(ck) || (await env.KV.get(ck, 'json').catch(() => null)); if (c && c.ts > Date.now() - 30 * 60e3) { memSet(ck, c, 15 * 60e3); return c; }
+  const c = memGet(ck) || (await kvGet(env, ck, 'json').catch(() => null)); if (c && c.ts > Date.now() - 30 * 60e3) { memSet(ck, c, 15 * 60e3); return c; }
   const words = name.split(/\s+/).filter((w) => w.length > 2 && !/^(the|and|ltd|limited|bank|india|fut)$/i.test(w));
   const re = new RegExp('\\b(' + [id, ...words.slice(0, 2)].map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|') + ')', 'i');
   // company news only from trusted publishers (no random websites)
@@ -1093,7 +1112,7 @@ ${items.map((x, i) => `${i}. ${x.t}`).join('\n')}`;
   }
   const res = { ts: Date.now(), ai, items: mergeDupes(scored), sources: { 'Trusted publishers (Google News)': g.length, 'Market feeds': items.length - g.length } };
   memSet(ck, res, 15 * 60e3);
-  try { await env.KV.put(ck, JSON.stringify(res), { expirationTtl: 3600 }); } catch (e) { /* cache only */ }
+  try { await kvPut(env, ck, JSON.stringify(res), { expirationTtl: 3600 }); } catch (e) { /* cache only */ }
   return res;
 }
 
@@ -1137,7 +1156,7 @@ async function constituents(env, idx) {
   const M = MAP_IDX[idx]; if (!M) throw new HttpError(400, 'Unknown index');
   if (M.from) { const base = await constituents(env, M.from), set = new Set(M.members); return { ts: base.ts, items: base.items.filter((x) => set.has(x.sym)), approx: true }; }
   if (M.fno) { const u = await universe(env); return { ts: u.ts, items: u.items.map((x) => ({ sym: x.sym, name: x.name, sector: '', isin: x.isin, lot: x.lot })) }; }
-  const ck = 'cons:' + idx, c = memGet(ck) || (await env.KV.get(ck, 'json'));
+  const ck = 'cons:' + idx, c = memGet(ck) || (await kvGet(env, ck, 'json'));
   if (c && c.ts > Date.now() - 7 * 864e5) { memSet(ck, c, 6 * 3600e3); return c; }
   try {
     const r = await fetch('https://nsearchives.nseindia.com/content/indices/' + M.file, { headers: { 'User-Agent': UA_BROWSER, Accept: 'text/csv,*/*' } });
@@ -1145,7 +1164,7 @@ async function constituents(env, idx) {
     const items = csvRows(await r.text()).map((o) => ({ sym: o.symbol, name: o['company name'], sector: o.industry, isin: o['isin code'] })).filter((x) => x.sym && /^IN[A-Z0-9]{10}$/.test(x.isin || ''));
     if (items.length < 5) throw new Error('empty list');
     const res = { ts: Date.now(), items };
-    await env.KV.put(ck, JSON.stringify(res), { expirationTtl: 30 * 86400 }); memSet(ck, res, 6 * 3600e3);
+    await kvPut(env, ck, JSON.stringify(res), { expirationTtl: 30 * 86400 }); memSet(ck, res, 6 * 3600e3);
     return res;
   } catch (e) { if (c) return c; throw new HttpError(502, 'Could not load the index constituents from NSE: ' + e.message); }
 }
@@ -1154,7 +1173,7 @@ async function nseWeights(env, idx) {
   if (M.fno) return { w: null, src: 'traded value' };
   if (M.from) { const b = await nseWeights(env, M.from); return b && b.w ? { ...b, src: b.src + ', re-scaled to Sensex members' } : b; }
   const ck = 'w:' + idx, mk = memGet(ck); if (mk) return mk;
-  const saved = await env.KV.get(ck, 'json');
+  const saved = await kvGet(env, ck, 'json');
   if (saved && saved.day === ymd(istNow())) { memSet(ck, saved, 3600e3); return saved; }
   try {
     const cookie = await nseCookie();
@@ -1166,7 +1185,7 @@ async function nseWeights(env, idx) {
     if (!tot) throw new Error('no ffmc');
     for (const k in w) w[k] = (w[k] / tot) * 100;
     const res = { day: ymd(istNow()), src: 'NSE free-float market cap', w };
-    await env.KV.put(ck, JSON.stringify(res), { expirationTtl: 60 * 86400 }); memSet(ck, res, 3600e3);
+    await kvPut(env, ck, JSON.stringify(res), { expirationTtl: 60 * 86400 }); memSet(ck, res, 3600e3);
     return res;
   } catch (e) {
     const res = saved ? { ...saved, src: saved.src + ' (saved ' + saved.day + ')' } : null;
@@ -1207,7 +1226,7 @@ async function marketMap(env, idx) {
 
 /* ---------------- Screener support: F&O universe, broker calls, order wins, results calendar ---------------- */
 async function universe(env) {
-  const ck = 'fno-universe', c = memGet(ck) || (await env.KV.get(ck, 'json'));
+  const ck = 'fno-universe', c = memGet(ck) || (await kvGet(env, ck, 'json'));
   if (c && c.ts > Date.now() - 7 * 864e5) { memSet(ck, c, 6 * 3600e3); return c; }
   try {
     const H = { headers: { 'User-Agent': UA_BROWSER, Accept: 'text/csv,*/*' } };
@@ -1221,14 +1240,14 @@ async function universe(env) {
     });
     if (items.length < 50) throw new Error('only ' + items.length + ' symbols');
     const res = { ts: Date.now(), items };
-    await env.KV.put(ck, JSON.stringify(res), { expirationTtl: 30 * 86400 }); memSet(ck, res, 6 * 3600e3);
+    await kvPut(env, ck, JSON.stringify(res), { expirationTtl: 30 * 86400 }); memSet(ck, res, 6 * 3600e3);
     return res;
   } catch (e) { if (c) return c; throw new HttpError(502, 'Could not load the F&O stock list from NSE: ' + e.message); }
 }
 const gnews = (q) => ['Google News', `https://news.google.com/rss/search?q=${encodeURIComponent(q)}&hl=en-IN&gl=IN&ceid=IN:en`];
 const TRUSTED_SITES = 'site:economictimes.indiatimes.com OR site:moneycontrol.com OR site:livemint.com OR site:business-standard.com OR site:thehindubusinessline.com OR site:cnbctv18.com OR site:financialexpress.com OR site:ndtvprofit.com';
 async function brokerCalls(env) {
-  const ck = 'brokercalls:v1', c = memGet(ck) || (await env.KV.get(ck, 'json'));
+  const ck = 'brokercalls:v1', c = memGet(ck) || (await kvGet(env, ck, 'json'));
   if (c && c.ts > Date.now() - 60 * 60e3) { memSet(ck, c, 30 * 60e3); return c; }
   const [dn, upg, ord] = await Promise.all([
     fetchFeed(gnews(`(downgrade OR "cuts target" OR "target price cut" OR "sell rating" OR "reduce rating" OR "lowers target") when:7d (${TRUSTED_SITES})`)),
@@ -1238,7 +1257,7 @@ async function brokerCalls(env) {
   const val = (t) => { const m = t.match(/(?:₹|rs\.?|inr)\s?([\d,]+(?:\.\d+)?)\s?(crore|cr|lakh crore|billion|bn|mn|million)/i); if (!m) return null; let v = parseFloat(m[1].replace(/,/g, '')); const u = m[2].toLowerCase(); if (u === 'lakh crore') v *= 1e5; else if (/billion|bn/.test(u)) v *= 100; else if (/million|mn/.test(u)) v /= 10; return Math.round(v); };
   const pick = (a, kind) => mergeDupes(a).slice(0, 40).map((x) => ({ t: x.t, src: x.src, link: x.link, ts: x.ts, kind, cr: kind === 'order' ? val(x.t) : null }));
   const res = { ts: Date.now(), down: pick(dn, 'down'), up: pick(upg, 'up'), orders: pick(ord, 'order') };
-  await env.KV.put(ck, JSON.stringify(res), { expirationTtl: 6 * 3600 }); memSet(ck, res, 30 * 60e3);
+  await kvPut(env, ck, JSON.stringify(res), { expirationTtl: 6 * 3600 }); memSet(ck, res, 30 * 60e3);
   return res;
 }
 // upcoming board meetings for results (NSE event calendar, best effort)
@@ -1246,7 +1265,7 @@ async function brokerCalls(env) {
 // 1) NSE event calendar (official). 2) If NSE blocks the cloud server: results-date headlines from trusted
 //    business sites, read by the AI (marked as "news", so the page and the AI say it is not official).
 async function resultsCalendar(env) {
-  const ck = 'rescal:v2', c = memGet(ck) || (await env.KV.get(ck, 'json'));
+  const ck = 'rescal:v2', c = memGet(ck) || (await kvGet(env, ck, 'json'));
   if (c && c.ts > Date.now() - 6 * 3600e3 && c.items && c.items.length) { memSet(ck, c, 3600e3); return c; }
   const M = { Jan: '01', Feb: '02', Mar: '03', Apr: '04', May: '05', Jun: '06', Jul: '07', Aug: '08', Sep: '09', Oct: '10', Nov: '11', Dec: '12' };
   const dmy = (d) => `${String(d.getUTCDate()).padStart(2, '0')}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${d.getUTCFullYear()}`;
@@ -1287,7 +1306,7 @@ ${pool.map((x, i) => `${i}. [${ymd(new Date(x.ts + 5.5 * 3600e3))}] ${x.t}`).joi
   const U = await fnoSymbols(env);
   items = items.map((x) => ({ ...x, fo: !!U[x.sym] })).sort((p, q) => (p.date < q.date ? -1 : p.date > q.date ? 1 : (q.fo - p.fo)));
   const res = { ts: Date.now(), items, src };
-  await env.KV.put(ck, JSON.stringify(res), { expirationTtl: 2 * 86400 }); memSet(ck, res, 3600e3);
+  await kvPut(env, ck, JSON.stringify(res), { expirationTtl: 2 * 86400 }); memSet(ck, res, 3600e3);
   return res;
 }
 
@@ -1315,7 +1334,7 @@ const sectorOf = (n) => { const s = String(n || '').toLowerCase(); return IMPACT
 const clamp1 = (v) => (typeof v === 'number' && isFinite(v) ? Math.max(-1, Math.min(1, v)) : 0);
 
 async function newsImpact(env) {
-  const ck = 'impact:v1', c = memGet(ck) || (await env.KV.get(ck, 'json'));
+  const ck = 'impact:v1', c = memGet(ck) || (await kvGet(env, ck, 'json'));
   if (c && c.ts > Date.now() - 30 * 60e3) { memSet(ck, c, 10 * 60e3); return c; }
   if (!hasAI(env)) return { ts: Date.now(), ai: false, items: [], note: 'AI is off: add GEMINI_API_KEY or the Workers AI binding (AI) in the Worker.' };
   // market news + the macro and policy stories that move sectors (crude, rates, tariffs, government policy, commodities)
@@ -1345,7 +1364,7 @@ ${pool.map((x, i) => `${i}. ${x.t}`).join('\n')}`;
     items.push({ t: h.t, src: h.src, link: h.link, ts: h.ts, n: h.n || 1, nifty: clamp1(a.nifty), str: [1, 2, 3].includes(a.str) ? a.str : 1, hz: ['d', 'w', 'm'].includes(a.hz) ? a.hz : 'd', sec, co, why: String(a.why || '').slice(0, 200) });
   });
   const res = { ts: Date.now(), ai: true, items, read: pool.length };
-  await env.KV.put(ck, JSON.stringify(res), { expirationTtl: 6 * 3600 }); memSet(ck, res, 10 * 60e3);
+  await kvPut(env, ck, JSON.stringify(res), { expirationTtl: 6 * 3600 }); memSet(ck, res, 10 * 60e3);
   return res;
 }
 
@@ -1353,7 +1372,7 @@ ${pool.map((x, i) => `${i}. ${x.t}`).join('\n')}`;
    Headlines from trusted business sites over the last 3 weeks; the AI reads the numbers that are IN the headline
    (it must leave a number empty rather than guess). Not official filings: check the company's results before trading. */
 async function earningsRadar(env) {
-  const ck = 'earnings:v1', c = memGet(ck) || (await env.KV.get(ck, 'json'));
+  const ck = 'earnings:v1', c = memGet(ck) || (await kvGet(env, ck, 'json'));
   if (c && c.ts > Date.now() - 3 * 3600e3) { memSet(ck, c, 30 * 60e3); return c; }
   if (!hasAI(env)) return { ts: Date.now(), ai: false, items: [], note: 'AI is off: add GEMINI_API_KEY or the Workers AI binding (AI) in the Worker.' };
   const [feed, g1, g2, g3] = await Promise.all([
@@ -1387,7 +1406,7 @@ ${part.map((x, i) => `${s + i}. ${x.t}`).join('\n')}`;
     else p.more = (p.more || 0) + 1;
   });
   const res = { ts: Date.now(), ai: true, items: Object.values(by).sort((a, b) => b.ts - a.ts), read: pool.length };
-  await env.KV.put(ck, JSON.stringify(res), { expirationTtl: 12 * 3600 }); memSet(ck, res, 30 * 60e3);
+  await kvPut(env, ck, JSON.stringify(res), { expirationTtl: 12 * 3600 }); memSet(ck, res, 30 * 60e3);
   return res;
 }
 
@@ -1473,13 +1492,14 @@ async function route(req, env, url) {
 
   const email = await verifyUser(req, env);
   USE.req++; USE.byPath[p] = (USE.byPath[p] || 0) + 1;
+  budgetGate(p);
   const idx = (url.searchParams.get('index') || '').toUpperCase();
   const sess = url.searchParams.get('s') === 'MCX' ? 'MCX' : 'NSE';
   const R = (d) => json(d, 200, req, env);
 
   switch (p) {
     case '/api/status': {
-      const t = env.UPSTOX_ACCESS_TOKEN || (await env.KV.get('upstox_token'));
+      const t = env.UPSTOX_ACCESS_TOKEN || (await kvGet(env, 'upstox_token'));
       return R({ email, upstox: !!t, ai: hasAI(env), aiVia: env.GEMINI_API_KEY ? 'Gemini' : env.AI ? 'Workers AI' : env.ANTHROPIC_API_KEY ? 'Claude' : null, tokenMode: env.UPSTOX_ACCESS_TOKEN ? 'analytics' : 'oauth', v: 2, upCalls30m: UPC.length, rateWait: Math.max(0, Math.ceil((RL.until - Date.now()) / 1000)) });
     }
     case '/api/snapshot': {
@@ -1532,7 +1552,7 @@ async function route(req, env, url) {
     case '/api/nsefile': return nseFile(req, env, url);
     case '/api/usage': {
       const now = Date.now(), top = Object.entries(USE.byPath).sort((x, y) => y[1] - x[1]).slice(0, 12);
-      return R({ ts: now, since: USE.since, req: USE.req, top, up1m: UPC.filter((t) => t > now - 60e3).length, up30m: UPC.filter((t) => t > now - 1800e3).length, rlWait: Math.max(0, Math.ceil((RL.until - now) / 1000)), rlMsg: RL.until > now ? RL.msg : '', rlHits: USE.rl, rlLast: USE.rlLast, ai: USE.ai, aiFail: USE.aiFail, aiLast: USE.aiLast, aiErr: USE.aiErr, limits: { upstoxPerMin: 500, upstoxPer30m: 2000 } });
+      return R({ ts: now, since: USE.since, req: USE.req, top, up1m: UPC.filter((t) => t > now - 60e3).length, up30m: UPC.filter((t) => t > now - 1800e3).length, rlWait: Math.max(0, Math.ceil((RL.until - now) / 1000)), rlMsg: RL.until > now ? RL.msg : '', rlHits: USE.rl, rlLast: USE.rlLast, ai: USE.ai, aiFail: USE.aiFail, aiLast: USE.aiLast, aiErr: USE.aiErr, kvErr: USE.kvErr, kvLast: USE.kvLast, held: USE.held, limits: { upstoxPerMin: 500, upstoxPer30m: 2000 } });
     }
     case '/api/intra': return intraRaw(req, env, url);
     case '/api/foq': {
@@ -1549,7 +1569,7 @@ async function route(req, env, url) {
       return json(await ask(env, await req.json()), 200, req, env);
     }
     case '/api/upstox/logout': {
-      await env.KV.delete('upstox_token'); MEM.delete('upstox_token');
+      await kvDel(env, 'upstox_token'); MEM.delete('upstox_token');
       return json({ ok: true }, 200, req, env);
     }
   }

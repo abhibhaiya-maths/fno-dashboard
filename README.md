@@ -1,3 +1,26 @@
+# ✅ नया (25 नवंबर 2026, भाग 9): Chart में "🎯 Auto setup" mode — यही सबसे ताज़ा वर्ज़न है
+
+Chart के ऊपर दो बटन: **🛠 Manual tools** (पहले जैसा) और **🎯 Auto setup**। Auto setup में chart आज के दिन के हिसाब से tools खुद लगाता है, support/resistance zones (कितने tools मिले), liquidity (stops कहाँ), candles पर VWAP/Supertrend/BOS/Sweep के निशान, और chart के नीचे "Engine CALL/PUT/WAIT क्यों" (हर tool हिंदी में) + "आज कौन सा tool काम आया"। सिर्फ़ दिखाता है, signal नहीं बदलता, कोई नई data call नहीं। भाग 8 का limit fix और option writers भी इसी में हैं — Worker deploy ज़रूरी।
+
+---
+
+# (पिछला) भाग 8: Limit fix + Option writers' read + 3-scenario plan — यही सबसे ताज़ा वर्ज़न है
+
+**अपलोड:** ZIP का `web`, `worker`, `firebase`, `README.md` GitHub पर → Commit। **Worker दोबारा Deploy करना ज़रूरी है** (limit fix और option premium change Worker में हैं)। फिर Ctrl + Shift + R।
+
+**Limit fix (candles रुकने की समस्या):**
+- पहले: Upstox एक बार "धीमे चलो" कहता तो Worker हर बार दोगुना रुकता (1, 2, 4, 8 … 15 मिनट तक) और dashboard candles भी रोक देता था। दोपहर तक ये रुकावटें 15 मिनट तक पहुँच जाती थीं।
+- अब: Worker अपना Upstox बजट गिनता है। भारी काम (history download, screener scan, ORB, maps, EOD lists) को पहले रोकता है ताकि **भाव और candles हमेशा चलें**। रुकावट अधिकतम 5 मिनट, और भाव/candles हर 20 सेकंड में दोबारा कोशिश करते हैं।
+- Cloudflare KV का free quota खत्म हो जाए तब भी अब कुछ नहीं रुकता (KV सिर्फ़ cache है)।
+- Market के दौरान Screener scan / Overnight download अपने-आप धीमे चलते हैं; ORB कम calls करता है।
+- Overview → Data & Usage में दिखता है: Upstox calls, कितनी बार रुका, कितने काम रोके गए, KV errors।
+
+**Option writers' read:** Option chain tab में हर strike पर OI बदलाव + premium बदलाव → call/put writing, buying, unwinding, ITM writing, walls (आज जोड़े गए OI से), OI-change PCR, squeeze चेतावनी। Report card में "Price action and context", writers' read और **3 scenario का plan** (gap-up / range / gap-down: trigger, SL, targets, reward:risk)। Brief रात को NSE file से सभी F&O शेयरों पर यही पढ़ता है। Guide → "Reliance वाला test चलाएँ"।
+
+CALL/PUT सिग्नल, स्कोर, ग्रेड और पेपर ट्रेडिंग के नियम पहले जैसे हैं।
+
+---
+
 # ✅ नया (19 नवंबर 2026, भाग 7): Overview (पूरा बाज़ार एक page पर) + Market Intelligence — यही सबसे ताज़ा वर्ज़न है
 
 **अपलोड:** इस ZIP का `web`, `worker`, `firebase`, `README.md` GitHub पर डालें → Commit। **Worker दोबारा Deploy करें** (`worker/src/index.js`): नए हिस्से `/api/usage` (limit मीटर) और NSE की F&O ban file। कोई नई key नहीं। फिर Ctrl + Shift + R।

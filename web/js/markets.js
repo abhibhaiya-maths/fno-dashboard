@@ -156,7 +156,7 @@ const Markets = (() => {
         const d = BT.parseDaily(j && j.data && j.data.candles);
         if (x.sym === 'NIFTY') nifty = d; else { const f = features(d, nifty); if (f) rows.push({ ...x, ...f }); }
       } catch (e) { fails++; if (e.code === 'UPSTOX_RATE') { $m('scTxt').textContent = 'Upstox asked to slow down, waiting 60 s…'; await sleep(61000); i--; continue; } if (e.code === 'UPSTOX_TOKEN_BAD' || e.code === 'UPSTOX_LOGIN') { toast(e.message); break; } }
-      await sleep(130);
+      await sleep(istMin() >= -15 && istMin() <= 380 ? 450 : 130);
     }
     scan = { ts: Date.now(), day: to, rows, fails }; await idbSet('scan', scan); scanning = false; renderScr();
     toast(`Scan done: ${rows.length} stocks${fails ? `, ${fails} failed` : ''}.`);

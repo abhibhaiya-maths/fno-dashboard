@@ -40,6 +40,16 @@ const Guide = (() => {
       <p><b>Radar (Screener → Intraday Radar & ORB):</b> असामान्य तेज़ चाल (इस समय के हिसाब से), volume spike, futures OI का उछाल, दिन का high/low।</p>
       <p><b>Brief का Track Record:</b> अब हर list Firestore में हमेशा के लिए save (कभी बदली नहीं जाती), अगले दिन की सबसे अच्छी/बुरी चाल (MFE/MAE), और दो सीधे नियमों से तुलना — ताकि पता चले पूरा model कुछ फ़ायदा देता है या नहीं।</p>
       <p class="mut">यह dashboard research और पढ़ाई के लिए है, निवेश सलाह नहीं; यह SEBI-registered adviser या research analyst नहीं है। फ़ैसला और जोखिम आपका।</p>`],
+    ['setup', 'Chart: Manual tools या Auto setup', `<p>Chart के ऊपर दो बटन हैं। <b>🛠 Manual tools</b> = पहले जैसा, आप खुद chips दबाकर tools चालू/बंद करें। <b>🎯 Auto setup</b> = chart खुद एक professional trader की तरह setup बनाता है, आप बस देखें।</p>
+      <p><b>Auto setup क्या करता है:</b> (1) आज के दिन के हिसाब से tools चुनता है — trend day पर VWAP, EMA 20, Supertrend, Opening range (जो चाल के साथ चलते हैं); range day पर CPR, Volume profile (जो किनारे बताते हैं)। (2) <b>Zones</b>: जहाँ 2 या ज़्यादा tools एक ही भाव पर मिलते हैं (call/put wall, VAH/VAL/POC, कल का high/low, pivot, CPR, swing) — लाल पट्टी = रुकावट (R), हरी = support (S); ब्रैकेट में कितने tools मिले। (3) <b>Liquidity</b>: पीली बिंदीदार लकीर = जहाँ आम तौर पर stop-loss जमा होते हैं (अंदाज़ा)। (4) <b>Candles पर निशान</b>: ▲▼ = VWAP पार या Supertrend पलटा; <b>BOS</b> = पिछले घंटे का high/low तोड़कर बंद हुआ (trend जारी); <b>Sweep</b> = high/low के पार गया पर वापस अंदर बंद हुआ (stops लेकर पलटा)।</p>
+      <p><b>Chart के नीचे:</b> Engine अभी CALL/PUT/WAIT क्यों कह रहा है — हर tool की हरी/लाल बत्ती और हिंदी में मतलब; पीले किनारे वाले tools खिलाफ़ हैं (वही जोखिम)। ऊपर-नीचे के zones, volume profile का मतलब, और <b>"Which tool worked"</b>: हर tool ने जब दिशा बताई, 30 मिनट बाद भाव सच में उधर गया या नहीं — आज, आज के नए signals, और पिछले कुछ sessions।</p>
+      <p class="mut">Auto setup सिर्फ़ दिखाता और समझाता है; CALL/PUT signal वही रहता है। कोई नई data call नहीं लगती।</p>`],
+    ['wr', 'Option writers और 3-scenario plan', `<p><b>Option chain tab</b> में ऊपर "Writers' read": हर strike पर OI बदलाव + premium बदलाव। <b>OI ↑ + premium ↓ = writing</b> (call writing = ऊपर रुकावट, put writing = नीचे support); <b>OI ↑ + premium ↑ = buying</b> (call buying = तेज़ी के दांव, put buying = मंदी के दांव); <b>OI ↓ = unwinding</b> (वह स्तर कमज़ोर हो रहा है)। <b>ITM writing</b> सबसे मज़बूत संकेत है। ATM पर भारी OI "साफ़ नहीं" माना जाता है।</p>
+      <p><b>OI-change PCR</b> = जोड़े गए put OI ÷ जोड़े गए call OI (±8 strikes): 0.7 से नीचे bearish, 1.3 से ऊपर bullish। <b>Walls</b> = जहाँ आज सबसे ज़्यादा OI जुड़ा। <b>Squeeze</b>: भाव सबसे बड़ी call-writing strike के ऊपर निकल जाए तो writers फँसते हैं, तेज़ उछाल आ सकता है (नीचे के लिए उल्टा)।</p>
+      <p><b>Report card</b> में: gap %, दिन की range में position, VWAP, "sell the news", volume ÷ 20-दिन औसत, futures buildup (OI 10%+ और भाव 2%+ = मज़बूत), चेतावनियाँ (expiry week, hedge, बड़ी गिरावट के बाद short नहीं, FII net short + Nifty गिर रहा), और <b>3 scenario</b>: gap-up / range में / gap-down — हर एक का trigger (5–10 मिनट टिकना ज़रूरी), stop-loss (VWAP या wall के पार), targets (अगली wall, फिर pivot)।</p>
+      <p><b>Brief</b> रात को NSE की file से सभी F&O शेयरों पर यही writers' read लगाता है (Upstox का कोई खर्च नहीं)।</p>
+      <p class="mut">"Writing" एक अंदाज़ा है: exchange नहीं बताता कि सौदा किसने शुरू किया; hedge से भी OI बढ़ता है; खबर पर walls टूट जाती हैं।</p>
+      <button class="gd-btn" onclick="Guide.test()">Reliance वाला test चलाएँ</button><div id="gdTest"></div>`],
     ['home', 'मुख्य screen: CALL / PUT / WAIT', `<p><b>CALL (CE)</b> = engine को ऊपर की चाल दिख रही है। <b>PUT (PE)</b> = नीचे की चाल। <b>WAIT</b> = अभी साफ़ मौका नहीं।</p>
       <p><b>Grade:</b> ★ Prime = trend वाले दिन का pullback, पुराने test में सबसे अच्छा (पूरा size)। <b>A</b> = अच्छा, आधा size। <b>B</b> = कुछ बातें खिलाफ़, कम से कम size। <b>S (Scalp)</b> = 1 मिनट की छोटी चाल, पुराने record में खर्चे के बाद घाटा — सिर्फ़ paper या 1 lot।</p>
       <p><b>Score:</b> कितनी बातें signal के साथ हैं। <b>Entry / SL / Target:</b> कहाँ घुसें, कहाँ गलत मानें (stop-loss), कहाँ मुनाफ़ा लें। <b>Market Brain:</b> पूरे बाज़ार का मूड (trend day है या range day)।</p>`],
@@ -138,5 +148,6 @@ const Guide = (() => {
   setTimeout(() => { if (!Store.pref('tour_done', false) && !document.querySelector('.rp.on') && !/[?&]notour/.test(location.search) && !navigator.webdriver) tour(); }, 3500);
   setInterval(tips, 700);
   setTimeout(home, 1500);
-  return { open, close, go, hideHome, TIP, tour, tourEnd, next };
+  function test() { const el = $g('gdTest'); if (el && typeof Writers !== 'undefined') el.innerHTML = Writers.testHTML(); }
+  return { open, close, go, hideHome, TIP, tour, tourEnd, next, test };
 })();

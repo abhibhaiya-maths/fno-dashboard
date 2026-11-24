@@ -92,6 +92,13 @@ const Report = (() => {
       add('tm', 1.5, m.avgR >= 0.15 && m.tgt - m.stop >= 0.05 ? 'ok' : m.avgR <= -0.15 || m.tgt - m.stop <= -0.15 ? 'bad' : 'warn', 'What happened to this plan on past days?',
         `Time Machine: target first ${Math.round(m.tgt * 100)}%, stop first ${Math.round(m.stop * 100)}%, average ${m.avgR >= 0 ? '+' : ''}${m.avgR.toFixed(2)}R (10,000 simulated rests of today from ${TMr.res.days} past days).`, 'पुराने दिनों में ये प्लान');
     }
+    // 13b. option writers: does the chain (OI change + premium change) agree with this side?
+    const WR = typeof Writers !== 'undefined' ? Writers.forA(a) : null;
+    if (WR && WR.W && !WR.W.noData && WR.W.hasPrem) {
+      const v = WR.W.verdict, agree = (v === 'bullish' && d > 0) || (v === 'bearish' && d < 0), against = (v === 'bullish' && d < 0) || (v === 'bearish' && d > 0);
+      add('wr', 1.5, agree ? 'ok' : against ? 'bad' : 'warn', 'What are the option writers doing?',
+        `Writers' read is ${v}: OI-change PCR ${WR.W.pcrChg ? WR.W.pcrChg.toFixed(2) : '–'}, resistance wall ${WR.W.resW || '–'}, support wall ${WR.W.supW || '–'}${WR.W.itmCW.length ? `, ITM call writing at ${WR.W.itmCW.join(', ')}` : ''}${WR.W.itmPW.length ? `, ITM put writing at ${WR.W.itmPW.join(', ')}` : ''}.`, 'ऑप्शन बेचने वाले किधर हैं');
+    }
     // 14. how this grade has really done for you
     if (s.grade && typeof Paper !== 'undefined' && Paper.gradeStats) {
       const g = Paper.gradeStats().find((x) => x.g === s.grade), n = g ? g.sig.dec : 0, pct = g ? g.sig.pct : null;
@@ -213,6 +220,15 @@ const Report = (() => {
   }
 
   /* ---------- Time Machine box ---------- */
+  // price action + option writers + three-opening plan (advice only)
+  function writersHTML(a) {
+    try { const WR = typeof Writers !== 'undefined' ? Writers.forA(a) : null; if (!WR) return ''; let h = '';
+      h += `<div class="sec">Price action and context</div><ul class="w-notes">${WR.F.out.map(([k, t]) => `<li class="${k}">${esc(t)}</li>`).join('')}</ul>${WR.F.warn.length ? `<div class="w-warn">${WR.F.warn.map((t) => `<div class="alert">${esc(t)}</div>`).join('')}</div>` : ''}`;
+      if (WR.W && !WR.W.noData) h += `<div class="sec">Option writers (OI change + premium change)</div>${Writers.readHTML(WR.W, { short: true })}<div class="mut" style="font-size:12px">Strike-by-strike table: the Option Chain tab.</div>`;
+      h += `<div class="sec">Plan for three openings (next session, or now if the market is open)</div>${Writers.planHTML(WR.P, (v) => f1(v))}`;
+      return h;
+    } catch (e) { return ''; }
+  }
   function tmHTML(a, s) {
     const T = typeof TimeMachine !== 'undefined' ? TimeMachine.forSignal(a, s) : null; if (!T) return '';
     if (T.loading) return '<div class="sec">Time Machine</div><div class="mut rc-p">Loading the 1-minute history…</div>';
@@ -260,6 +276,7 @@ const Report = (() => {
       h += `<div class="rc-verdict n"><div class="rc-vk">Verdict</div><div class="rc-vt">No trade right now</div><div class="rc-vs">${esc(s.title)}. ${esc(s.sub || '')}</div></div>
         ${t ? `<div class="alert i">The market leans ${t === 'CE' ? 'up' : 'down'} (score ${a.score}), but not enough tools agree yet to call it a setup. Waiting is a position too.</div>` : ''}
         ${wait.length ? `<div class="sec">What would start a trade</div>${wait.map((x) => `<div class="rc-li">${esc(x)}</div>`).join('')}` : ''}`;
+      h += writersHTML(a);
       last = { say: `${a.cf.voice}: अभी कोई ट्रेड नहीं। ${t ? `झुकाव ${t === 'CE' ? 'ऊपर' : 'नीचे'} का है, पर संकेत पूरे नहीं।` : 'संकेत मिले-जुले हैं।'} इंतज़ार करें।` };
     } else {
       const C = checklist(a, s), q = quality(C.items), V = verdictOf(q, C.items, s), M = money(a, s), adv = advice(a, s, M), W = wrongIf(a, s, M);
@@ -277,6 +294,7 @@ const Report = (() => {
       else if (s.setup) h += `<div class="sec">Levels</div><div class="lv"><div><small>Entry</small><b>${f1(s.setup.e)}</b></div><div><small>Stop-loss</small><b class="down">${f1(s.setup.sl)}</b></div><div><small>Target 1 / 2</small><b class="up">${f1(s.setup.t1)} / ${f1(s.setup.t2)}</b></div></div>`;
       // we are wrong if
       h += tmHTML(a, s);
+      h += writersHTML(a);
       if (W.length) h += `<div class="sec">We are wrong if… (decide now, not after entering)</div>${W.map((x) => `<div class="rc-li">${esc(x)}</div>`).join('')}`;
       // advice
       h += `<div class="sec">Senior trader's advice</div>${adv.length ? adv.map(([c, t]) => `<div class="alert ${c === 'd' ? 'd' : c === 'i' ? 'i' : ''}">${esc(t)}</div>`).join('') : '<div class="alert i">Nothing worrying about your size, your day or your recent trades.</div>'}<div class="legend">Advice only. Nothing here blocks a trade.</div>`;

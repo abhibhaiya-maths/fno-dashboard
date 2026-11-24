@@ -64,6 +64,7 @@ function renderControls() {
   const a = A[cur]; if (!a) return;
   $('tfBtns').innerHTML = [1, 5, 15, 60].map((t) => `<button class="btn ${t === tf ? 'on' : ''}" onclick="setTF(${t})">${TFL[t]}</button>`).join('');
   $('ovChips').innerHTML = Object.keys(OV).map((k) => `<button class="chip ${OV[k] ? 'on' : ''}" onclick="togOV('${k}')" aria-pressed="${OV[k]}"><span class="sw" style="background:${OVC[k]}"></span>${k === 'vwap' && !a.hasVol ? 'TWAP' : k === 'vp' && !a.hasVol ? 'TPO profile' : OVL[k]}</button>`).join('');
+  if (typeof Setup !== 'undefined') { try { Setup.controls(a); } catch (e) { /* display only */ } }
   $('subBtns').innerHTML = [['rsi', 'RSI'], ['macd', 'MACD'], ['adx', 'ADX']].map(([k, l]) => `<button class="btn ${k === sub ? 'on' : ''}" onclick="setSub('${k}')">${l}</button>`).join('');
   $('chartTitle').textContent = `${a.cf.label} · ${TFL[tf]} chart`;
   $('tabs').innerHTML = [['chain', a.cf.opt ? 'Option chain' : 'Futures & volatility'], ['mood', 'Market mood'], ['struct', 'Structure & OI'], ['sig', `All ${a.intra.sigs.length + (a.short ? a.short.sigs.length : 0) + (a.long ? a.long.sigs.length : 0)} signals`]].map(([k, l]) => `<button class="btn ${k === tab ? 'on' : ''}" onclick="setTab('${k}')">${l}</button>`).join('');
@@ -201,7 +202,7 @@ function renderTab() {
     if (!ch.rows.length) { $('tabBody').innerHTML = '<div class="mut">No option chain data yet. It refreshes every 15–30 seconds.</div>' + futVolHTML(a); return; }
     const L = (v) => f1(v / 1e5), mxOI = Math.max(...ch.view.map((r) => Math.max(r.ce.oi, r.pe.oi))) || 1;
     const bar = (v, c) => `<span class="oibar" style="width:${Math.round((v / mxOI) * 46)}px;background:${c}"></span>`;
-    h = oiPicture(a, ch) + `<div class="tbl"><table class="chain"><thead><tr><th>CE OI (L)</th><th>OI chg</th><th>IV</th><th>Delta</th><th>CE LTP</th><th class="k">Strike</th><th class="l">PE LTP</th><th class="l">Delta</th><th class="l">IV</th><th class="l">OI chg</th><th class="l">PE OI (L)</th></tr></thead><tbody>` +
+    h = (typeof Writers !== 'undefined' ? (() => { try { const W = Writers.read(ch.rows, a.price, ch.step); return W ? `<div class="wbox">${Writers.readHTML(W)}</div>` : ''; } catch (e) { return ''; } })() : '') + oiPicture(a, ch) + `<div class="tbl"><table class="chain"><thead><tr><th>CE OI (L)</th><th>OI chg</th><th>IV</th><th>Delta</th><th>CE LTP</th><th class="k">Strike</th><th class="l">PE LTP</th><th class="l">Delta</th><th class="l">IV</th><th class="l">OI chg</th><th class="l">PE OI (L)</th></tr></thead><tbody>` +
       ch.view.map((r) => {
         const ci = r.K < a.price ? 'itm' : '', pi = r.K > a.price ? 'itm' : '', cc = r.ce.oi - (r.ce.poi || r.ce.oi), pc = r.pe.oi - (r.pe.poi || r.pe.oi);
         return `<tr class="${r.K === ch.atm ? 'atm' : ''}"><td class="${ci}">${bar(r.ce.oi, COL.put)}${L(r.ce.oi)}</td><td class="${ci} ${cc >= 0 ? 'up' : 'down'}">${sgn(cc)}${L(cc)}</td><td class="${ci}">${f1(r.ce.iv * 100)}</td><td class="${ci}">${f2(r.ce.de)}</td><td class="${ci}">${f2(r.ce.ltp)}</td>
@@ -398,17 +399,18 @@ function saveFII() { const f = $('fiiIn').value, d = $('diiIn').value; Store.set
 function prepCanvas(c) { const ctx = c.getContext('2d'), dpr = window.devicePixelRatio || 1, W = c.clientWidth, H = c.clientHeight; c.width = W * dpr; c.height = H * dpr; ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, W, H); return { ctx, W, H }; }
 function drawChart() {
   const a = A[cur]; if (!a) return;
+  const OVx = typeof Setup !== 'undefined' && Setup.on() ? Setup.overlays(a).o : OV; // Auto setup picks today's tools; Manual uses your chips
   CI = tf === 5 ? a.I5 : ind(agg(a.D.candles, tf), a.hasVol);
   const I = CI, k = I.k, n = ZM.n || VIEW[tf], e = Math.max(Math.min(n, k.length), k.length - ZM.off), s0 = Math.max(0, e - n), view = k.slice(s0, e), live = e >= k.length;
   const zb = $('zoomLive'); if (zb) zb.style.display = live && !ZM.n ? 'none' : '';
   const { ctx, W, H } = prepCanvas($('chart'));
   const padR = 62, volH = a.hasVol ? H * 0.12 : 0, top = 10, bot = H - volH - 20, pw = W - padR;
   const lines = [];
-  if (OV.vwap) lines.push([I.vwap, COL.vwap]); if (OV.ema20) lines.push([I.ema20, COL.ema20]); if (OV.ema50) lines.push([I.ema50, COL.ema50]);
-  if (OV.bb) lines.push([I.bb.up, COL.bb], [I.bb.mid, COL.grid], [I.bb.lo, COL.bb]);
+  if (OVx.vwap) lines.push([I.vwap, COL.vwap]); if (OVx.ema20) lines.push([I.ema20, COL.ema20]); if (OVx.ema50) lines.push([I.ema50, COL.ema50]);
+  if (OVx.bb) lines.push([I.bb.up, COL.bb], [I.bb.mid, COL.grid], [I.bb.lo, COL.bb]);
   let mx = -Infinity, mn = Infinity; view.forEach((x) => { mx = Math.max(mx, x.h); mn = Math.min(mn, x.l); });
   const inc = (arr) => { for (let i = s0; i < e; i++) if (arr[i] != null) { mx = Math.max(mx, arr[i]); mn = Math.min(mn, arr[i]); } };
-  lines.forEach((l) => inc(l[0])); if (OV.st) inc(I.st.st);
+  lines.forEach((l) => inc(l[0])); if (OVx.st) inc(I.st.st);
   // दाईं तरफ़ अगले 30 मिनट का अनुमान (कोन) दिखाने की जगह
   const PJ = Engine.projection(a), lastC = view[view.length - 1].c, per = PJ.perCandle * Math.sqrt(tf / 5), steps = Math.max(1, Math.round(30 / tf));
   const cone = per * Math.sqrt(steps);
@@ -420,25 +422,25 @@ function drawChart() {
   ctx.font = FONT; ctx.lineWidth = 1;
   for (let i = 0; i <= 5; i++) { const v = mn + ((mx - mn) * i) / 5, yy = Math.round(y(v)) + 0.5; ctx.strokeStyle = COL.grid; ctx.beginPath(); ctx.moveTo(0, yy); ctx.lineTo(pw, yy); ctx.stroke(); ctx.fillStyle = COL.muted; ctx.fillText(f0(v), pw + 6, yy + 4); }
   for (let i = 1; i < view.length; i++) if (view[i].d !== view[i - 1].d) { ctx.strokeStyle = COL.line; ctx.setLineDash([3, 4]); ctx.beginPath(); ctx.moveTo(i * cw, top); ctx.lineTo(i * cw, H - 16); ctx.stroke(); ctx.setLineDash([]); ctx.fillStyle = COL.muted; ctx.fillText(a.dayLabels[view[i].d] || '', i * cw + 4, top + 10); }
-  if (OV.vp) {
+  if (OVx.vp) {
     const vp = a.VP, mv = Math.max(...vp.vol) || 1;
     vp.vol.forEach((v, i) => { const p1 = vp.DL + i * vp.bw, p2 = p1 + vp.bw; if (p2 < mn || p1 > mx) return; const y1 = y(Math.min(p2, mx)), y2 = y(Math.max(p1, mn)), len = (v / mv) * pw * 0.22;
       ctx.fillStyle = i === vp.poc ? 'rgba(255,181,71,.4)' : i >= vp.lo && i <= vp.hi ? 'rgba(0,229,255,.16)' : 'rgba(127,147,178,.1)'; ctx.fillRect(pw - len, y1, len, Math.max(1, y2 - y1 - 1)); });
   }
   const later = []; // लेबल सबसे आख़िर में, ताकि कैंडल्स उन्हें न ढकें
   // Fibonacci का गोल्डन ज़ोन (50% से 61.8%)
-  if (OV.fib) {
+  if (OVx.fib) {
     const g1 = a.fib.find((f) => f.r === 0.5).v, g2 = a.fib.find((f) => f.r === 0.618).v;
     const ya = y(Math.max(g1, g2)), yb = y(Math.min(g1, g2));
     if (yb > top && ya < bot) { ctx.fillStyle = 'rgba(255,181,71,.09)'; ctx.fillRect(0, Math.max(top, ya), pw, Math.min(bot, yb) - Math.max(top, ya)); later.push(['Golden zone', pw - 70, Math.max(top, ya) + 12, COL.brass]); }
   }
   const lv = [];
-  if (OV.cpr) lv.push(['TC', a.tc, COL.cpr, 1], ['P', a.p, COL.cpr, 1], ['BC', a.bc, COL.cpr, 1]);
-  if (OV.piv) [['R1', COL.put], ['R2', COL.put], ['R3', COL.put], ['S1', COL.call], ['S2', COL.call], ['S3', COL.call]].forEach(([nm, c]) => lv.push([nm, a.piv[nm], c, 1]));
-  if (OV.fib) a.fib.forEach((f) => lv.push([`Fib ${(f.r * 100).toFixed(1)}%`, f.v, COL.brass, FIB_KEY.includes(f.r) ? 1.6 : 0.8]));
-  if (OV.orb) lv.push(['OR high', a.ORH, COL.text, 1], ['OR low', a.ORL, COL.text, 1]);
+  if (OVx.cpr) lv.push(['TC', a.tc, COL.cpr, 1], ['P', a.p, COL.cpr, 1], ['BC', a.bc, COL.cpr, 1]);
+  if (OVx.piv) [['R1', COL.put], ['R2', COL.put], ['R3', COL.put], ['S1', COL.call], ['S2', COL.call], ['S3', COL.call]].forEach(([nm, c]) => lv.push([nm, a.piv[nm], c, 1]));
+  if (OVx.fib) a.fib.forEach((f) => lv.push([`Fib ${(f.r * 100).toFixed(1)}%`, f.v, COL.brass, FIB_KEY.includes(f.r) ? 1.6 : 0.8]));
+  if (OVx.orb) lv.push(['OR high', a.ORH, COL.text, 1], ['OR low', a.ORL, COL.text, 1]);
   // the day's range the options are pricing in: previous close ± ATM IV for one day (about 2 in 3 days stay inside)
-  if (OV.exr && a.ch && ok(a.ch.atmIV) && a.ch.atmIV > 0 && ok(a.PC)) { const d = (a.PC * a.ch.atmIV) / Math.sqrt(252); lv.push(['Options range high', a.PC + d, COL.violet, 1.4], ['Options range low', a.PC - d, COL.violet, 1.4]); }
+  if (OVx.exr && a.ch && ok(a.ch.atmIV) && a.ch.atmIV > 0 && ok(a.PC)) { const d = (a.PC * a.ch.atmIV) / Math.sqrt(252); lv.push(['Options range high', a.PC + d, COL.violet, 1.4], ['Options range low', a.PC - d, COL.violet, 1.4]); }
   // लाइनें खींचो, लेबल तभी जब पास वाले लेबल से टकराए नहीं
   const placed = [];
   lv.filter(([, v]) => v >= mn && v <= mx).sort((p, q) => q[3] - p[3]).forEach(([nm, v, c, w]) => {
@@ -449,7 +451,7 @@ function drawChart() {
   view.forEach((q, i) => { const x = Math.round(X(i)) + 0.5, col = q.c >= q.o ? COL.call : COL.put; ctx.strokeStyle = col; ctx.beginPath(); ctx.moveTo(x, y(q.h)); ctx.lineTo(x, y(q.l)); ctx.stroke(); ctx.fillStyle = col; ctx.fillRect(x - cw * 0.34, y(Math.max(q.o, q.c)), Math.max(1, cw * 0.68), Math.max(1, Math.abs(y(q.o) - y(q.c)))); });
   ctx.lineWidth = 1.6;
   lines.forEach(([arr, c]) => { ctx.strokeStyle = c; ctx.beginPath(); let s = false; for (let i = s0; i < e; i++) { if (arr[i] == null) { s = false; continue; } const x = X(i - s0), yy = y(arr[i]); if (!s) { ctx.moveTo(x, yy); s = true; } else ctx.lineTo(x, yy); } ctx.stroke(); });
-  if (OV.st) { ctx.lineWidth = 2; for (let i = s0 + 1; i < e; i++) { if (I.st.st[i] == null || I.st.st[i - 1] == null || I.st.dir[i] !== I.st.dir[i - 1]) continue; ctx.strokeStyle = I.st.dir[i] === 1 ? COL.call : COL.put; ctx.beginPath(); ctx.moveTo(X(i - 1 - s0), y(I.st.st[i - 1])); ctx.lineTo(X(i - s0), y(I.st.st[i])); ctx.stroke(); } }
+  if (OVx.st) { ctx.lineWidth = 2; for (let i = s0 + 1; i < e; i++) { if (I.st.st[i] == null || I.st.st[i - 1] == null || I.st.dir[i] !== I.st.dir[i - 1]) continue; ctx.strokeStyle = I.st.dir[i] === 1 ? COL.call : COL.put; ctx.beginPath(); ctx.moveTo(X(i - 1 - s0), y(I.st.st[i - 1])); ctx.lineTo(X(i - s0), y(I.st.st[i])); ctx.stroke(); } }
   ctx.lineWidth = 1;
   if (live) {
     const x0 = X(view.length - 1), x1 = pw - 6, xs = (i) => x0 + ((x1 - x0) * i) / steps;
@@ -468,6 +470,7 @@ function drawChart() {
       later.push([`T1 ${f0(PJ.t1)}`, Math.max(x0 + 2, x1 - 64), y(PJ.t1) + (PJ.dir === 'CE' ? -6 : 16), c], [`SL ${f0(PJ.sl)}`, Math.max(x0 + 2, x1 - 64), y(PJ.sl) + (PJ.dir === 'CE' ? 16 : -6), COL.put]);
     }
   }
+  if (typeof Setup !== 'undefined' && Setup.on()) { try { Setup.draw(ctx, { a, I, s0, e, y, X, pw, top, bot, mn, mx, later, W }); } catch (err) { /* display only */ } }
   later.forEach(([t, x, yy, c]) => { const tw = ctx.measureText(t).width; ctx.fillStyle = COL.panel; ctx.fillRect(x - 3, yy - 11, tw + 6, 14); ctx.fillStyle = c; ctx.fillText(t, x, yy); });
   Paper.openTrades().filter((t) => t.key === cur).forEach((t) => { if (t.openIdx < mn || t.openIdx > mx) return; const yy = y(t.openIdx); ctx.fillStyle = t.type === 'CE' ? COL.call : COL.put; ctx.beginPath(); ctx.arc(8, yy, 4, 0, Math.PI * 2); ctx.fill(); ctx.fillText(`${t.type} entry`, 16, yy + 4); });
   if (a.hasVol) { const mvv = Math.max(...view.map((x) => x.v)) || 1; view.forEach((q, i) => { const hh = (q.v / mvv) * volH; ctx.fillStyle = q.c >= q.o ? 'rgba(0,245,160,.32)' : 'rgba(255,59,107,.32)'; ctx.fillRect(X(i) - cw * 0.34, H - 16 - hh, Math.max(1, cw * 0.68), hh); }); }
@@ -483,6 +486,7 @@ function drawChart() {
     ctx.fillStyle = COL.panel; ctx.fillRect(4, top, tw + 12, 18); ctx.fillStyle = q.c >= q.o ? COL.call : COL.put; ctx.fillText(t, 10, top + 13);
   }
   drawSub(I, s0, e);
+  if (typeof Setup !== 'undefined') { try { Setup.panel(a); } catch (err) { /* display only */ } }
 }
 function drawSub(I, s0, e) {
   e = e || I.k.length;

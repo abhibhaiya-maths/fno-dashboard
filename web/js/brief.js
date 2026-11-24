@@ -59,15 +59,18 @@ const Brief = (() => {
         f.oi += oi; f.doi += d; f.toks.push([+r[iId] || 0, x, oi]);
         if (!f.near || x < f.near.x) f.near = { x, c: +r[iC] || null, pc: +r[iP] || null, u: iU >= 0 ? +r[iU] || null : null, tok: +r[iId] || 0 };
       } else if ((tp === 'STO' || tp === 'IDO') && x > date) {
-        const o = opt[s] || (opt[s] = { x, ce: {}, pe: {}, cp: {}, pp: {}, u: null });
-        if (x < o.x) { o.x = x; o.ce = {}; o.pe = {}; o.cp = {}; o.pp = {}; o.u = null; } if (x !== o.x) continue;
-        const K = +r[iK], side = (r[iO] || '').trim() === 'CE' ? 'ce' : 'pe'; if (ok(K)) { o[side][K] = (o[side][K] || 0) + oi; const px = +r[iC]; if (px > 0) o[side === 'ce' ? 'cp' : 'pp'][K] = px; }
+        const o = opt[s] || (opt[s] = { x, ce: {}, pe: {}, cp: {}, pp: {}, cd: {}, pd: {}, cpc: {}, ppc: {}, u: null });
+        if (x < o.x) { o.x = x; o.ce = {}; o.pe = {}; o.cp = {}; o.pp = {}; o.cd = {}; o.pd = {}; o.cpc = {}; o.ppc = {}; o.u = null; } if (x !== o.x) continue;
+        const K = +r[iK], side = (r[iO] || '').trim() === 'CE' ? 'ce' : 'pe'; if (ok(K)) { o[side][K] = (o[side][K] || 0) + oi; const px = +r[iC], pv = iP >= 0 ? +r[iP] : 0, c2 = side === 'ce'; if (px > 0) o[c2 ? 'cp' : 'pp'][K] = px; if (pv > 0) o[c2 ? 'cpc' : 'ppc'][K] = pv; o[c2 ? 'cd' : 'pd'][K] = (o[c2 ? 'cd' : 'pd'][K] || 0) + d; }
         if (iU >= 0 && +r[iU] > 0) o.u = +r[iU];
       }
     }
     const walls = {};
     for (const s in opt) { const o = opt[s], top = (m) => { let k = null, v = 0; for (const K in m) if (m[K] > v) { v = m[K]; k = +K; } return k; }, sum = (m) => Object.values(m).reduce((a, b) => a + b, 0), ce = sum(o.ce), pe = sum(o.pe); walls[s] = { x: o.x, ce: top(o.ce), pe: top(o.pe), pcr: ce ? pe / ce : null };
-      if (o.u) { const Ks = Object.keys(o.cp).filter((K) => o.pp[K]).map(Number).sort((a, b) => Math.abs(a - o.u) - Math.abs(b - o.u)); if (Ks.length) walls[s].atm = { K: Ks[0], c: o.cp[Ks[0]], p: o.pp[Ks[0]], u: o.u }; } }
+      if (o.u) { const Ks = Object.keys(o.cp).filter((K) => o.pp[K]).map(Number).sort((a, b) => Math.abs(a - o.u) - Math.abs(b - o.u)); if (Ks.length) walls[s].atm = { K: Ks[0], c: o.cp[Ks[0]], p: o.pp[Ks[0]], u: o.u };
+        // ±8 strikes around the price for the writers' read: [K, callOI, callOIchange, callClose, callPrevClose, putOI, putOIchange, putClose, putPrevClose]
+        const all = Object.keys(o.ce).map(Number).filter((K) => o.pe[K] !== undefined).sort((a, b) => a - b); let ai = 0; all.forEach((K, i) => { if (Math.abs(K - o.u) < Math.abs(all[ai] - o.u)) ai = i; });
+        walls[s].u = o.u; walls[s].rows = all.slice(Math.max(0, ai - 8), ai + 9).map((K) => [K, o.ce[K], o.cd[K] || 0, o.cp[K] || 0, o.cpc[K] || 0, o.pe[K], o.pd[K] || 0, o.pp[K] || 0, o.ppc[K] || 0]); } }
     return { date, fut, walls };
   }
   // full equity bhavcopy with delivery: [close, prevClose, open, high, low, volume, delivery %]
@@ -145,6 +148,7 @@ const Brief = (() => {
         else if (up && !add2) { x.build = 'Short covering'; add('oi', 0.5 + 0.25 * g, `Short covering: price up but ${oiT} = sellers exiting. The rise can fade without fresh buyers.`); }
         else { x.build = 'Long unwinding'; add('oi', -(0.5 + 0.25 * g), `Long unwinding: price down and ${oiT} = buyers exiting.`); }
       }
+      if (x.build && Math.abs(x.oiPct) >= 0.1 && Math.abs(x.r1) >= 0.02) x.info.unshift('Strong futures signal: OI change above 10% with a 2%+ price move. (Near expiry, rollovers distort OI; OI can also be hedges.)');
       // 4. delivery: shares actually taken home, not just traded in the day
       const dl = ok(x.deliv) ? x.deliv : null;
       if (ok(dl) && ok(x.d5) && x.d5 > 0 && dl >= 30 && dl >= x.d5 * 1.25 && Math.abs(x.r1) >= 0.005) {
@@ -166,6 +170,13 @@ const Brief = (() => {
       else if (sc && ok(sc.news) && Math.abs(sc.news) >= 0.6) add('news', cap(sc.news / 4, 0.5), `News ${sc.news > 0 ? 'helps' : 'hurts'} the ${sc.name} sector today.`, 'news');
       // 8. world cues for this kind of company
       CUES.forEach((c) => { const q = W[c.id]; if (!q || !ok(q.chg) || Math.abs(q.chg) < c.min || !c.test(x.sym, x.ind)) return; const s = Math.sign(q.chg) * c.sign; add('world', s * c.w, `${c.name} ${q.chg >= 0 ? '+' : ''}${f1(q.chg)}%: ${c.why}.`); });
+      // 9. option writers from NSE's file: OI change + premium change, strike by strike (end of day)
+      if (x.wall && x.wall.rows && x.wall.rows.length >= 5 && typeof Writers !== 'undefined') {
+        try { const rows = x.wall.rows.map((r) => ({ K: r[0], ce: { oi: r[1], poi: r[1] - r[2], ltp: r[3], cp: r[4] }, pe: { oi: r[5], poi: r[5] - r[6], ltp: r[7], cp: r[8] } }));
+          const WR = Writers.read(rows, x.wall.u || x.price, null, { all: true }); x.wr = WR;
+          if (WR && !WR.noData && WR.hasPrem && WR.verdict !== 'neutral') add('opt', cap(WR.score / 2, 1), `Option writers ${WR.verdict === 'bullish' ? 'lean bullish' : 'lean bearish'}: OI-change PCR ${WR.pcrChg > 9 ? 'very high' : f2(WR.pcrChg)}${WR.itmPW.length ? `, ITM put writing at ${WR.itmPW.join(', ')}` : ''}${WR.itmCW.length ? `, ITM call writing at ${WR.itmCW.join(', ')}` : ''}; support wall ${WR.supW || '–'}, resistance wall ${WR.resW || '–'}.`);
+        } catch (e) { /* skip */ }
+      }
       // info only: option walls (next expiry) and results
       if (x.wall && (x.wall.ce || x.wall.pe)) x.info.push(`Option walls: most call OI at ${x.wall.ce || '–'} (works as resistance), most put OI at ${x.wall.pe || '–'} (support)${ok(x.wall.pcr) ? `, PCR ${f2(x.wall.pcr)}` : ''}.`);
       x.sc = x.f.reduce((s, y) => s + y.pts, 0);
@@ -227,11 +238,12 @@ const Brief = (() => {
     return p;
   }
   async function foFor(d8) {
-    const k = 'brief_fo2_' + d8, c = await idbGet(k); if (c) return c;
+    const k = 'brief_fo3_' + d8, c = await idbGet(k); if (c) return c;
     const txt = await nse('fo', d8); if (!txt) return null;
     const p = parseFO(txt); if (!p.date) return null;
-    const old = await idbGet('brief_fo2_last'); if (old && old !== d8) await idbDel('brief_fo2_' + old);
-    await idbSet(k, p); await idbSet('brief_fo2_last', d8);
+    const old = await idbGet('brief_fo3_last'); if (old && old !== d8) await idbDel('brief_fo3_' + old);
+    ['brief_fo2_last'].forEach(async (z) => { const o2 = await idbGet(z); if (o2) { await idbDel('brief_fo2_' + o2); await idbDel(z); } });
+    await idbSet(k, p); await idbSet('brief_fo3_last', d8);
     return p;
   }
   async function sectors() {
@@ -453,6 +465,7 @@ const Brief = (() => {
     <tr><td class="l">Sector</td><td>up to ±0.75</td><td class="l">Its sector's F&O stocks moving together (financials, IT, pharma, auto…).</td></tr>
     <tr><td class="l">News</td><td>up to ±1 (company), ±0.5 (sector)</td><td class="l">From the Impact page's reading of today's headlines.</td></tr>
     <tr><td class="l">World cues</td><td>±0.25 to ±0.5</td><td class="l">Nasdaq and the rupee for IT; Brent for oil marketers, paints, tyres, airlines (cheaper = good) and oil producers (dearer = good); gold for gold-loan firms.</td></tr>
+    <tr><td class="l">Option writers</td><td>up to ±1</td><td class="l">From NSE's file, strike by strike: OI up + premium down = writing (call writing = resistance, put writing = support); OI up + premium up = buying. ITM writing counts most. OI-change PCR below 0.7 bearish, above 1.3 bullish.</td></tr>
     <tr><td class="l">Option walls, PCR</td><td>info only</td><td class="l">Strikes with the most call OI (resistance) and put OI (support) for the next expiry.</td></tr>
     </tbody></table></div>
     <p class="mut" style="font-size:13px">A stock makes the Top 5 with at least +1.75 (or −1.75) points, 3 or more signs pointing the same way and at most 1 against. Results due the next day are listed apart. The market tone (Nifty, breadth, FII/DII cash, FII index-futures long %, GIFT Nifty, US futures, crude, US VIX) is shown on top; it doesn't change the ranking, it tells you whether the whole market is likely to help or fight your idea.</p>
@@ -496,7 +509,9 @@ const Brief = (() => {
       px[sym] = { c: cc, pc: c, o: c, h: r1 > 0.01 ? cc * 1.001 : hi, l: r1 < -0.01 ? cc * 0.999 : lo, v: 1e6 * (0.8 + r() * 2) };
       hist[sym] = H; dToday[sym] = 30 + r() * 40 + (Math.abs(r1) > 0.015 ? 15 : 0);
       const o0 = 2e7 * (0.5 + r()), d = o0 * (r() - 0.35) * 0.18; oi[sym] = { oi: o0 + d, doi: d };
-      walls[sym] = { ce: Math.round(cc * 1.05 / 10) * 10, pe: Math.round(cc * 0.95 / 10) * 10, pcr: 0.6 + r() * 0.8 };
+      walls[sym] = { ce: Math.round(cc * 1.05 / 10) * 10, pe: Math.round(cc * 0.95 / 10) * 10, pcr: 0.6 + r() * 0.8, u: cc };
+      { const st = Math.max(5, Math.round(cc * 0.01 / 5) * 5), k0 = Math.round(cc / st) * st, b = r1 * 30; walls[sym].rows = Array.from({ length: 13 }, (_, j) => { const K = k0 + (j - 6) * st, cd = Math.round(1e5 * (0.3 + r()) * (1 - b) * (K >= cc ? 1.6 : 0.5)), pd = Math.round(1e5 * (0.3 + r()) * (1 + b) * (K <= cc ? 1.6 : 0.5)), cpx = 20 + r() * 10, ppx = 20 + r() * 10;
+        return [K, 1e6 + cd, cd, cpx, cpx * (r1 > 0 ? 0.9 : 1.1), 1e6 + pd, pd, ppx, ppx * (r1 > 0 ? 1.1 : 0.9)]; }); }
     });
     const d = istYmd(), prov = force === 'prov';
     const I = { date: d, mode: prov ? 'prov' : 'final', px, hist, dToday, dNote: prov ? 'yesterday' : 'today', oi, oiNote: 'sample data', walls, sector, nifty: { c: 25620, pc: 25466, h: 25650, l: 25440 },

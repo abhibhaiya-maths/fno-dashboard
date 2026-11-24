@@ -138,7 +138,7 @@ async function startLive() {
   let lastFull = Date.now();
   const snapLoop = async () => {
     const on = LiveSource.stream.connected, full = on || Date.now() - lastFull >= 30000;
-    if (!LiveSource.rateLimited()) { await LiveSource.refreshSnapshot(!full); if (full) lastFull = Date.now(); refreshAll(); }
+    { await LiveSource.refreshSnapshot(!full); if (full) lastFull = Date.now(); refreshAll(); }
     setTimeout(snapLoop, slow(on ? P.STREAM_SNAPSHOT_MS : P.SNAPSHOT_MS));
   };
   setTimeout(snapLoop, P.SNAPSHOT_MS);
@@ -147,7 +147,7 @@ async function startLive() {
   const chainLoop = async () => { if (!LiveSource.rateLimited()) await LiveSource.refreshChains(); refreshAll(); setTimeout(chainLoop, slow(LiveSource.stream.connected ? 90000 : 45000)); };
   setTimeout(chainLoop, 15000);
   let minN = 0;
-  const minLoop = async () => { minN++; if (!LiveSource.rateLimited()) { await Promise.all([LiveSource.refreshCandles(), minN % 2 ? LiveSource.refreshFut() : null, minN % 2 ? LiveSource.refreshGlobal() : null]); refreshAll(); } setTimeout(minLoop, slow(LiveSource.stream.connected ? Math.max(P.CANDLES_MS, 120000) : P.CANDLES_MS)); }; // stream on: the chart already updates from ticks, so REST candles every 2 min are enough
+  const minLoop = async () => { minN++; { const rl = LiveSource.rateLimited(); await Promise.all([LiveSource.refreshCandles(), minN % 2 && !rl ? LiveSource.refreshFut() : null, minN % 2 && !rl ? LiveSource.refreshGlobal() : null]); refreshAll(); } setTimeout(minLoop, slow(LiveSource.stream.connected ? Math.max(P.CANDLES_MS, 120000) : P.CANDLES_MS)); }; // stream on: the chart already updates from ticks, so REST candles every 2 min are enough
   setTimeout(minLoop, P.CANDLES_MS);
   setInterval(async () => { await Promise.all([LiveSource.refreshNews(), LiveSource.refreshResults(), LiveSource.refreshOfficial(), LiveSource.refreshFII()]); refreshAll(); }, P.NEWS_MS);
   setInterval(async () => { await Promise.all([LiveSource.refreshCalendar(), LiveSource.refreshDaily()]); refreshAll(); }, 30 * 60000);

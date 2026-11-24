@@ -67,7 +67,7 @@ const Overnight = (() => {
         }
         const d = j ? BT.parseDaily(j.data && j.data.candles).filter((r) => r[0] < to).map((r) => [r[0], r[1], r[2], r[3], r[4], r[5] || 0]) : [];
         if (d.length > 60) { rows[x.sym] = d; meta[x.sym] = { key: x.key, name: x.name, lot: x.lot || null, idx: !!x.idx }; }
-        await sleep(120);
+        await sleep(istMin() >= -15 && istMin() <= 380 ? 450 : 120);
       }
       H = { ts: Date.now(), day: to, rows, meta, fails };
       await idb('readwrite', (s) => s.put(H, hKey()));

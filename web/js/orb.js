@@ -6,7 +6,7 @@
    the day's high or low or moving a lot, and reads today's 1-minute candles only for those (/api/intra, up to 25 new
    stocks a scan). The 9:15–9:30 box is fixed for the day, so each stock's box is read once and kept. */
 const Orb = (() => {
-  const OR_END = 15, EVERY = 120e3, MAXNEW = 25;
+  const OR_END = 15, EVERY = 120e3, MAXNEW = 12;
   const live = () => typeof Source !== 'undefined' && Source.mode === 'live';
   let box = {}, boxDay = '', Q = null, last = 0, busy = false, err = '', timer = null, avgVol = null, demoSeed = 0;
   const mins = () => (typeof istMin === 'function' ? istMin() : 0);
@@ -76,7 +76,7 @@ const Orb = (() => {
         await sleep(150);
       }
       // boxes already known: the break time can change, so refresh up to 8 of the active ones a scan
-      const stale = all.filter(([s]) => box[s] && !box[s].none && Date.now() - box[s].ts > 6 * 60e3).sort((a, b) => Math.abs(b[1].c / b[1].pc - 1) - Math.abs(a[1].c / a[1].pc - 1)).slice(0, 8);
+      const stale = all.filter(([s]) => box[s] && !box[s].none && Date.now() - box[s].ts > 6 * 60e3).sort((a, b) => Math.abs(b[1].c / b[1].pc - 1) - Math.abs(a[1].c / a[1].pc - 1)).slice(0, 4);
       for (const [s, x] of stale) { try { const b = boxOf(parseIntra(await Source.raw('/api/intra?key=' + encodeURIComponent(x.key)))); if (b) box[s] = { ...b, ts: Date.now() }; } catch (e) { break; } }
     } catch (e) { err = e.message; }
     finally { busy = false; last = Date.now(); rerender(); }
@@ -97,7 +97,7 @@ const Orb = (() => {
   let OI = { base: null, last: null, prev: null, at: 0, err: '' };
   async function oiBase() {
     if (OI.base) return OI.base;
-    const d = await idbGet('brief_fo2_last'); if (!d) return null; const fo = await idbGet('brief_fo2_' + d); if (!fo) return null;
+    const d = await idbGet('brief_fo3_last'); if (!d) return null; const fo = await idbGet('brief_fo3_' + d); if (!fo) return null;
     const t = day(), toks = [], base = {};
     for (const s in fo.fut) { const f = fo.fut[s]; if (f.idx) continue; f.toks.forEach(([k, x, o]) => { if (k && x > t) { toks.push(k); base[k] = [s, o]; } }); }
     OI.base = { toks, base, date: fo.date }; return OI.base;
