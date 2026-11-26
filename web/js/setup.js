@@ -36,17 +36,18 @@ const Setup = (() => {
   function zones(a) {
     const P = a.price, tol = Math.max((a.atr || P * 0.001) * 0.6, P * 0.0006), C = [];
     const add = (v, n, w, kind) => { if (ok(v) && v > 0 && Math.abs(v - P) / P < 0.06) C.push({ v, n, w, kind: kind || 'lvl' }); };
-    let W = null; try { W = typeof Writers !== 'undefined' && a.cf.opt ? Writers.read(a.ch.rows, P, a.ch.step) : null; } catch (e) { W = null; }
+    let W = null; try { W = typeof Writers !== 'undefined' && a.cf.opt ? Writers.read(a.ch.rows, P, a.ch.step, { dS: ok(a.PC) ? a.price - a.PC : null, T: a.ch.T }) : null; } catch (e) { W = null; }
     if (W && !W.noData) { add(W.resWw || W.resW, 'Call wall', 1.5); add(W.supWw || W.supW, 'Put wall', 1.5); }
     else if (a.ch && a.cf.opt) { add(a.ch.maxCE, 'Most call OI', 1.2); add(a.ch.maxPE, 'Most put OI', 1.2); }
     if (a.VP) { add(a.VP.POC, 'POC', 1); add(a.VP.VAH, 'VAH', 1); add(a.VP.VAL, 'VAL', 1); }
     add(a.DH, "Today's high", 1, 'liq'); add(a.DL, "Today's low", 1, 'liq');
     if (a.ch && ok(a.ch.atmIV) && a.ch.atmIV > 0 && ok(a.PC)) { const d = (a.PC * a.ch.atmIV) / Math.sqrt(252); add(a.PC + d, 'Options range high', 0.8); add(a.PC - d, 'Options range low', 0.8); }
-    add(a.piv && a.piv.S3, 'S3', 0.6); add(a.piv && a.piv.R3, 'R3', 0.6);
+    const NX = a.nx && !a.sessionLive, PV = NX ? a.nx.piv : a.piv, nt = NX ? ' (next session)' : '';
+    add(PV && PV.S3, 'S3' + nt, 0.6); add(PV && PV.R3, 'R3' + nt, 0.6);
     add(a.PH, "Yesterday's high", 1.2, 'liq'); add(a.PL, "Yesterday's low", 1.2, 'liq');
     if (a.curMin >= 15) { add(a.ORH, 'Opening high', 1, 'liq'); add(a.ORL, 'Opening low', 1, 'liq'); }
-    ['R1', 'R2', 'S1', 'S2'].forEach((k) => add(a.piv && a.piv[k], k, 0.7)); add(a.p, 'Pivot', 0.7);
-    add(a.tc, 'CPR top', 0.6); add(a.bc, 'CPR bottom', 0.6);
+    ['R1', 'R2', 'S1', 'S2'].forEach((k) => add(PV && PV[k], k + nt, 0.7)); add(NX ? a.nx.P : a.p, 'Pivot' + nt, 0.7);
+    add(NX ? a.nx.tc : a.tc, 'CPR top' + nt, 0.6); add(NX ? a.nx.bc : a.bc, 'CPR bottom' + nt, 0.6);
     if (a.vol) { add(a.vol.pwH, 'Last week high', 1, 'liq'); add(a.vol.pwL, 'Last week low', 1, 'liq'); }
     const sw = swings(a.I5.k.slice(-160), 3); sw.H.forEach((v) => add(v, 'Swing high', 0.8, 'liq')); sw.L.forEach((v) => add(v, 'Swing low', 0.8, 'liq'));
     (a.fib || []).filter((f) => f.r === 0.5 || f.r === 0.618).forEach((f) => add(f.v, `Fib ${(f.r * 100).toFixed(1)}%`, 0.5));
@@ -185,7 +186,7 @@ const Setup = (() => {
     const best = sc.filter((r) => r.t[1] >= 6).sort((x, y) => y.t[0] / y.t[1] - x.t[0] / x.t[1])[0];
     const pc = (r) => (r[1] ? `${Math.round((r[0] / r[1]) * 100)}% <small class="mut">(${r[0]}/${r[1]})</small>` : '–');
     let h = `<div class="sp-head"><div class="sp-verdict ${side > 0 ? 'up' : side < 0 ? 'dn' : ''}"><small>Engine now</small><b>${s.state === 'CE' ? 'CALL' : s.state === 'PE' ? 'PUT' : 'WAIT'}${s.grade ? ' · ' + s.grade : ''}</b><span>${esc(s.title || '')}</span></div>
-      <div class="sp-count"><span class="up">▲ ${up} tools up</span><span class="dn">▼ ${dn} tools down</span>${a.brain && a.brain.day ? `<span>${esc(a.brain.day.name)}</span>` : ''}</div></div>
+      <div class="sp-count"><span class="up">▲ ${up} up</span><span class="dn">▼ ${dn} down</span><span class="mut" title="Tools that have a reading right now; the rest are neutral or waiting for data">of ${sig.length} live tools (${((a.intra && a.intra.sigs) || []).length} in total)</span>${a.brain && a.brain.day ? `<span>${esc(a.brain.day.name)}</span>` : ''}</div></div>
       <div class="gd-mean"><b>आसान मतलब:</b> ${side ? `Engine ${side > 0 ? 'CALL' : 'PUT'} इसलिए कह रहा है क्योंकि नीचे के <b>${side > 0 ? up : dn}</b> tools ${side > 0 ? 'ऊपर' : 'नीचे'} इशारा कर रहे हैं (हरी/लाल बत्ती)। जो tools खिलाफ़ हैं वे पीले किनारे से दिखे हैं — वही जोखिम हैं।` : 'Engine अभी WAIT पर है: tools आपस में बँटे हुए हैं या दिशा साफ़ नहीं। Chart पर ज़ोन देखें — भाव किस ज़ोन को तोड़ता है, वहीं से अगला मौका बनेगा।'} ${Z.R[0] ? `ऊपर पहली रुकावट <b>${f0(Z.R[0].mid)}</b>` : ''}${Z.S[0] ? `, नीचे पहला support <b>${f0(Z.S[0].mid)}</b>` : ''}।</div>
       <div class="sp-grid"><section><h4>Price-action tools (decide the direction)</h4>${P.map(row).join('') || '<div class="mut">–</div>'}</section><section><h4>Context (options, flows, news, world)</h4>${Cx.map(row).join('') || '<div class="mut">–</div>'}</section></div>
       <div class="sp-grid"><section><h4 class="dn">Resistance zones above</h4>${zl(Z.R, 'r')}</section><section><h4 class="up">Support zones below</h4>${zl(Z.S, 's')}</section></div>

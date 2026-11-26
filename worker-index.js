@@ -498,23 +498,34 @@ function xmlText(s) {
     .replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').trim();
 }
 async function fetchFeed([src, url]) {
+  const one = await fetchFeedRaw([src, url]);
+  if (one.length || !/news\.google\.com/.test(url)) return one;
+  // Google News often refuses cloud servers (consent page / "unusual traffic"). Same search on Bing News RSS.
+  const q = (url.match(/[?&]q=([^&]*)/) || [])[1];
+  if (!q) return one;
+  const bq = decodeURIComponent(q.replace(/\+/g, ' ')).replace(/\s*when:\d+[dh]/i, '');
+  return fetchFeedRaw([src, `https://www.bing.com/news/search?q=${encodeURIComponent(bq)}&format=rss&setlang=en-IN&cc=IN`]);
+}
+async function fetchFeedRaw([src, url]) {
   const ctl = new AbortController();
   const t = setTimeout(() => ctl.abort(), 6000);
   try {
-    const r = await fetch(url, { signal: ctl.signal, headers: { 'User-Agent': 'Mozilla/5.0 (FnO Dashboard)' } });
+    const r = await fetch(url, { signal: ctl.signal, headers: { 'User-Agent': UA_BROWSER, Accept: 'application/rss+xml, application/atom+xml, application/xml, text/xml;q=0.9, */*;q=0.5', 'Accept-Language': 'en-IN,en;q=0.9' } });
     if (!r.ok) return [];
     const x = await r.text();
-    const items = x.split(/<item[\s>]/i).slice(1, 40);
+    const atom = !/<item[\s>]/i.test(x) && /<entry[\s>]/i.test(x);
+    const items = x.split(atom ? /<entry[\s>]/i : /<item[\s>]/i).slice(1, 40);
     return items.map((it) => {
       const g = (tag) => { const m = it.match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)</${tag}>`, 'i')); return m ? xmlText(m[1]) : ''; };
-      const ts = Date.parse(g('pubDate')) || Date.now();
+      const ts = Date.parse(g('pubDate') || g('published') || g('updated') || g('dc:date')) || Date.now();
       let t = g('title'), s2 = src;
-      if (src.startsWith('Google News')) { const m = t.match(/^(.*)\s+-\s+([^-]{2,50})$/); if (m) { t = m[1]; s2 = m[2].trim(); } }
-      return { t, link: g('link'), ts, src: s2, feed: src };
+      if (src.startsWith('Google News') && !/bing\.com/.test(url)) { const m = t.match(/^(.*)\s+-\s+([^-]{2,50})$/); if (m) { t = m[1]; s2 = m[2].trim(); } }
+      const bsrc = g('News:Source') || g('source'); if (/bing\.com/.test(url) && bsrc) s2 = bsrc.trim();
+      return { t, link: g('link') || (it.match(/<link[^>]*href="([^"]+)"/i) || [])[1] || '', ts, src: s2, feed: src };
     }).filter((i) => i.t);
   } catch { return []; } finally { clearTimeout(t); }
 }
-const POS = /surge|soar|rall|gain|jump|rise|rises|record high|beat|strong|upgrade|bull|buy|inflow|boost|recover|higher|profit up|growth/i;
+const POS = /surge|soar|rall|gain|jump|rise|rises|record high|beat|strong|upgrade|bull|buy|inflow|boost|recovers|recovered|recovery rally|higher|profit up|growth/i;
 const NEG = /fall|falls|drop|slump|plunge|crash|decline|weak|miss|downgrade|bear|sell-off|selloff|outflow|loss|lower|cut|fear|concern|worr|tension|war|tariff hike/i;
 // Merge the same story reported by several publishers (word overlap), keeping the earliest/most-detailed one
 function normWords(t) { return new Set(String(t).toLowerCase().replace(/[^a-z0-9₹% ]/g, ' ').split(/\s+/).filter((w) => w.length > 3)); }
@@ -711,13 +722,20 @@ async function instInfo(env, ukey) {
 
 // Nearest futures contract of an index / stock
 async function futFor(env, ukey, sym, exch) {
-  const today = ymd(istNow()), ck = 'fut:' + ukey + ':' + today;
+  const today = ymd(istNow()), ck = 'fut2:' + ukey + ':' + today;
   const c = memGet(ck) || (await kvGet(env, ck, 'json'));
   if (c) { memSet(ck, c, 3600e3); return c.fkey ? c : null; }
-  const list = await upSearch(env, { query: sym, exchanges: exch === 'BSE' ? 'BSE' : 'NSE', instrument_types: 'FUT' }).catch(() => []);
-  const f = list.filter((x) => x.underlying_key === ukey && (normExp(x.expiry) || '0') >= today).sort((a, b) => (normExp(a.expiry) < normExp(b.expiry) ? -1 : 1))[0];
+  let failed = false;
+  const list = await upSearch(env, { query: sym, exchanges: exch === 'BSE' ? 'BSE' : 'NSE', instrument_types: 'FUT' }).catch((e) => { if (e && e.code === 'UPSTOX_LOGIN') throw e; failed = true; return []; });
+  const live = list.filter((x) => (normExp(x.expiry) || '0') >= today && !/^(MCX)/.test(x.exchange || ''));
+  // match by the underlying's key; if Upstox leaves that out, by the underlying symbol (RELIANCE → RELIANCE FUT …)
+  let cand = live.filter((x) => x.underlying_key === ukey);
+  if (!cand.length && sym) cand = live.filter((x) => String(x.underlying_symbol || x.asset_symbol || '').toUpperCase() === sym || new RegExp('^' + sym.replace(/[^A-Z0-9]/g, '') + '\\s*(FUT|\\d)', 'i').test(String(x.trading_symbol || '').replace(/[^A-Z0-9 ]/gi, '')));
+  const f = cand.sort((a, b) => (normExp(a.expiry) < normExp(b.expiry) ? -1 : 1))[0];
   const r = f ? { fkey: f.instrument_key, expiry: normExp(f.expiry), lot: f.lot_size || null } : { fkey: null };
-  await kvPut(env, ck, JSON.stringify(r), { expirationTtl: 26 * 3600 });
+  // a failed or empty search is kept only 20 minutes (it used to block futures for the whole day)
+  if (!failed) await kvPut(env, ck, JSON.stringify(r), { expirationTtl: r.fkey ? 26 * 3600 : 1200 });
+  if (!r.fkey) { memSet(ck, r, failed ? 120e3 : 1200e3); return null; }
   memSet(ck, r, 3600e3);
   return r.fkey ? r : null;
 }
@@ -742,15 +760,18 @@ async function futData(env, ukey, sym, exch, sess) {
   const ck = 'futd:' + f.fkey;
   const c = memGet(ck); if (c) return c;
   const today = ymd(istNow());
-  let prev = null;
-  try { const d = await daily(env, f.fkey); const l = d.rows[d.rows.length - 1]; if (l) prev = { date: l[0], close: l[4], oi: l[6] }; } catch (e) { if (e.code === 'UPSTOX_LOGIN') throw e; }
+  let prev = null, dRows = [];
+  try { const d = await daily(env, f.fkey); dRows = d.rows || []; const l = dRows[dRows.length - 1]; if (l) prev = { date: l[0], close: l[4], oi: l[6] }; } catch (e) { if (e.code === 'UPSTOX_LOGIN') throw e; }
   let rows = [];
   try {
     const d = await upAny(env, [`/v3/historical-candle/intraday/${enc(f.fkey)}/minutes/1`, `/v2/historical-candle/intraday/${enc(f.fkey)}/1minute`]);
     const g = groupCandles(d && d.candles, sess).filter((x) => x.date === today)[0];
     rows = g ? g.c.map((x) => [x[0], x[4], x[6]]) : [];
   } catch (e) { if (e.code === 'UPSTOX_LOGIN') throw e; }
-  const res = { fkey: f.fkey, expiry: f.expiry, lot: f.lot, prevClose: prev && prev.close, prevOi: prev && prev.oi, prevDate: prev && prev.date, c: rows.slice(-180) };
+  // no candles today (weekend, holiday, before the open): show the last session's buildup from daily candles instead
+  let eod = false;
+  if (!rows.length && dRows.length >= 2) { const l = dRows[dRows.length - 1], p2 = dRows[dRows.length - 2]; if (l[6] > 0 && p2[6] > 0) { prev = { date: p2[0], close: p2[4], oi: p2[6] }; rows = [[375, l[4], l[6]]]; eod = l[0]; } }
+  const res = { fkey: f.fkey, expiry: f.expiry, lot: f.lot, prevClose: prev && prev.close, prevOi: prev && prev.oi, prevDate: prev && prev.date, c: rows.slice(-180), eod };
   memSet(ck, res, 45e3);
   return res;
 }
@@ -1017,6 +1038,11 @@ async function calendar(env) {
   const today = ymd(istNow()), until = ymd(addDays(istNow(), 10));
   const items = ev.filter((x) => x.date >= today && x.date <= until).sort((a, b) => (a.date + a.time < b.date + b.time ? -1 : 1));
   let hol = []; try { hol = await nseHolidays(env); } catch (e) { hol = []; }
+  const H = new Set(hol.map((h) => h.date)), isTd = (d) => { const w = new Date(d + 'T00:00:00Z').getUTCDay(); return w > 0 && w < 6 && !H.has(d); };
+  for (let i = 0; i <= 10; i++) { const d = addDays(istNow(), i), ds = ymd(d); if (d.getUTCDay() !== 2) continue;
+    let e = new Date(ds + 'T00:00:00Z'); while (!isTd(ymd(e))) e = new Date(e.getTime() - 864e5);
+    const last = new Date(ds + 'T00:00:00Z'); last.setUTCDate(last.getUTCDate() + 7); const monthly = last.getUTCMonth() !== new Date(ds + 'T00:00:00Z').getUTCMonth();
+    items.push({ date: ymd(e), time: '15:30', t: monthly ? 'F&O monthly expiry (Nifty, Bank Nifty, stocks)' : 'Nifty weekly expiry', ctry: 'IN', imp: 'info', src: 'NSE expiry rule (Tuesday)' }); }
   hol.filter((h) => h.date >= today && h.date <= until).forEach((h) => items.push({ date: h.date, time: 'all day', t: `NSE holiday: ${h.t}`, ctry: 'IN', imp: 'info', src: 'NSE' }));
   items.sort((a, b) => (a.date + a.time < b.date + b.time ? -1 : 1));
   const res = { ts: Date.now(), items, holidays: hol.map((h) => h.date), sources: { 'RBI (fixed dates)': 1, 'Fed (fixed dates)': 1, 'MoSPI GDP (usual dates)': 1, ForexFactory: ff, 'NSE holidays': hol.length } };
@@ -1065,6 +1091,7 @@ const OFFICIAL = [
 // Exchange notices and government releases are noisy: keep only what can move prices
 const BSE_NOTICE_KEEP = /derivativ|f&o|futures|options|lot size|index|sensex|bankex|expiry|circuit|price band|surveillance|asm|gsm|trading holiday|market timing|settlement|margin|suspension|delist/i;
 const PIB_KEEP = /\b(gdp|inflation|cpi|wpi|iip|budget|fiscal|tax|gst|customs|excise|rbi|monetary|economy|economic|trade deficit|exports?|imports?|disinvest|ipo|sebi|bank|insurance|pli|capex|core sector|fdi|rupee|petroleum|crude|coal|power|steel|telecom|railway)\b/i;
+const ENF_RE = /recovery certificate|defaulter|adjudicat|settlement order|show[- ]cause|in the matter of|attachment|debar|prohibit|impound|interim order|confirmatory order|ex[- ]?parte|notice of demand|penalty|summons|disgorge/i;
 const OFF_HIGH = /result|dividend|buy ?back|bonus|split|acquisition|amalgamation|merger|order (win|received|worth)|credit rating|default|penalty|investigation|fraud|repo rate|monetary policy|crr|slr|gdp|budget|ban|suspend/i;
 const MON = { jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11 };
 function parseDateIST(s) {
@@ -1106,13 +1133,37 @@ async function official(env) {
           } else if (src === 'PIB') {
             if (!PIB_KEEP.test(title + ' ' + desc)) continue;
           }
-          const s0 = lexScore(t);
-          out.push({ t, co, sub, src, link: g('link'), ts, s: s0, imp: OFF_HIGH.test(t + ' ' + sub) ? 'high' : 'medium' }); n++;
+          // enforcement notices ("Recovery certificate", "defaulter", orders against a person) are not bullish and rarely move prices.
+          // "recover" used to match the bullish word list, which is how SEBI recovery certificates got tagged ▲ Bullish.
+          const enf = ENF_RE.test(t + ' ' + sub + ' ' + desc);
+          const s0 = enf ? (co ? -0.2 : 0) : lexScore(t);
+          out.push({ t, co, sub, src, link: g('link'), ts, s: s0, imp: enf ? (co ? 'medium' : 'low') : OFF_HIGH.test(t + ' ' + sub) ? 'high' : 'medium', enf }); n++;
         }
       }
     } catch (e) { /* source unreachable */ }
     sources[src] = n;
   }));
+  // The RSS files are often refused to cloud servers. Second route for each exchange: its own JSON API (browser headers).
+  const keepAnn = (t, co, sub, src, link, ts) => {
+    if (!t || ANN_DROP.test(t + ' ' + sub) || !ANN_KEEP.test(t + ' ' + sub)) return false;
+    const enf = ENF_RE.test(t + ' ' + sub);
+    out.push({ t: t.slice(0, 220), co, sub, src, link, ts, s: enf ? -0.2 : lexScore(t), imp: enf ? 'medium' : OFF_HIGH.test(t + ' ' + sub) ? 'high' : 'medium', enf, via: 'api' }); return true;
+  };
+  if (!sources['NSE announcements']) {
+    try {
+      const h = await fetch('https://www.nseindia.com/companies-listing/corporate-filings-announcements', { headers: { 'User-Agent': UA_BROWSER, Accept: 'text/html' } });
+      const ck = (h.headers.getSetCookie ? h.headers.getSetCookie() : [h.headers.get('set-cookie') || '']).map((x) => x.split(';')[0]).filter(Boolean).join('; ');
+      const r = await fetch('https://www.nseindia.com/api/corporate-announcements?index=equities', { headers: { 'User-Agent': UA_BROWSER, Accept: 'application/json', Referer: 'https://www.nseindia.com/companies-listing/corporate-filings-announcements', Cookie: ck } });
+      if (r.ok) { const arr = await r.json(); let n = 0; for (const x of (Array.isArray(arr) ? arr : arr.data || []).slice(0, 150)) { const sub = String(x.desc || '').trim(), body = String(x.attchmntText || '').replace(/has informed the Exchange (about|that)?/i, '').trim(); if (keepAnn(sub ? `${sub}: ${body}` : body, x.sm_name || x.symbol || '', sub, 'NSE announcements', x.attchmntFile || '', parseDateIST(x.an_dt || x.sort_date) || Date.now())) n++; } sources['NSE announcements'] = n; }
+    } catch (e) { /* blocked too */ }
+  }
+  if (!sources['BSE announcements']) {
+    try {
+      const d = ymd(istNow()).replace(/-/g, ''), d0 = ymd(addDays(istNow(), -2)).replace(/-/g, '');
+      const r = await fetch(`https://api.bseindia.com/BseIndiaAPI/api/AnnSubCategoryGetData/w?pageno=1&strCat=-1&strPrevDate=${d0}&strScrip=&strSearch=P&strToDate=${d}&strType=C&subcategory=-1`, { headers: { 'User-Agent': UA_BROWSER, Accept: 'application/json, text/plain, */*', Referer: 'https://www.bseindia.com/', Origin: 'https://www.bseindia.com' } });
+      if (r.ok) { const j = await r.json(); let n = 0; for (const x of (j.Table || []).slice(0, 150)) { const sub = String(x.CATEGORYNAME || x.SUBCATNAME || ''), t = String(x.HEADLINE || x.NEWSSUB || '').trim(); if (keepAnn(t, String(x.SLONGNAME || '').trim(), sub, 'BSE announcements', x.ATTACHMENTNAME ? `https://www.bseindia.com/xml-data/corpfiling/AttachLive/${x.ATTACHMENTNAME}` : '', Date.parse(x.NEWS_DT ? x.NEWS_DT + '+05:30' : '') || Date.now())) n++; } sources['BSE announcements'] = n; }
+    } catch (e) { /* blocked too */ }
+  }
   out.sort((a, b) => b.ts - a.ts);
   const res = { ts: Date.now(), items: mergeDupes(out).slice(0, 120), sources };
   memSet('official', res, 10 * 60e3);
@@ -1147,8 +1198,11 @@ async function geoRisk(env) {
     const v = await gdelt({ mode: 'timelinevol', timespan: '3d' });
     const pts = ((v && v.timeline && v.timeline[0] && v.timeline[0].data) || []).map((x) => +x.value).filter((x) => isFinite(x));
     if (pts.length > 24) {
-      const recent = pts.slice(-24), avg = (z) => z.reduce((p, q) => p + q, 0) / z.length; // last ~6 h of 15-min points vs 3 days
-      const base = avg(pts); ratio = base > 0 ? avg(recent) / base : null;
+      // last ~6 h of 15-minute points vs THE SAME HOURS on the previous days. (Comparing with the whole 3-day average
+      // made every night look "calm", because the world simply writes less news at night.)
+      const recent = pts.slice(-24), avg = (z) => (z.length ? z.reduce((p, q) => p + q, 0) / z.length : null);
+      const same = [pts.slice(-24 - 96, -96), pts.slice(-24 - 192, -192)].filter((z) => z.length >= 12).map(avg).filter((x) => x > 0);
+      const base = same.length ? same.reduce((p, q) => p + q, 0) / same.length : avg(pts); ratio = base > 0 ? avg(recent) / base : null;
     }
   } catch (e) { /* volume optional */ }
   // GDELT often refuses cloud servers: fall back to world headlines via Google News. Short queries (one long query with
@@ -1168,7 +1222,14 @@ async function geoRisk(env) {
   items = items.map((x) => ({ ...x, tone: ESC.test(x.t) && !DEESC.test(x.t) ? 'risk' : DEESC.test(x.t) ? 'calm' : '' }));
   const level = ok(ratio) ? (ratio >= 2 ? 'High' : ratio >= 1.4 ? 'Elevated' : ratio <= 0.7 ? 'Low' : 'Normal')
     : !items.length ? 'Unknown' : esc >= 7 ? 'High' : esc >= 4 && esc > calm ? 'Elevated' : calm > esc ? 'Easing' : 'Normal';
-  const res = { ts: Date.now(), level, ratio, items, via, esc, calm };
+  // no sudden "all clear": the level steps down at most one notch every 3 hours unless calming headlines outnumber risk ones
+  const ORDER = ['Low', 'Easing', 'Normal', 'Elevated', 'High'], prev = await kvGet(env, 'geo:lvl', 'json');
+  let lv = level, held = false;
+  if (prev && ORDER.includes(prev.level) && ORDER.includes(level) && ORDER.indexOf(level) < ORDER.indexOf(prev.level) && calm <= esc) {
+    const step = Date.now() - prev.ts < 3 * 3600e3 ? 0 : 1; const want = Math.max(ORDER.indexOf(level), ORDER.indexOf(prev.level) - step); if (ORDER[want] !== level) { lv = ORDER[want]; held = true; }
+  }
+  if (!prev || prev.level !== lv) await kvPut(env, 'geo:lvl', JSON.stringify({ level: lv, ts: Date.now() }), { expirationTtl: 3 * 86400 });
+  const res = { ts: Date.now(), level: lv, rawLevel: level, held, ratio, items, via, esc, calm, note: held ? `Held at ${lv}: the measured level is ${level}, but risk headlines have not eased yet (it steps down slowly).` : '' };
   memSet('geo', res, (items.length ? 30 : 5) * 60e3);
   return res;
 }
@@ -1183,9 +1244,12 @@ async function newsFor(env, id, name) {
   // company news only from trusted publishers (no random websites)
   const TRUSTED = ['economictimes.indiatimes.com', 'business-standard.com', 'livemint.com', 'moneycontrol.com', 'thehindubusinessline.com', 'cnbctv18.com', 'reuters.com', 'bloomberg.com'];
   const g = await fetchFeed(['Google News', `https://news.google.com/rss/search?q=${enc('"' + name + '"')}+(${TRUSTED.map((d) => 'site:' + d).join('+OR+')})+when:7d&hl=en-IN&gl=IN&ceid=IN:en`]);
+  // second source for company news: Yahoo Finance's headline feed for the NSE ticker (works when Google/Bing refuse)
+  const sym = String(id).replace(/[^A-Z0-9&-]/gi, '').toUpperCase();
+  const yf = /^[A-Z0-9&-]{2,20}$/.test(sym) ? (await fetchFeed(['Yahoo Finance', `https://feeds.finance.yahoo.com/rss/2.0/headline?s=${enc(sym + '.NS')}&region=IN&lang=en-IN`])).filter((i) => re.test(i.t)) : [];
   const feed = await allFeeds(env);
   const seen = new Set();
-  const items = [...g, ...feed.items.filter((i) => re.test(i.t))]
+  const items = [...g, ...yf, ...feed.items.filter((i) => re.test(i.t))]
     .filter((i) => { const k = i.t.toLowerCase().slice(0, 80); if (seen.has(k) || i.ts < Date.now() - 7 * 864e5) return false; seen.add(k); return true; })
     .sort((a, b) => b.ts - a.ts).slice(0, 16);
   let scored = items.map((i) => ({ ...i, s: lexScore(i.t), imp: 'medium' })), ai = false;
@@ -1200,7 +1264,7 @@ ${items.map((x, i) => `${i}. ${x.t}`).join('\n')}`;
       ai = true;
     } catch (e) { /* keyword score */ }
   }
-  const res = { ts: Date.now(), ai, items: mergeDupes(scored), sources: { 'Trusted publishers (Google News)': g.length, 'Market feeds': items.length - g.length } };
+  const res = { ts: Date.now(), ai, items: mergeDupes(scored), sources: { 'Trusted publishers (Google or Bing News)': g.length, 'Yahoo Finance': yf.length, 'Market feeds': feed.items.filter((i) => re.test(i.t)).length } };
   memSet(ck, res, 15 * 60e3);
   try { await kvPut(env, ck, JSON.stringify(res), { expirationTtl: 3600 }); } catch (e) { /* cache only */ }
   return res;

@@ -150,9 +150,9 @@ function renderSetup() {
   else {
     const t = setupFor(a, dir);
     h += `<div class="dirbox ${dir === 'CE' ? 'b' : 's'}">${a.cf.opt ? `${dir === 'CE' ? 'CALL' : 'PUT'} bias, ${t.K} ${dir}` : `${dir === 'CE' ? 'Bullish (long)' : 'Bearish (short)'} bias`}</div>
-      <div class="sec">${a.isIdx ? 'Index' : a.isMCX ? 'Futures' : 'Stock'} levels</div><div class="lv"><div><small>Entry</small><b>${f0(t.e)}</b></div><div><small>Stop-loss</small><b class="down">${f0(t.sl)}</b></div><div><small>Target 1 / 2</small><b class="up">${f0(t.t1)} / ${f0(t.t2)}</b></div></div>
+      <div class="sec">${a.isIdx ? 'Index' : a.isMCX ? 'Futures' : 'Stock'} levels</div><div class="lv"><div><small>Entry</small><b>${f0(t.e)}</b></div><div><small>Stop-loss</small><b class="down">${f0(t.sl)}</b></div><div><small>Target 1 / 2</small><b class="up">${t2Txt(t)}</b></div></div>
       ${a.cf.opt ? `<div class="sec">Option premium</div><div class="lv"><div><small>Premium</small><b>${rs(t.P)}</b></div><div><small>Premium SL</small><b class="down">${rs(t.pSL)}</b></div><div><small>Premium T1</small><b class="up">${rs(t.pT1)}</b></div></div>` : ''}
-      <div class="row"><span>Risk : reward</span><b>1 : 1.5 and 1 : 2.5</b></div><div class="row"><span>Stop-loss basis</span><span>1.5 × ATR (5m) = ${f0(t.risk)} pts</span></div>`;
+      <div class="row"><span>Risk : reward</span><b>${rrTxt(t)}</b></div><div class="row"><span>Stop-loss basis</span><span>${f0(t.risk)} pts${ok(a.atr) && a.atr > 0 ? ` (${f1(t.risk / a.atr)} × ATR 5m)` : ''}</span></div>`;
   }
   h += alertsFor(a, dir).map(([c, t]) => `<div class="alert ${c === 'd' ? 'd' : c === 'i' ? 'i' : ''}">${t}</div>`).join('');
   $('setup').innerHTML = h;
@@ -167,7 +167,15 @@ function renderLevels() {
       lrow(`Last ${up ? 'high' : 'low'} (100%)`, pb.ext, a) + lrow('Buy-the-dip zone top (38.2%)'.replace('Buy-the-dip', up ? 'Buy-the-dip' : 'Sell-the-rally'), pb.z382, a) + lrow('Golden zone (61.8%)', pb.z618, a) + lrow('Reversal line (78.6%)', pb.z786, a) + lrow(`Leg start (${up ? 'low' : 'high'})`, pb.base, a);
   }
   if (a.vol && ok(a.vol.hi52)) h += '<div class="sec">Bigger picture, daily candles</div>' + lrow('52-week high', a.vol.hi52, a) + (ok(a.vol.pwH) ? lrow('Previous week high', a.vol.pwH, a) + lrow('Previous week low', a.vol.pwL, a) : '') + lrow('52-week low', a.vol.lo52, a);
-  h += '<div class="sec">Pivots and CPR, from previous session</div>';
+  if (a.nx) {
+    const n = a.nx;
+    h += `<div class="sec">Pivots and CPR for the NEXT session (from ${esc(n.from || 'the last session')}: H ${f1(n.H)} · L ${f1(n.L)} · C ${f1(n.C)})</div>`;
+    ['R3', 'R2', 'R1'].forEach((k) => (h += lrow(k, n.piv[k], a)));
+    h += lrow('CPR TC', n.tc, a) + lrow('Pivot P', n.P, a, true) + lrow('CPR BC', n.bc, a);
+    ['S1', 'S2', 'S3'].forEach((k) => (h += lrow(k, n.piv[k], a)));
+    h += `<div class="row"><span>CPR width</span><b>${f2(n.cpr)}% ${n.cpr < ENG.cprMax ? '(narrow: trend day more likely)' : n.cpr > 0.35 ? '(wide: range day more likely)' : '(normal)'}</b></div>`;
+  }
+  h += `<div class="sec">Pivots and CPR ${a.nx ? 'used in the session that just ended' : 'for today, from previous session'}</div>`;
   ['R3', 'R2', 'R1'].forEach((k) => (h += lrow(k, a.piv[k], a)));
   h += lrow('CPR TC', a.tc, a) + lrow('Pivot P', a.p, a, true) + lrow('CPR BC', a.bc, a);
   ['S1', 'S2', 'S3'].forEach((k) => (h += lrow(k, a.piv[k], a)));
@@ -182,18 +190,20 @@ function futVolHTML(a) {
   const F = a.fut, V = a.vol || {}, pill = (x) => (x ? `<span class="pill ${x[1] > 0 ? 'b' : 's'}">${x[0]}</span>` : '<span class="pill n">Flat</span>');
   let h = '<div class="sec" style="margin-top:14px">Futures open interest</div>';
   h += F ? `<div class="stats" style="margin-top:6px"><div><small>Last 30 minutes</small>${pill(F.m30)}<br><small>OI ${ok(F.d30) ? sgn(F.d30) + f2(F.d30) + '%' : '–'}</small></div>
-      <div><small>Since yesterday</small>${pill(F.day)}<br><small>OI ${ok(F.doi) ? sgn(F.doi) + f1(F.doi) + '%' : '–'}</small></div>
+      <div><small>${F.eod ? `Last session (${esc(String(F.eod))})` : 'Since yesterday'}</small>${pill(F.day)}<br><small>OI ${ok(F.doi) ? sgn(F.doi) + f1(F.doi) + '%' : '–'}</small></div>
       <div><small>Futures price${F.expiry ? ', ' + esc(F.expiry) : ''}</small><b>${f1(F.px)}</b><br><small>${a.isMCX ? 'This is the traded contract' : `basis ${sgn(F.basis)}${f1(F.basis)} vs spot`}</small></div></div>
       <div class="legend">Price up + OI up = long buildup (bullish). Price down + OI up = short buildup (bearish). Price up + OI down = short covering. Price down + OI down = long unwinding.</div>`
-    : `<div class="mut">${a.isIdx || a.cf.opt || a.isMCX ? 'Futures data loads with the next minute refresh.' : 'This stock has no futures contract.'}</div>`;
+    : `<div class="mut">${a.isIdx || a.cf.opt || a.isMCX ? 'Futures data has not arrived yet. It retries every minute; if it stays empty, deploy the new Worker (it now retries a failed contract lookup after 20 minutes instead of the next day, and shows the last session when the market is closed).' : 'This stock has no futures contract.'}</div>`;
   h += '<div class="sec" style="margin-top:14px">Volatility regime</div><div class="stats" style="margin-top:6px">';
   if (ok(V.ivp)) h += `<div><small>IV percentile (${esc(V.src)})</small><b class="${V.ivp >= 80 ? 'down' : V.ivp <= 20 ? 'up' : ''}">${V.ivp}</b><br><small>${V.ivp >= 80 ? 'Options expensive' : V.ivp <= 20 ? 'Options cheap' : 'Normal range'}</small></div><div><small>IV rank</small><b>${V.ivr}</b></div>`;
   if (a.cf.opt && a.ch.rows.length) h += `<div><small>ATM IV</small><b>${f1(a.ch.atmIV * 100)}%</b></div>`;
-  h += `<div><small>Realised vol (20 day)</small><b>${ok(V.hv20) ? f1(V.hv20 * 100) + '%' : '–'}</b></div>`;
+  h += `<div><small>Realised vol (20 day, ×√252)</small><b>${ok(V.hv20) ? f1(V.hv20 * 100) + '%' : '–'}</b>${V.hvNote ? `<br><small class="mut">${esc(V.hvNote)}</small>` : ''}</div>`;
+  if (!a.isIdx && a.vix && ok(a.vix.v)) h += `<div><small>India VIX (Nifty, not this stock)</small><b>${f1(a.vix.v)}</b><br><small>${a.vix.v > 18 ? 'High' : a.vix.v < 13 ? 'Low' : 'Normal (13–18)'}</small></div>`;
   if (ok(V.ivhv)) h += `<div><small>ATM IV ÷ realised vol</small><b class="${V.ivhv > 1.4 ? 'down' : V.ivhv < 0.8 ? 'up' : ''}">${f2(V.ivhv)}×</b><br><small>${V.ivhv > 1.4 ? 'Premiums rich' : V.ivhv < 0.8 ? 'Premiums cheap' : 'Fair'}</small></div>`;
   return h + '</div>';
 }
 function renderTab() {
+  try { ctxTags(); } catch (e) { /* display only */ }
   const a = A[cur], ch = a.ch; let h = '';
   if (tab === 'sig') return renderSigTab(a);
   if (tab === 'struct') return renderStructTab(a);
@@ -202,7 +212,7 @@ function renderTab() {
     if (!ch.rows.length) { $('tabBody').innerHTML = '<div class="mut">No option chain data yet. It refreshes every 15–30 seconds.</div>' + futVolHTML(a); return; }
     const L = (v) => f1(v / 1e5), mxOI = Math.max(...ch.view.map((r) => Math.max(r.ce.oi, r.pe.oi))) || 1;
     const bar = (v, c) => `<span class="oibar" style="width:${Math.round((v / mxOI) * 46)}px;background:${c}"></span>`;
-    h = (typeof Writers !== 'undefined' ? (() => { try { const W = Writers.read(ch.rows, a.price, ch.step); return W ? `<div class="wbox">${Writers.readHTML(W)}</div>` : ''; } catch (e) { return ''; } })() : '') + oiPicture(a, ch) + `<div class="tbl"><table class="chain"><thead><tr><th>CE OI (L)</th><th>OI chg</th><th>IV</th><th>Delta</th><th>CE LTP</th><th class="k">Strike</th><th class="l">PE LTP</th><th class="l">Delta</th><th class="l">IV</th><th class="l">OI chg</th><th class="l">PE OI (L)</th></tr></thead><tbody>` +
+    h = (typeof Writers !== 'undefined' ? (() => { try { const W = Writers.read(ch.rows, a.price, ch.step, { dS: ok(a.PC) ? a.price - a.PC : null, T: ch.T }); return W ? `<div class="wbox">${Writers.readHTML(W)}</div>` : ''; } catch (e) { return ''; } })() : '') + oiPicture(a, ch) + `<div class="tbl"><table class="chain"><thead><tr><th>CE OI (L)</th><th>OI chg</th><th>IV</th><th>Delta</th><th>CE LTP</th><th class="k">Strike</th><th class="l">PE LTP</th><th class="l">Delta</th><th class="l">IV</th><th class="l">OI chg</th><th class="l">PE OI (L)</th></tr></thead><tbody>` +
       ch.view.map((r) => {
         const ci = r.K < a.price ? 'itm' : '', pi = r.K > a.price ? 'itm' : '', cc = r.ce.oi - (r.ce.poi || r.ce.oi), pc = r.pe.oi - (r.pe.poi || r.pe.oi);
         return `<tr class="${r.K === ch.atm ? 'atm' : ''}"><td class="${ci}">${bar(r.ce.oi, COL.put)}${L(r.ce.oi)}</td><td class="${ci} ${cc >= 0 ? 'up' : 'down'}">${sgn(cc)}${L(cc)}</td><td class="${ci}">${f1(r.ce.iv * 100)}</td><td class="${ci}">${f2(r.ce.de)}</td><td class="${ci}">${f2(r.ce.ltp)}</td>
@@ -371,7 +381,7 @@ function renderGlobal() {
   h += '</div><div class="g-b"><div class="sec" style="margin-top:0">World markets and what they mean for India</div>';
   if (W) {
     const groups = [...new Set(W.rows.map((x) => x.cue.grp))];
-    h += `<div class="tbl wtbl"><table><thead><tr><th class="l">Market</th><th>Last</th><th>Change</th><th class="l">For ${esc(W.short)}</th><th class="l">Why it matters</th></tr></thead><tbody>` +
+    h += `<div class="tbl wtbl"><table><thead><tr><th class="l">Market</th><th>Last</th><th>Change</th><th class="l">${W.prof ? `For ${esc(W.short)} (${esc(W.prof.name)})` : W.short === 'Nifty' ? 'For Nifty' : `For Nifty (no ${esc(W.short)}-specific link set)`}</th><th class="l">Why it matters</th></tr></thead><tbody>` +
       groups.map((g) => `<tr><td colspan="5" class="l mut" style="padding-top:12px">${esc(g)}</td></tr>` + W.rows.filter((x) => x.cue.grp === g).map((x) => `<tr><td class="l"><b>${esc(x.name)}</b>${x.note ? `<br><small class="mut">${esc(x.note)}</small>` : ''}</td><td>${pxFmt(x)}</td><td class="${x.chg >= 0 ? 'up' : 'down'}">${ok(x.chg) ? sgn(x.chg) + f2(x.chg) + '%' : '–'}</td><td class="l"><span class="pill ${x.imp > 0 ? 'b' : x.imp < 0 ? 's' : 'n'}">${x.imp > 0 ? 'Positive' : x.imp < 0 ? 'Negative' : x.off ? 'Not relevant' : 'Neutral'}</span></td><td class="l why">${esc(x.cue.why)}</td></tr>`).join('')).join('') + '</tbody></table></div>';
     const wi = worldItems();
     if (W.prof) h += `<div class="alert i" style="margin-top:8px">Read for ${esc(W.label)} (${esc(W.prof.name)}): ${esc(W.prof.tip)}</div>`;
@@ -565,7 +575,7 @@ function renderStx() {
   const a = A[cur], box = $('stx'); if (!box || !a) return;
   const rows = stxRows(a);
   const open = box.dataset.open === '1';
-  box.innerHTML = rows.length ? `<div class="stx${open ? ' open' : ''}" onclick="if(event.target.closest('button'))return;const b=$('stx');b.dataset.open=b.dataset.open==='1'?'':'1';renderStx()" title="Tap to show or hide the explanations"><div class="stx-h"><span>Structure and pre-alerts</span><button class="lnk" onclick="setTab('struct');document.querySelector('.p-tabs').scrollIntoView({behavior:'smooth'})">Details</button></div>` +
+  box.innerHTML = rows.length ? `<div class="stx${open ? ' open' : ''}" onclick="if(event.target.closest('button'))return;const b=$('stx');b.dataset.open=b.dataset.open==='1'?'':'1';renderStx()" title="Tap to show or hide the explanations"><div class="stx-h"><span>Structure and pre-alerts <span class="ctx-in">${esc((A[cur] && A[cur].cf.label) || cur)}</span></span><button class="lnk" onclick="setTab('struct');document.querySelector('.p-tabs').scrollIntoView({behavior:'smooth'})">Details</button></div>` +
     rows.map((r) => `<div class="stx-r ${r[1]}"><span class="stx-k">${r[0]}</span><div><b>${esc(r[2])}</b><small>${esc(r[3])}</small></div></div>`).join('') + `<div class="stx-more">${open ? 'Tap to hide the explanations' : 'Tap for the full explanation and confirmations'}</div></div>` : '';
 }
 function renderStructTab(a) {
@@ -653,11 +663,13 @@ function premarketChecklist() {
     const w = Math.abs(tc - bc) / N.price * 100; add(w < 0.1 ? 'ok' : 'n', pre ? 'Last session and next CPR' : 'Previous day and CPR', `High ${f0(H)}, low ${f0(Lo)}, CPR ${f0(bc)}–${f0(tc)}`, w < 0.1 ? 'Very narrow CPR: trending-day odds are higher.' : w > 0.35 ? 'Wide CPR: sideways-day odds are higher.' : 'Normal CPR. Above TC = bullish, below BC = bearish.'); }
   const H0 = typeof Health !== 'undefined' ? Health.hol() : new Set(), td = istYmd(), nx = typeof Health !== 'undefined' ? (() => { let x = new Date(td + 'T00:00:00Z'); do x = new Date(x.getTime() + 864e5); while (!Health.isSession(x.toISOString().slice(0, 10), H0)); return x.toISOString().slice(0, 10); })() : td;
   const calEv = ((Source.calendar ? Source.calendar().items : []) || []).filter((e) => e.imp === 'high' && (e.date === td || e.date === nx));
-  const nwEv = (Source.newsEvents ? Source.newsEvents() : []).filter((e) => e.date === td || e.date === nx);
+  const nwEv = (Source.newsEvents ? Source.newsEvents() : []).filter((e) => e.undated || e.date === td || e.date === nx);
+  const expEv = ((Source.calendar ? Source.calendar().items : []) || []).filter((e) => /expiry/i.test(e.t) && e.date >= td).slice(0, 2);
   const ev = [...calEv, ...nwEv.filter((e) => !calEv.some((c) => c.date === e.date && /cabinet|budget|gst|rbi|gdp|fed|fomc/i.test(c.t) && c.t.toLowerCase().split(' ').some((w) => w.length > 4 && e.t.toLowerCase().includes(w))))];
-  add(ev.length ? 'bad' : 'ok', 'Event risk (today and next session)', ev.length ? ev.slice(0, 4).map((e) => `${e.date === td ? 'Today' : 'Next session'}: ${e.t}${e.time && e.time !== 'time n/a' ? ' ' + e.time : ''}`).join('; ') : 'No high-impact event found today or before the next session (calendar + headlines)', ev.length ? 'Volatility spikes around the event; IV drops right after. Avoid holding options into it.' : 'Nothing scheduled to jolt the market.');
+  add(ev.length ? 'bad' : 'ok', 'Event risk (today and next session)', ev.length ? ev.slice(0, 4).map((e) => `${e.date === td ? 'Today' : e.undated ? 'Coming up (no date in the headline)' : 'Next session, ' + new Date(e.date + 'T00:00:00Z').toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' })}: ${e.t}${e.time && e.time !== 'time n/a' ? ' ' + e.time : ''}${/usual/i.test(e.t + (e.src || '')) ? ' (usual date: confirm on the official calendar)' : ''}`).join('; ') : 'No high-impact event found today or before the next session (calendar + headlines)', ev.length ? 'Volatility spikes around the event; IV drops right after. Avoid holding options into it.' : 'Nothing scheduled to jolt the market.');
+  if (expEv.length) add('n', 'Expiry', expEv.map((e) => `${new Date(e.date + 'T00:00:00Z').toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' })}: ${e.t}`).join('; '), 'Expiry days swing more and option premiums melt fast; weekend holding before an expiry week needs care.');
   if (N) { const fresh = (N.news || []).filter((n) => { const t = ok(n.ts) ? n.ts : agoMs(n.ago); return t && Date.now() - t < 20 * 3600e3 && (n.imp === 'high' || Math.abs(n.s) >= 0.5); }); const s = fresh.reduce((x, n) => x + Math.sign(n.s), 0); add(s > 0 ? 'ok' : s < 0 ? 'bad' : 'n', 'Overnight news', fresh.length ? `${fresh.length} high-impact (${fresh.filter((n) => n.s > 0).length} positive, ${fresh.filter((n) => n.s < 0).length} negative)` : 'Nothing high-impact', fresh[0] ? `Top: ${fresh[0].t}` : 'A gap without news tends to fade.'); }
-  const geo = N && N.D.geo; if (geo) add(/High|Elevated/.test(geo.level) ? 'bad' : 'ok', 'Geopolitical risk', geo.level, /High|Elevated/.test(geo.level) ? 'Expect sudden swings; keep size small.' : 'Calm.');
+  const geo = N && N.D.geo; if (geo) add(/High|Elevated/.test(geo.level) ? 'bad' : 'ok', 'Geopolitical risk', geo.level + (geo.held ? ' (held: risk headlines not eased yet)' : ''), /High|Elevated/.test(geo.level) ? 'Expect sudden swings; keep size small.' : 'Calm.');
   const GS = N && N.gap;
   if (GS && W && W.gift && ok(W.base) && W.beforeOpen) {
     const gA = (W.gift.price - W.base) / (GS.A || 1);
@@ -792,4 +804,25 @@ function oiPicture(a, ch) {
     return `<div class="oipic"><svg viewBox="0 0 ${n * bw} ${H + 18}" role="img" aria-label="Open interest by strike">${g}</svg>
       <div class="legend"><span style="color:${COL.put}">■ Call OI</span> (writers' resistance) · <span style="color:${COL.call}">■ Put OI</span> (writers' support) · light cap = added today, dashed = cut today · shaded band = range the options price in to expiry. OI zones are not walls: news can clear them fast.</div></div>`;
   } catch (e) { return ''; }
+}
+
+/* Context tag: a small chip in the top-right corner of every panel saying WHOSE data it shows.
+   "sel" panels follow the instrument picked at the top; the rest say they are not tied to it,
+   so after scrolling you never have to go back up to check. Display only. */
+const CTX_SCOPE = { 'p-chart': 'sel', 'p-signal': 'sel', 'p-setup': 'sel', 'p-levels': 'sel', 'p-tabs': 'tab', 'p-news': 'selmkt', 'p-brain': 'all', 'p-best': 'all', 'p-feed': 'all', 'p-paper': 'all', 'p-global': 'mkt' };
+function ctxTags() {
+  const a = A[cur]; if (!a) return;
+  const nm = a.cf.label || cur, st = a.sessionLive ? '' : ' · last session';
+  Object.entries(CTX_SCOPE).forEach(([cls, sc]) => {
+    const p = document.querySelector('.panel.' + cls); if (!p) return;
+    if (sc === 'tab') sc = typeof tab !== 'undefined' && tab === 'mood' ? 'mkt' : 'sel';
+    const [txt, kind, tip] = sc === 'sel' ? [nm + st, 'sel', `This panel shows ${nm} only`]
+      : sc === 'selmkt' ? [`${nm} + market`, 'mix', `News about ${nm}, plus market-wide news`]
+      : sc === 'all' ? ['All instruments', 'all', 'Covers every instrument, not only the one selected at the top']
+      : ['Market-wide', 'all', 'Market-wide data (Nifty, VIX, FII/DII, world cues), the same whichever instrument is selected'];
+    let t = p.querySelector(':scope > .ctx-tag');
+    if (!t) { t = document.createElement('span'); t.className = 'ctx-tag'; p.prepend(t); p.classList.add('has-ctx'); }
+    if (cls === 'p-signal') ['proj'].forEach((id) => { const e = $(id); if (e && e.dataset.ctx !== txt) { e.dataset.ctx = txt; e.classList.add('ctx-sub'); e.title = tip; } });
+    if (t.dataset.v !== txt + kind) { t.dataset.v = txt + kind; t.className = 'ctx-tag ' + kind; t.textContent = txt; t.title = tip; t.setAttribute('aria-label', tip); }
+  });
 }

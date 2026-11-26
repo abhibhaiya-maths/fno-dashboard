@@ -329,7 +329,7 @@ const Paper = (() => {
     if (s.caveats && s.caveats.length) h += `<div class="alert" style="margin-top:10px">${s.caveats.join('. ')}.</div>`;
     if (s.setup && s.noOpt) {
       const st = s.setup;
-      h += `<div class="lv"><div><small>${s.state === 'CE' ? 'Long' : 'Short'} around</small><b>${f1(st.e)}</b></div><div><small>Stop-loss</small><b class="down">${f1(st.sl)}</b></div><div><small>Target 1 / 2</small><b class="up">${f1(st.t1)} / ${f1(st.t2)}</b></div></div>
+      h += `<div class="lv"><div><small>${s.state === 'CE' ? 'Long' : 'Short'} around</small><b>${f1(st.e)}</b></div><div><small>Stop-loss</small><b class="down">${f1(st.sl)}</b></div><div><small>Target 1 / 2</small><b class="up">${t2Txt(st, f1)}</b></div></div>
         <div class="mut" style="font-size:12px;margin-top:6px">${esc(a.cf.label)} has no option chain on Upstox, so paper trading is off. Levels are for the ${a.isMCX ? 'futures contract' : 'stock price'}.</div>`;
     } else if (s.setup) {
       const st = s.setup, L = lotsFor(a, s), e = estimate(cur, st.K, st.dir, L);
@@ -506,7 +506,7 @@ const Paper = (() => {
     return { count: cl.length + openTrades().filter((t) => t.openedDate === dk).length, net: cl.reduce((x, t) => x + t.net, 0), lossRun,
       lastLossMin: lastLoss && lastLoss.closedTs ? Math.round((Date.now() - lastLoss.closedTs) / 60000) : null, open: openTrades(), put: invested() };
   }
-  return { speak, load, onTick, render, renderOrderForm, updateEstimate, takeSignal, takeBest, gradeStats, placeManual, closeId, openFromAsk, setSL, setSLMode, setTgt, setOpt, setLots, reset, opts, charges, addFunds, withdraw, resetTo, openFunds, renderFunds, fset,
+  return { tradeStats, speak, load, onTick, render, renderOrderForm, updateEstimate, takeSignal, takeBest, gradeStats, placeManual, closeId, openFromAsk, setSL, setSLMode, setTgt, setOpt, setLots, reset, opts, charges, addFunds, withdraw, resetTo, openFunds, renderFunds, fset,
     get ready() { return ready; }, openTrades, dayInfo, get account() { return acc; },
     // read-only lists for the Journal, and saving your tags/notes on a trade
     allTrades: () => trades, allSignals: () => signals, lotsFor, riskLots,

@@ -70,7 +70,7 @@ const Health = (() => {
     add('cal', 'Event calendar', !cal || !cal.ts ? 'warn' : cs.ForexFactory ? 'ok' : 'warn', cal && cal.ts ? `RBI, Fed, GDP dates${cs.ForexFactory ? ', ForexFactory' : ' (ForexFactory did not load)'}${cs['NSE holidays'] ? `, ${cs['NSE holidays']} NSE holidays` : ', NSE holiday list missing'}; plus events named in today's headlines.` : 'Not loaded.');
     // 7. news
     const N = (typeof A !== 'undefined' && A.NIFTY && A.NIFTY.news) || [], newest = N.reduce((m, x) => Math.max(m, x.ts || 0), 0), dis = N.filter((x) => x.disputed).length;
-    add('news', 'News', !N.length ? 'warn' : age(newest) < (open ? 3 : 14) * 3600e3 ? 'ok' : 'warn', N.length ? `${N.length} headlines, newest ${mins(age(newest))} old${dis ? `; ${dis} where the AI's reading and the wording disagree (set to neutral)` : ''}.` : 'No headlines loaded.');
+    add('news', 'News', !N.length || !newest ? 'warn' : age(newest) < (open ? 3 : 14) * 3600e3 ? 'ok' : 'warn', N.length ? `${N.length} headlines, newest ${newest ? mins(age(newest)) + ' old' : 'of unknown time'}${dis ? `; ${dis} where the AI's reading and the wording disagree (set to neutral)` : ''}.` : 'No headlines loaded.');
     // 8. NSE end-of-day files (Brief) and Upstox vs NSE closing prices
     const idx = (await idbGet('brief_sec_idx')) || [], ld = idx.length ? idx[idx.length - 1] : '', ldd = ld ? `${ld.slice(0, 4)}-${ld.slice(4, 6)}-${ld.slice(6, 8)}` : '', ee = expected(19, H);
     add('nse', 'NSE end-of-day files', !ld ? 'na' : ldd === ee ? 'ok' : 'warn', ld ? `Latest saved: ${ldd}${ldd === ee ? '' : `; ${ee} expected (open the Brief to fetch it)`}.` : 'Open the Brief or Overview once to load them.');

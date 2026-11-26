@@ -17,10 +17,10 @@ const Engine = (() => {
     const sg = signalFor(a), dir = sg.state === 'CE' || sg.state === 'PE' ? sg.state : null;
     // the score is a weighted lean, not a probability: map it to a realistic 15–85% band
     const upP = Math.round(clamp(50 + (a.score - 50) * 0.7, 15, 85));
-    const p = { up: upP, dn: 100 - upP, dir, exp30, lo: a.price - exp30, hi: a.price + exp30, perCandle: atr };
+    const p = { up: upP, dn: 100 - upP, dir, exp30, lo: a.price - exp30, hi: a.price + exp30, perCandle: atr, why: sg.state === 'WAIT' ? (sg.title || '') : '' };
     if (dir) {
       const st = sg.setup || setupFor(a, dir), d = dir === 'CE' ? 1 : -1;
-      Object.assign(p, { entryLo: a.price - (d === 1 ? 0.25 : 0.1) * atr, entryHi: a.price + (d === 1 ? 0.1 : 0.25) * atr, sl: st.sl, t1: st.t1, t2: st.t2, K: st.K, P: st.P, pSL: st.pSL, pT1: st.pT1, block: d === 1 ? a.res : a.sup });
+      Object.assign(p, { entryLo: a.price - (d === 1 ? 0.25 : 0.1) * atr, entryHi: a.price + (d === 1 ? 0.1 : 0.25) * atr, sl: st.sl, t1: st.t1, t2: st.t2, trail: st.trail, K: st.K, P: st.P, pSL: st.pSL, pT1: st.pT1, block: d === 1 ? a.res : a.sup });
     }
     return p;
   }
@@ -110,13 +110,13 @@ const Engine = (() => {
     const S = Source.stream;
     const feed = S ? (S.connected ? `<b>LIVE STREAM</b> tick lag ${S.lag == null ? '–' : Math.max(0, S.lag) + ' ms'}, ${S.ticks} ticks` : S.everConnected ? '<b>RECONNECTING</b> polling every 5 s meanwhile' : '<b>POLLING</b> every 5 s') : '<b>DEMO FEED</b>';
     const agoTxt = Date.now() - lastScan < 1500 ? 'just now' : `${ago}s ago`;
-    $('engTxt').innerHTML = `${feed}. Engine: ${a.active} of ${a.sigs.length} tools live × ${KEYS.length} instruments, last scan ${agoTxt} (#${scans})`;
+    $('engTxt').innerHTML = `${feed}. Engine: ${a.active} of ${a.sigs.length} tools have a live reading × ${KEYS.length} instruments, last scan ${agoTxt} (#${scans})`;
     $('engTools').innerHTML = a.sigs.filter((x) => x.w > 0).map((x) => `<span class="tool ${x.s > 0 ? 'b' : x.s < 0 ? 's' : ''}">${esc(SHORT(x.n))}</span>`).join('');
   }
 
   function renderProjection() {
     const a = A[cur]; if (!a) return;
-    const p = projection(a), dirTxt = p.dir === 'CE' ? 'Upside bias' : p.dir === 'PE' ? 'Downside bias' : 'No clear direction';
+    const p = projection(a), lean = p.up >= 60 ? 'up' : p.dn >= 60 ? 'dn' : '', dirTxt = p.dir === 'CE' ? 'Upside bias' : p.dir === 'PE' ? 'Downside bias' : lean ? `${lean === 'up' ? 'Tools lean up' : 'Tools lean down'}, but no trade setup yet` : 'No clear direction';
     let h = `<div class="pj-h"><b>${HZ_INFO[a.hz || 'intra'].proj}</b><span>${dirTxt}</span></div>
       <div class="pj-nums"><div class="u"><strong>${p.up}%</strong>Upside</div><div class="d"><strong>${p.dn}%</strong>Downside</div></div>
       <div class="pj-bar" role="img" aria-label="Upside ${p.up}%, downside ${p.dn}%"><span class="u" style="width:${p.up}%"></span><span class="d" style="width:${p.dn}%"></span></div>`;
@@ -124,7 +124,7 @@ const Engine = (() => {
       h += `<div class="pj-grid">
         <div><small>${a.cf.opt ? (p.dir === 'CE' ? 'CALL' : 'PUT') : p.dir === 'CE' ? 'Long' : 'Short'} entry zone</small><b>${f0(p.entryLo)}–${f0(p.entryHi)}</b></div>
         <div><small>Stop-loss (${a.isIdx ? 'index' : 'price'})</small><b class="down">${f0(p.sl)}</b></div>
-        <div><small>Target 1 / 2</small><b class="up">${f0(p.t1)} / ${f0(p.t2)}</b></div>
+        <div><small>Target 1 / 2</small><b class="up">${t2Txt({ e: a.price, t1: p.t1, t2: p.t2, trail: p.trail })}</b></div>
         ${a.cf.opt ? `<div><small>Strike</small><b>${p.K} ${p.dir}</b></div>
         <div><small>Premium / SL / target</small><b>${f1(p.P)} / <span class="down">${f1(p.pSL)}</span> / <span class="up">${f1(p.pT1)}</span></b></div>` : `<div><small>Instrument</small><b>${esc(a.cf.label)}</b></div><div><small>Options</small><b>Not available</b></div>`}
         <div><small>First obstacle</small><b>${p.block ? f0(p.block[1]) : '–'}</b></div></div>
@@ -134,9 +134,9 @@ const Engine = (() => {
         <div><small>Expected range</small><b>${f0(p.lo)}–${f0(p.hi)}</b></div>
         <div><small>Resistance above</small><b class="down">${a.res ? f0(a.res[1]) : '–'}</b></div>
         <div><small>Support below</small><b class="up">${a.sup ? f0(a.sup[1]) : '–'}</b></div></div>
-        <div class="pj-note">Signals are split, so trading inside the range is best avoided. ${a.res ? `Holding above ${f0(a.res[1])} can build an upside setup; ` : ''}${a.sup ? `breaking below ${f0(a.sup[1])} can build a downside one.` : ''}</div>`;
+        <div class="pj-note">${lean ? `Most tools lean ${lean === 'up' ? 'up' : 'down'} (${lean === 'up' ? p.up : p.dn}%), but the entry rules are not met yet${!a.sessionLive ? ' (market is closed)' : p.why ? ` (${esc(String(p.why).slice(0, 120))})` : ''}, so there is no trade right now. ` : 'Signals are split, so trading inside the range is best avoided. '}${a.res ? `Holding above ${f0(a.res[1])} can build an upside setup; ` : ''}${a.sup ? `breaking below ${f0(a.sup[1])} can build a downside one.` : ''}</div>`;
     }
-    h += `<div class="pj-note">The percentage is the weighted lean of ${a.active} tools, not a guaranteed probability. How often it is right shows up in the signal record.${a.sessionLive ? '' : ' Market is closed; this uses the last session.'}</div>`;
+    h += `<div class="pj-note">The percentage is the weighted lean of the ${a.active} tools that have a reading (out of ${a.sigs.length} in total), not a guaranteed probability. ${(() => { try { const t = typeof Paper !== 'undefined' && Paper.ready ? Paper.tradeStats() : null; return t && t.n ? `Reality check, your paper record so far: ${t.n} trades, ${t.pct}% winners, net ${t.net >= 0 ? '+' : '−'}₹${Math.round(Math.abs(t.net)).toLocaleString('en-IN')}. A high score is not a high win rate.` : 'How often it is right shows up in the signal record.'; } catch (e) { return ''; } })()}${a.sessionLive ? '' : ' Market is closed; this uses the last session.'}</div>`;
     $('proj').innerHTML = h;
   }
 

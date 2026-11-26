@@ -424,6 +424,7 @@ function macroImpact() {
    (cheaper crude helps), ONGC the other way, MCX crude / gold / silver on their own world prices. */
 const CUE_SYMS = {
   omc: ['BPCL', 'HINDPETRO', 'IOC'], upstream: ['ONGC', 'OIL'], aviation: ['INDIGO', 'SPICEJET'], paints: ['ASIANPAINT', 'BERGEPAINT', 'KANSAINER', 'PIDILITIND', 'SRF', 'MRF', 'APOLLOTYRE', 'CEATLTD', 'BALKRISIND'],
+  reliance: ['RELIANCE'], gas: ['GAIL', 'PETRONET', 'IGL', 'MGL', 'GUJGASLTD'],
   goldloan: ['MUTHOOTFIN', 'MANAPPURAM'], jewel: ['TITAN', 'KALYANKJIL', 'SENCO'],
   it: ['INFY', 'TCS', 'HCLTECH', 'WIPRO', 'TECHM', 'LTIM', 'PERSISTENT', 'COFORGE', 'MPHASIS', 'OFSS', 'LTTS', 'KPITTECH', 'TATAELXSI', 'CYIENT'],
   pharma: ['SUNPHARMA', 'DRREDDY', 'CIPLA', 'LUPIN', 'DIVISLAB', 'AUROPHARMA', 'ZYDUSLIFE', 'TORNTPHARM', 'ALKEM', 'BIOCON', 'GLENMARK', 'LAURUSLABS', 'IPCALAB', 'GRANULES', 'MANKIND'],
@@ -439,6 +440,8 @@ const CUE_PROFILES = {
   upstream: { name: 'oil producers', o: { brent: [3, 1], wti: [1, 1] }, tip: 'ONGC and Oil India sell crude: a higher crude price helps them.' },
   aviation: { name: 'airlines', o: { brent: [3, -1], wti: [1, -1], usdinr: [1.6, -1] }, tip: 'Fuel is an airline\'s biggest cost: cheaper crude and a stronger rupee help.' },
   paints: { name: 'paints, tyres and chemicals', o: { brent: [2.2, -1], wti: [0.8, -1] }, tip: 'Their raw materials come from crude: cheaper crude helps margins.' },
+  reliance: { name: 'refining, oil & gas, telecom, retail', o: { brent: [1, -1], wti: [0.5, -1], natgas: [0.8, 1], usdinr: [0.8, 1], nasF: [0.6, 1], spxF: [0.6, 1] }, tip: 'Reliance: refining margins matter more than the crude price (sharp crude spikes hurt a little), its KG-D6 field gains from higher gas prices, refined-product exports gain from a weaker rupee, and as the biggest Nifty stock it follows global risk mood.' },
+  gas: { name: 'gas utilities', o: { natgas: [2, -1], usdinr: [0.8, -1], brent: [0.6, -1] }, tip: 'Gas distributors buy gas (much of it imported LNG): cheaper gas and a stronger rupee help margins.' },
   goldloan: { name: 'gold lenders', o: { gold: [1.8, 1] }, tip: 'A higher gold price raises the value of their gold collateral.' },
   jewel: { name: 'jewellers', o: { gold: [1.5, -1] }, tip: 'A sharp gold rally can squeeze jewellery demand and margins.' },
   mcxcrude: { only: true, name: 'MCX crude', o: { brent: [3, 1], wti: [3, 1], dxy: [1, -1], usdinr: [1, 1], usvix: [0.5, -1] }, tip: 'MCX crude follows world crude, priced in rupees: a weaker rupee lifts it too.' },

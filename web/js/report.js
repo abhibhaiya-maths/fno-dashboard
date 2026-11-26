@@ -291,7 +291,7 @@ const Report = (() => {
       if (M) h += `<div class="sec">Money on this trade (${M.lots} lot × ${a.lot} = ${M.qty})</div>
         <div class="lv rc-m"><div><small>You pay</small><b>${rs(M.cost)}</b><small>${M.K} ${M.dir} at ${rs(M.px)}</small></div><div><small>If stop-loss hits</small><b class="down">−₹${f0(M.loss)}</b><small>premium ${rs(M.slP)} · index ${f0(M.idxSL)}</small></div><div><small>If target 1 hits</small><b class="up">+₹${f0(M.gain)}</b><small>premium ${rs(M.tgP)} · index ${f0(M.idxT1)}</small></div></div>
         <div class="row"><span>Win : loss size</span><b>${ok(M.rr) ? `1 : ${f2(M.rr)}` : '–'}</b></div>${ok(M.theta) ? `<div class="row"><span>Time decay if price stands still</span><b class="down">about ₹${f0(M.theta)} a day</b></div>` : ''}<div class="legend">After brokerage, STT, exchange charges, stamp duty and GST. A stop-loss can fill worse in a fast market.</div>`;
-      else if (s.setup) h += `<div class="sec">Levels</div><div class="lv"><div><small>Entry</small><b>${f1(s.setup.e)}</b></div><div><small>Stop-loss</small><b class="down">${f1(s.setup.sl)}</b></div><div><small>Target 1 / 2</small><b class="up">${f1(s.setup.t1)} / ${f1(s.setup.t2)}</b></div></div>`;
+      else if (s.setup) h += `<div class="sec">Levels</div><div class="lv"><div><small>Entry</small><b>${f1(s.setup.e)}</b></div><div><small>Stop-loss</small><b class="down">${f1(s.setup.sl)}</b></div><div><small>Target 1 / 2</small><b class="up">${t2Txt(s.setup, f1)}</b></div></div>`;
       // we are wrong if
       h += tmHTML(a, s);
       h += writersHTML(a);

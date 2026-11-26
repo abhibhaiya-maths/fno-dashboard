@@ -122,10 +122,14 @@ const LiveSource = (() => {
   }
   function newsEvents() {
     const seen = new Set(), out = [], today = new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 10), until = new Date(Date.now() + 5.5 * 3600e3 + 3 * 864e5).toISOString().slice(0, 10);
-    const pool = [...(R('NIFTY').news || []), ...(R('BANKNIFTY').news || []), ...((off && off.items) || [])];
-    pool.forEach((n) => { const t = n.t || n.title || ''; if (!EV_RE.test(t)) return; if (n.ts && Date.now() - n.ts > 4 * 864e5) return; const d = evDate(t, n.ts); if (!d || d < today || d > until) return;
+    let imp = []; try { imp = (typeof Impact !== 'undefined' && Impact.data && Impact.data.items) || []; } catch (e) { imp = []; }
+    const pool = [...(R('NIFTY').news || []), ...(R('BANKNIFTY').news || []), ...((off && off.items) || []), ...imp, ...((geo && geo.items) || [])];
+    pool.forEach((n) => { const t = n.t || n.title || ''; if (!EV_RE.test(t)) return; if (n.ts && Date.now() - n.ts > 4 * 864e5) return; let d = evDate(t, n.ts), undated = false;
+      // no day in the headline, but clearly about a meeting/decision still to come, and fresh: show it as "coming up"
+      if (!d && /\b(to (?:meet|hold|convene|decide|take up|announce|consider)|will (?:meet|decide|announce|consider)|special (?:meeting|session)|meeting (?:today|soon|likely)|called a meeting|convened)\b/i.test(t) && n.ts && Date.now() - n.ts < 36 * 3600e3) { d = today; undated = true; }
+      if (!d || d < today || d > until) return;
       const k = (EV_RE.exec(t)[1] || '').toLowerCase() + d; if (seen.has(k)) return; seen.add(k);
-      out.push({ date: d, time: 'time n/a', t: 'From news: ' + t.slice(0, 110), imp: 'high', src: n.src || 'news', link: n.link || '', news: true }); });
+      out.push({ date: d, time: 'time n/a', t: 'From news: ' + t.slice(0, 110), imp: 'high', src: n.src || 'news', link: n.link || '', news: true, undated }); });
     return out.sort((a, b) => (a.date < b.date ? -1 : 1));
   }
   async function refreshFII() { try { const j = await api('/api/fiidii'); fii = j.none ? null : j; } catch (e) { soft(e); } }
@@ -146,7 +150,11 @@ const LiveSource = (() => {
   async function refreshWorld() { try { world = await api('/api/world'); } catch (e) { soft(e); } }
   async function refreshParticipant() { try { const j = await api('/api/participant'); part = j.none ? null : j; } catch (e) { soft(e); } }
   async function refreshGeo() { try { const j = await api('/api/geo'); geo = { ...j, items: (j.items || []).map((n) => ({ ...n, ago: agoText(n.ts) })) }; } catch (e) { soft(e); } }
-  async function refreshOfficial() { try { const j = await api('/api/official'); off = { items: (j.items || []).map((n) => ({ ...n, ago: agoText(n.ts) })), sources: j.sources || {} }; } catch (e) { soft(e); } }
+  /* Regulator enforcement notices (SEBI recovery certificates, defaulter lists, adjudication or settlement orders…) are about
+     individual people or small firms. They are not good news and rarely move the market, so: neutral sentiment, low impact. */
+  const ENF_RE = /recovery certificate|defaulter|adjudicat|settlement order|show[- ]cause|in the matter of|attachment|debar|prohibit|impound|interim order|confirmatory order|ex[- ]?parte|notice of demand|penalty|summons|disgorge/i;
+  function offFix(n) { if (ENF_RE.test(`${n.t || ''} ${n.sub || ''}`)) { n.sRaw = n.s; n.s = n.co ? Math.min(0, n.s || 0, -0.2) : 0; n.imp = n.co ? 'medium' : 'low'; n.enf = true; } return n; }
+  async function refreshOfficial() { try { const j = await api('/api/official'); off = { items: (j.items || []).map((n) => offFix({ ...n, ago: agoText(n.ts) })), sources: j.sources || {} }; } catch (e) { soft(e); } }
   async function search(q) { return api('/api/search?q=' + enc(q)); }
   async function instInfo(ukey) { return api('/api/inst?u=' + enc(ukey)); }
   function agoText(ts) { const m = Math.round((Date.now() - ts) / 60000); return m < 1 ? 'just now' : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} d ago`; }

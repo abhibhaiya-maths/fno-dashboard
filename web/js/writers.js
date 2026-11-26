@@ -24,7 +24,18 @@ const Writers = (() => {
     let ai = 0; R.forEach((r, i) => { if (Math.abs(r.K - price) < Math.abs(R[ai].K - price)) ai = i; });
     const W = opt.all ? R : R.slice(Math.max(0, ai - 8), ai + 9);
     const side = (o) => { const doi = okN(o.poi) && o.poi > 0 ? o.oi - o.poi : okN(o.doi) ? o.doi : null, dp = okN(o.cp) && o.cp > 0 && okN(o.ltp) ? o.ltp - o.cp : okN(o.dp) ? o.dp : null; return { oi: o.oi || 0, doi, dp, vol: okN(o.vol) ? o.vol : null }; };
-    const V = W.map((r) => ({ K: r.K, ce: side(r.ce), pe: side(r.pe) }));
+    const V = W.map((r) => ({ K: r.K, ce: side(r.ce), pe: side(r.pe), _r: r }));
+    /* Trend-day fix: on a 2% up day every call premium rises and every put falls just because the price moved.
+       So we take out the part explained by the move (delta × price change) and judge writing/buying on what is left.
+       Price change: given, else read from the chain itself (call change − put change at the same strike ≈ move of the underlying). */
+    let dS = okN(opt.dS) ? opt.dS : null;
+    if (dS === null) { const ds = V.filter((r) => Math.abs(r.K - price) <= step * 2 && okN(r.ce.dp) && okN(r.pe.dp)).map((r) => r.ce.dp - r.pe.dp).sort((a, b) => a - b); if (ds.length) dS = ds[Math.floor(ds.length / 2)]; }
+    const T = opt.T || 7 / 365;
+    const dlt = (o, K, type) => { if (okN(o.de) && o.de !== 0) return o.de; const iv = (okN(o.iv) && o.iv > 0 ? (o.iv > 3 ? o.iv / 100 : o.iv) : 0.25); const d1 = (Math.log(price / K) + 0.5 * iv * iv * T) / (iv * Math.sqrt(T)); const N = (x) => 0.5 * (1 + Math.tanh(0.7978845608 * (x + 0.044715 * x * x * x))); return type === 'CE' ? N(d1) : N(d1) - 1; };
+    const adj = okN(dS) && Math.abs(dS) > price * 0.002;
+    // the standard rule (your rulebook) still decides each label; the move-adjusted premium is a second check shown beside it
+    if (adj) V.forEach((r) => { [['ce', 'CE'], ['pe', 'PE']].forEach(([s, t]) => { const x = r[s]; if (okN(x.dp)) x.dpAdj = x.dp - dlt(r._r[s], r.K, t) * dS; }); });
+    V.forEach((r) => { delete r._r; });
     const hasPrem = V.some((r) => okN(r.ce.dp) || okN(r.pe.dp)), hasDoi = V.some((r) => okN(r.ce.doi) || okN(r.pe.doi));
     if (!hasDoi) return { noData: true };
     const maxOI = Math.max(1, ...V.map((r) => Math.max(r.ce.oi, r.pe.oi))), maxD = Math.max(1, ...V.map((r) => Math.max(Math.abs(r.ce.doi || 0), Math.abs(r.pe.doi || 0))));
@@ -36,19 +47,27 @@ const Writers = (() => {
         x.thin = (maxVol > 0 && okN(x.vol) && x.vol < maxVol * 0.02) || x.oi < maxOI * 0.01;
         x.lab = !okN(x.doi) || Math.abs(x.doi) < maxD * 0.05 || x.thin ? '' : x.doi < 0 ? 'U' : !okN(x.dp) ? '' : x.dp < 0 ? 'W' : 'B';
         x.big = okN(x.doi) && x.doi >= maxD * 0.3;
+        // trend day: a label that only matches what the price move alone would do (calls up on an up day, puts down) is unsure
+        if (adj && (x.lab === 'W' || x.lab === 'B') && okN(x.dpAdj)) { const la = x.dpAdj < 0 ? 'W' : 'B', moveDir = (s === 'ce' ? 1 : -1) * Math.sign(dS), aligned = Math.sign(x.dp) === moveDir; x.labAdj = la; x.amb = aligned && la !== x.lab && Math.abs(dS) >= price * 0.01; }
       });
     });
     const ceSum = V.reduce((s, r) => s + (r.ce.thin ? 0 : r.ce.doi || 0), 0), peSum = V.reduce((s, r) => s + (r.pe.thin ? 0 : r.pe.doi || 0), 0);
     const pcrChg = ceSum > 0 && peSum >= 0 ? peSum / ceSum : ceSum <= 0 && peSum > 0 ? 9.99 : null;
     const best = (s, f) => V.filter((r) => f(r[s])).reduce((a, b) => (!a || (b[s].doi || 0) > (a[s].doi || 0) ? b : a), null);
-    const resW = best('ce', (x) => x.lab === 'W') || best('ce', (x) => (x.doi || 0) > 0), supW = best('pe', (x) => x.lab === 'W') || best('pe', (x) => (x.doi || 0) > 0);
+    // walls only on their own side: a resistance wall must be at/above the price, a support wall at/below it
+    const Vabove = V.filter((r) => r.K >= price - step * 0.25), Vbelow = V.filter((r) => r.K <= price + step * 0.25);
+    const bestIn = (L, s, f) => L.filter((r) => f(r[s])).reduce((a, b) => (!a || (b[s].doi || 0) > (a[s].doi || 0) ? b : a), null);
+    const resW = bestIn(Vabove, 'ce', (x) => x.lab === 'W') || bestIn(Vabove, 'ce', (x) => (x.doi || 0) > 0), supW = bestIn(Vbelow, 'pe', (x) => x.lab === 'W') || bestIn(Vbelow, 'pe', (x) => (x.doi || 0) > 0);
+    const rW = best('ce', (x) => x.lab === 'W'), sW = best('pe', (x) => x.lab === 'W');
     const notes = [], pts = [];
+    const ambN = V.reduce((t, r) => t + (r.ce.amb ? 1 : 0) + (r.pe.amb ? 1 : 0), 0);
+    if (ambN) notes.push(['w', `Trend-day caution: price moved ${dS > 0 ? '+' : ''}${fx(dS)}, so every ${dS > 0 ? 'call' : 'put'} premium rose and every ${dS > 0 ? 'put' : 'call'} premium fell just from the move. ${ambN} strike label${ambN > 1 ? 's' : ''} flip once that move is taken out (marked "unsure"). Trust the OI-only numbers more today: OI added, OI-change PCR and the walls.`]);
     const add = (p, t, k) => { pts.push(p); notes.push([k || (p > 0 ? 'up' : p < 0 ? 'dn' : ''), t]); };
     if (okN(pcrChg)) { if (pcrChg < 0.7) add(-1, `OI-change PCR ${fx(pcrChg)}: far more calls added than puts (below 0.7 = bearish).`); else if (pcrChg > 1.3) add(1, `OI-change PCR ${pcrChg > 9 ? 'very high' : fx(pcrChg)}: far more puts added than calls (above 1.3 = bullish).`); else add(0, `OI-change PCR ${fx(pcrChg)}: balanced (0.7–1.3).`, ''); }
     const itmCW = V.filter((r) => r.ce.itm && r.ce.lab === 'W' && r.ce.big && !r.atm), itmPW = V.filter((r) => r.pe.itm && r.pe.lab === 'W' && r.pe.big && !r.atm);
     if (itmCW.length) add(-1.25, `In-the-money CALL writing at ${itmCW.map((r) => r.K).join(', ')}: sellers are confident it stays below (strong bearish).`);
     if (itmPW.length) add(1.25, `In-the-money PUT writing at ${itmPW.map((r) => r.K).join(', ')}: sellers are confident it stays above (strong bullish).`);
-    const sumLab = (s, l) => V.reduce((t, r) => t + (r[s].lab === l ? r[s].doi : 0), 0);
+    const sumLab = (s, l) => V.reduce((t, r) => t + (r[s].lab === l && !(l === 'B' && r[s].amb) ? r[s].doi : 0), 0); // a move-driven "buying" label is not counted as a bet
     const cw = sumLab('ce', 'W'), pw = sumLab('pe', 'W'), cb = sumLab('ce', 'B'), pb = sumLab('pe', 'B');
     if (hasPrem) {
       if (pb > cb * 1.5 && pb > maxD * 0.5) add(-0.5, `Put BUYING (OI and premium both up) ${lakh(pb)}: bearish bets.`);
@@ -59,11 +78,10 @@ const Writers = (() => {
     const atmRow = V.find((r) => r.atm);
     if (atmRow && (atmRow.ce.big || atmRow.pe.big)) notes.push(['w', `Heavy OI change at the at-the-money strike ${atmRow.K}: could be buying or writing (at-the-money OI is ambiguous): read it with care.`]);
     let squeeze = null;
-    if (resW && price > resW.K + step * 0.25 && resW.ce.lab === 'W') squeeze = { side: 'up', K: resW.K, t: `Price is above the biggest call-writing strike ${resW.K}: those writers are trapped. If it holds above, short covering can push it up fast.` };
-    if (supW && price < supW.K - step * 0.25 && supW.pe.lab === 'W') squeeze = { side: 'dn', K: supW.K, t: `Price is below the biggest put-writing strike ${supW.K}: those writers are trapped. If it holds below, it can fall fast.` };
+    if (rW && price > rW.K + step * 0.25) squeeze = { side: 'up', K: rW.K, t: `Price is above the biggest call-writing strike ${rW.K}: those writers are trapped. If it holds above, short covering can push it up fast.` };
+    if (sW && price < sW.K - step * 0.25) squeeze = { side: 'dn', K: sW.K, t: `Price is below the biggest put-writing strike ${sW.K}: those writers are trapped. If it holds below, it can fall fast.` };
     const tot = pts.reduce((s, x) => s + x, 0), verdict = tot <= -1 ? 'bearish' : tot >= 1 ? 'bullish' : 'neutral';
     const unw = V.filter((r) => r.ce.lab === 'U' && r.ce.big === false && r.ce.doi < -maxD * 0.3).map((r) => r.K);
-    const rW = best('ce', (x) => x.lab === 'W'), sW = best('pe', (x) => x.lab === 'W');
     return { V, price, step, pcrChg, ceSum, peSum, resW: resW && resW.K, supW: supW && supW.K, resWw: rW && rW.K, supWw: sW && sW.K, verdict, score: tot, notes, squeeze, itmCW: itmCW.map((r) => r.K), itmPW: itmPW.map((r) => r.K), hasPrem, unw };
   }
 
@@ -128,7 +146,7 @@ const Writers = (() => {
     if (!W) return '';
     if (W.noData) return '<div class="mut">No OI change in this chain yet.</div>';
     const cls = (l) => (l === 'W' ? 'w-w' : l === 'B' ? 'w-b' : l === 'U' ? 'w-u' : '');
-    const cell = (x, s) => `<td class="${(x.doi || 0) >= 0 ? '' : 'dn'}">${lakh(x.doi)}</td><td class="${(x.dp || 0) > 0 ? 'up' : (x.dp || 0) < 0 ? 'dn' : ''}">${okN(x.dp) ? (x.dp >= 0 ? '+' : '') + fx(x.dp) : '–'}</td><td class="l"><span class="wl ${cls(x.lab)}">${x.thin ? '<span class="mut">thin</span>' : `${x.lab ? (s === 'ce' ? 'Call ' : 'Put ') + LAB[x.lab] : ''}${x.itm && x.lab === 'W' && x.big ? ' <b>(ITM)</b>' : ''}`}</span></td>`;
+    const cell = (x, s) => `<td class="${(x.doi || 0) >= 0 ? '' : 'dn'}">${lakh(x.doi)}</td><td class="${(x.dp || 0) > 0 ? 'up' : (x.dp || 0) < 0 ? 'dn' : ''}">${okN(x.dp) ? (x.dp >= 0 ? '+' : '') + fx(x.dp) : '–'}</td><td class="l"><span class="wl ${cls(x.lab)}">${x.thin ? '<span class="mut">thin</span>' : `${x.lab ? (s === 'ce' ? 'Call ' : 'Put ') + LAB[x.lab] : ''}${x.amb ? ` <span class="mut" title="After removing the price move (delta × move) this looks like ${LAB[x.labAdj]}">(unsure: move-driven)</span>` : ''}${x.itm && x.lab === 'W' && x.big ? ' <b>(ITM)</b>' : ''}`}</span></td>`;
     const head = `<div class="w-sum ${W.verdict === 'bearish' ? 'dn' : W.verdict === 'bullish' ? 'up' : ''}"><b>Writers' read: ${W.verdict.toUpperCase()}</b>
       <span>Call OI added ${lakh(W.ceSum)} · Put OI added ${lakh(W.peSum)} · OI-change PCR <b>${okN(W.pcrChg) ? (W.pcrChg > 9 ? 'very high' : fx(W.pcrChg)) : '–'}</b></span>
       <span>Resistance wall (most call OI added): <b>${W.resW || '–'}</b> · Support wall (most put OI added): <b>${W.supW || '–'}</b></span></div>
@@ -164,7 +182,7 @@ const Writers = (() => {
   /* from the dashboard's analysed instrument (a = the engine's read of one instrument) */
   function forA(a) {
     if (!a || !okN(a.price)) return null;
-    const ch = a.ch, W = ch && ch.rows && ch.rows.length && a.cf && a.cf.opt ? read(ch.rows, a.price, ch.step) : null;
+    const ch = a.ch, W = ch && ch.rows && ch.rows.length && a.cf && a.cf.opt ? read(ch.rows, a.price, ch.step, { dS: okN(a.PC) ? a.price - a.PC : null, T: ch.T }) : null;
     const today = ((a.D && a.D.candles) || []).filter((c) => c.d === 2), open = today.length ? today[0].o : null;
     let volX = null, volPace = false;
     if (a.hasVol && !a.isIdx && today.length) {

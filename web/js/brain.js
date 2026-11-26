@@ -74,7 +74,7 @@ function brainOf(a) {
   if (ok(a.fii)) add('fiicash', 'FII cash (prev. day)', a.fii / 3000, 0.5, `${sgn(a.fii)}₹${f0(a.fii)} cr`, a.fii >= 0 ? 'Foreign funds bought shares' : 'Foreign funds sold shares');
   // 5. option writers near the money (live 15-minute OI change), else PCR
   if (a.oif && a.oif.ready) add('oi', 'Option writers (15 min)', a.oif.bias, 1.5, a.oif.bias >= 0.3 ? 'Put writers' : a.oif.bias <= -0.3 ? 'Call writers' : 'Balanced', a.oif.read);
-  else if (a.ch && ok(a.ch.pcr) && a.cf.opt) add('oi', 'PCR', (a.ch.pcr - 1) / 0.4, 0.75, f2(a.ch.pcr), a.ch.pcr > 1.2 ? 'Heavy put writing: support below' : a.ch.pcr < 0.8 ? 'Heavy call writing: pressure above' : 'Balanced');
+  else if (a.ch && ok(a.ch.pcr) && a.cf.opt) add('oi', 'PCR (total OI, built over many days)', (a.ch.pcr - 1) / 0.4, 0.75, f2(a.ch.pcr), (a.ch.pcr > 1.2 ? 'More put OI than call OI in total: support below' : a.ch.pcr < 0.8 ? 'More call OI than put OI in total: pressure above' : 'Balanced') + '. Today\'s fresh writing is in the Writers\' read, which can differ.');
   // 6. fear gauge
   if (a.vix && ok(a.vix.v) && ok(a.vix.prev) && a.vix.prev > 0 && !a.isMCX) {
     const c = ((a.vix.v - a.vix.prev) / a.vix.prev) * 100;
@@ -87,11 +87,13 @@ function brainOf(a) {
 
 // What kind of day is it? Decides which setups deserve attention (★ pullbacks on trend days, quick trades on range days)
 function dayTypeOf(a) {
-  const cpr = a.tdi && ok(a.tdi.cpr) ? a.tdi.cpr : ok(a.tc) && ok(a.bc) && a.price ? (Math.abs(a.tc - a.bc) / a.price) * 100 : null;
+  const nxt = a.nx && ok(a.nx.cpr) && !a.sessionLive;
+  const cpr = nxt ? a.nx.cpr : a.tdi && ok(a.tdi.cpr) ? a.tdi.cpr : ok(a.tc) && ok(a.bc) && a.price ? (Math.abs(a.tc - a.bc) / a.price) * 100 : null;
   if (!ok(cpr)) return null;
   let kind = cpr < ENG.cprMax ? 'trend' : cpr > 0.35 ? 'range' : 'normal';
-  const why = [`yesterday's CPR ${f2(cpr)}% wide`];
-  if (a.open && a.open.final) {
+  const who = a.key === 'NIFTY' ? 'Nifty' : a.key === 'BANKNIFTY' ? 'Bank Nifty' : (a.cf && a.cf.name) || a.key || 'this chart';
+  const why = [nxt ? `${who}'s CPR for the next session ${f2(cpr)}% wide (from today's high, low, close)` : `${who}'s CPR from the previous session ${f2(cpr)}% wide`];
+  if (!nxt && a.open && a.open.final) {
     if (a.open.type === 'OD' || a.open.type === 'OTD') { kind = 'trend'; why.push(a.open.name); }
     else if (a.open.type === 'OA') { kind = 'range'; why.push('two-sided open'); }
   }
@@ -100,5 +102,5 @@ function dayTypeOf(a) {
   const st = a.tdi && a.tdi.state, arrow = kind === 'trend' && st ? (st > 0 ? ' ↑' : ' ↓') : '';
   const name = kind === 'trend' ? 'Trend day likely' + arrow : kind === 'range' ? 'Range day likely' : 'Normal day';
   const tip = kind === 'trend' ? (cpr < ENG.cprMax ? '★ pullback entries are the best trades today; avoid fading the move.' : 'Trend-following pullback entries work best; avoid fading the move. (★ needs a narrow CPR, so it stays off today.)') : kind === 'range' ? 'Moves reverse at the levels: book quickly, avoid chasing breakouts.' : 'Mix of trend and range: follow the grades.';
-  return { kind, name, why: why.join(', '), tip, cpr };
+  return { kind, name: nxt ? `Next session: ${name.charAt(0).toLowerCase()}${name.slice(1)}` : name, why: why.join(', '), tip, cpr, next: nxt };
 }

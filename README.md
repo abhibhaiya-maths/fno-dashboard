@@ -368,3 +368,17 @@ FIREBASE: {
 - Vercel, Cloudflare Workers और Firebase: फ़्री प्लान काफ़ी है
 - Upstox API: उनकी मौजूदा फ़ीस जाँच लें
 - Anthropic (वैकल्पिक): इस्तेमाल के हिसाब से, बहुत कम
+
+## 🔧 27 नवंबर का सुधार (दूसरे review के बाद)
+- **Target 2 "trail"**: Trend-Day mode में दूसरा target तय नहीं होता (stop पीछे खिसकाते हैं)। पहले ये 99R का अजीब भाव (जैसे 4,188) दिखाता था, अब "trail" लिखा आता है।
+- **Risk : reward असली**: अब entry, SL और target से गिनकर दिखता है (जैसे 1 : 2.0), तय लिखा "1 : 1.5 and 1 : 2.5" हटा।
+- **Market बंद होने पर अगले session के pivots/CPR**: Levels tab में सबसे ऊपर, आज के high/low/close से। Day type ("Trend/Range day likely") भी इन्हीं से।
+- **Call wall सिर्फ़ भाव के ऊपर, put wall सिर्फ़ नीचे** (option chain, writers' read, auto setup)।
+- **Writers' read, trend day**: नियम वही (OI ↑ + premium ↓ = writing)। पर बड़े move वाले दिन जिन strikes का label सिर्फ़ move की वजह से बना, उन पर "unsure: move-driven" लिखा आता है, और ऐसी "buying" को bet नहीं गिना जाता।
+- **"Last hour" warning** अब सिर्फ़ market खुला हो तब।
+- **VIX threshold एक जैसा (18)**। Stock पर लिखा आता है कि VIX Nifty का है। Realised vol में ख़राब/दोहराई candle का बचाव।
+- **"Signals are split"** अब तभी, जब सच में बँटे हों। वरना "Tools lean up, but no trade setup yet (वजह)"। साथ में आपका paper record।
+- **Brain का PCR** अब "total OI" लिखा आता है (आज की writing Writers' read में है)।
+- **News (Worker)**: Google News न मिले तो Bing News। Stock news के लिए Yahoo Finance भी। NSE/BSE announcements की RSS बंद मिले तो उनकी JSON API। SEBI recovery certificate/defaulter जैसे notices अब neutral और low impact।
+- **Futures OI (Worker)**: contract न मिलने पर अब 20 मिनट बाद फिर ढूँढता है (पहले पूरा दिन ख़ाली)। Market बंद हो तो पिछले session का buildup।
+- **हर panel पर नाम का tag**: ऊपर दाएँ कोने में छोटा chip बताता है कि data किसका है। चुने हुए instrument वाले panel पर उसका नाम (cyan), news पर "NAME + market", और जो panel सब instruments या पूरे बाज़ार के हैं उन पर "All instruments" / "Market-wide" (धूसर)। Market बंद हो तो "· last session" भी।
