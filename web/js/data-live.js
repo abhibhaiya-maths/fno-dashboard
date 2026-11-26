@@ -8,7 +8,7 @@ const LiveSource = (() => {
 
   let rateUntil = 0;
   // this browser's own calls to the Worker (for the Overview → Data & Usage tab)
-  const USE = [], USE_RL = [], USE_HELD = [];
+  const USE = [], USE_RL = [], USE_HELD = [], OKAT = {};
   function usage() { const t = Date.now() - 600e3, L = USE.filter((x) => x[0] > t), c = {}; L.forEach(([, p]) => { c[p] = (c[p] || 0) + 1; }); return { n10: L.length, top: Object.entries(c).sort((a, b) => b[1] - a[1]).slice(0, 10), rate: USE_RL.filter((x) => x > t).length, held: USE_HELD.filter((x) => x > t).length }; }
   const rateLimited = () => Date.now() < rateUntil;
   async function api(path, opts = {}) {
@@ -25,6 +25,7 @@ const LiveSource = (() => {
       if (e.code === 'UPSTOX_BUDGET') { e.code = 'UPSTOX_RATE'; e.budget = true; e.retryAfter = j.retryAfter || 60; USE_HELD.push(Date.now()); }
       throw e;
     }
+    OKAT[path.split('?')[0]] = Date.now(); // last successful answer per feed (Data Health)
     return j;
   }
   const fail = (e) => { lastErr = e; if (e.code === 'UPSTOX_LOGIN') status = { ...(status || {}), upstox: false }; };
@@ -80,13 +81,23 @@ const LiveSource = (() => {
     if (!vixDaily) jobs.push(api('/api/daily?key=' + enc('NSE_INDEX|India VIX')).then((j) => (vixDaily = j.rows)).catch(soft));
     await Promise.all(jobs);
   }
+  /* Second opinion on the AI's reading of a headline: plain words ("plunges", "beats estimates", "downgrade"…).
+     When the AI says good and the words clearly say bad (or the reverse), the headline is marked "disputed" and its
+     sentiment is set to 0, so a misread headline can't push a signal. */
+  const POS = /\b(surges?|soars?|jumps?|rall(?:y|ies)|gains?|rises?|climbs?|beats?|record high|upgrades?|wins?|bags?|secures?|approves?|boosts?|strong|profit (?:up|rises|jumps)|raises? target|buy rating|outperform)\b/i;
+  const NEG = /\b(falls?|plunges?|slumps?|drops?|declines?|crash(?:es)?|tumbles?|sinks?|misses?|downgrades?|cuts? target|loss(?:es)?|weak|sell-?off|probe|raids?|penalty|fraud|defaults?|bans?|slashes?|warns?|resigns?|sell rating|underperform)\b/i;
+  function newsCheck(n) {
+    const t = n.t || '', p = POS.test(t), q = NEG.test(t), kw = p && !q ? 1 : q && !p ? -1 : 0;
+    if (ok(n.s) && kw && Math.abs(n.s) >= 0.3 && Math.sign(n.s) !== kw) { n.sAI = n.s; n.s = 0; n.disputed = true; }
+    return n;
+  }
   async function refreshNews(only) {
     await Promise.all(KEYS.filter((k) => !only || only === k).map(async (k) => {
       const cf = CFG[k];
       try {
         const j = await api(cf.core ? '/api/news?index=' + k : `/api/news?id=${enc(k)}&name=${enc(cf.name || cf.label)}`);
         R(k).newsAI = j.ai; R(k).sources = j.sources || null; R(k).newsMem = (j.mem || []).map((n) => ({ t: n.t, s: n.s, imp: n.imp, ts: n.ts, src: n.src }));
-        R(k).news = (j.items || []).map((n) => ({ t: n.t, s: n.s, imp: n.imp, link: n.link, src: n.src, ts: n.ts, n: n.n, alsoBy: n.alsoBy, ago: agoText(n.ts) }));
+        R(k).news = (j.items || []).map((n) => newsCheck({ t: n.t, s: n.s, imp: n.imp, link: n.link, src: n.src, ts: n.ts, n: n.n, alsoBy: n.alsoBy, ago: agoText(n.ts) }));
       } catch (e) { cf.core ? fail(e) : soft(e); }
     }));
   }
@@ -95,6 +106,28 @@ const LiveSource = (() => {
   }
   async function refreshGlobal() { try { glob = (await api('/api/global')).items || []; } catch (e) { soft(e); } }
   async function refreshCalendar() { try { cal = await api('/api/calendar'); } catch (e) { soft(e); } }
+  /* Events the calendar feed does not carry (a Cabinet meeting, GST Council, Budget, election results…), picked from
+     today's headlines when a headline names the event AND a day (today, tomorrow, a weekday or a date). Shown in the
+     checklist and the report card as "from news"; the CALL/PUT engine does not read them. */
+  const EV_RE = /\b(cabinet|union budget|interim budget|budget session|gst council|monetary policy|rbi (?:policy|mpc)|mpc meeting|gdp (?:data|numbers|figures|growth data)|election results?|vote counting|counting of votes|special session|parliament(?:ary)? session|fomc|fed (?:meeting|decision|rate decision)|tariff deadline|trade deal|supreme court (?:verdict|ruling)|sebi board meeting|opec\+? meeting)\b/i;
+  const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'], WDAYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+  function evDate(t, ts) {
+    const base = new Date((ts || Date.now()) + 5.5 * 3600e3), d0 = base.toISOString().slice(0, 10), add = (n) => new Date(Date.parse(d0) + n * 864e5).toISOString().slice(0, 10), low = t.toLowerCase();
+    if (/\btoday\b/.test(low)) return d0;
+    if (/\btomorrow\b/.test(low)) return add(1);
+    let m = low.match(/\b(\d{1,2})(?:st|nd|rd|th)?\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b/) || low.match(/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(\d{1,2})(?:st|nd|rd|th)?\b/);
+    if (m) { const day = +(m[1].match(/\d/) ? m[1] : m[2]), mon = MONTHS.indexOf((m[1].match(/\d/) ? m[2] : m[1]).slice(0, 3)); if (day >= 1 && day <= 31 && mon >= 0) { let y = base.getUTCFullYear(); const d = new Date(Date.UTC(y, mon, day)); if (d.getTime() < Date.parse(d0) - 200 * 864e5) d.setUTCFullYear(y + 1); return d.toISOString().slice(0, 10); } }
+    const w = WDAYS.findIndex((x) => new RegExp('\\b(on|this|next)?\\s*' + x + '\\b').test(low)); if (w >= 0) { const diff = (w - base.getUTCDay() + 7) % 7; return add(diff); }
+    return null;
+  }
+  function newsEvents() {
+    const seen = new Set(), out = [], today = new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 10), until = new Date(Date.now() + 5.5 * 3600e3 + 3 * 864e5).toISOString().slice(0, 10);
+    const pool = [...(R('NIFTY').news || []), ...(R('BANKNIFTY').news || []), ...((off && off.items) || [])];
+    pool.forEach((n) => { const t = n.t || n.title || ''; if (!EV_RE.test(t)) return; if (n.ts && Date.now() - n.ts > 4 * 864e5) return; const d = evDate(t, n.ts); if (!d || d < today || d > until) return;
+      const k = (EV_RE.exec(t)[1] || '').toLowerCase() + d; if (seen.has(k)) return; seen.add(k);
+      out.push({ date: d, time: 'time n/a', t: 'From news: ' + t.slice(0, 110), imp: 'high', src: n.src || 'news', link: n.link || '', news: true }); });
+    return out.sort((a, b) => (a.date < b.date ? -1 : 1));
+  }
   async function refreshFII() { try { const j = await api('/api/fiidii'); fii = j.none ? null : j; } catch (e) { soft(e); } }
   let world = { items: [] }, part = null, maps = {}, hvNews = {};
   // market maps of the three indices (all members: weight, change, points added): feeds the Market Brain
@@ -341,7 +374,7 @@ const LiveSource = (() => {
   async function stt(audio, mime) { return api('/api/stt', { method: 'POST', body: JSON.stringify({ audio, mime }) }); }
   async function ask(question, context, history) { return api('/api/ask', { method: 'POST', body: JSON.stringify({ question, context, history: history || [] }) }); }
   function connectUrl(idToken) { return APP_CONFIG.WORKER_URL.replace(/\/$/, '') + '/auth/login?id_token=' + encodeURIComponent(idToken); }
-  return { mode: 'live', usage, raw: (p) => api(p), init, refreshSnapshot, refreshChains, refreshCandles, refreshFut, refreshDaily, refreshNews, refreshResults, refreshGlobal, refreshCalendar, refreshFII, refreshOfficial,
+  return { mode: 'live', usage, newsEvents, fresh: () => ({ ...OKAT, tick: Stream.lastTick || 0, streaming: Stream.connected }), raw: (p) => api(p), init, refreshSnapshot, refreshChains, refreshCandles, refreshFut, refreshDaily, refreshNews, refreshResults, refreshGlobal, refreshCalendar, refreshFII, refreshOfficial,
     search, instInfo, get, clock, rateLimited, stt, rateWait: () => Math.max(0, Math.ceil((rateUntil - Date.now()) / 1000)), ask, connectUrl, results: () => resultsData, stream: Stream, drop: (k) => { delete raw[k]; },
     global: () => glob, calendar: () => cal, official: () => off, fiiAuto: () => fii, geo: () => geo, refreshGeo, world: () => world, maps: () => maps, hvNews: () => hvNews, refreshMaps, refreshHvNews, participant: () => part, refreshWorld, refreshParticipant,
     get status() { return status; }, get error() { return lastErr; }, newsAI: (k) => R(k).newsAI, newsSources: (k) => R(k).sources };

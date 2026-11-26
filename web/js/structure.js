@@ -401,7 +401,9 @@ function macroImpact() {
   if (W) MACRO.forEach((M) => {
     const r = W.rows.find((x) => x.id === M.id); if (!r || !ok(r.chg) || Math.abs(r.chg) < M.thr) return;
     const s = r.chg > 0 ? M.up : M.dn;
-    out.push({ key: M.id + (r.chg > 0 ? '+' : '-'), name: `${M.name} ${r.chg > 0 ? 'up' : 'down'} ${f2(Math.abs(r.chg))}%`, chg: r.chg, idx: s.idx, why: s.why, good: s.good, bad: s.bad, big: Math.abs(r.chg) >= M.thr * 2 });
+    // USD/INR up means the RUPEE is weaker (and down means stronger): say it the way a person reads it
+    const nm = M.id === 'usdinr' ? `Rupee ${r.chg > 0 ? 'weaker' : 'stronger'} (USD/INR ${r.chg > 0 ? 'up' : 'down'} ${f2(Math.abs(r.chg))}%)` : `${M.name} ${r.chg > 0 ? 'up' : 'down'} ${f2(Math.abs(r.chg))}%`;
+    out.push({ key: M.id + (r.chg > 0 ? '+' : '-'), name: nm, chg: r.chg, idx: s.idx, why: s.why, good: s.good, bad: s.bad, big: Math.abs(r.chg) >= M.thr * 2 });
   });
   const G = A.NIFTY && A.NIFTY.D.geo;
   if (G && /High|Elevated/.test(G.level)) out.push({ key: 'geo+', name: `Geopolitical risk ${G.level.toLowerCase()}`, idx: -1, why: 'Conflict headlines bring gaps and sharp swings; crude usually rises with them.', good: [['Defence', 'HAL, BEL, BDL, MAZDOCK'], ['Oil producers', 'ONGC, OIL']], bad: [['Airlines and OMCs', 'INDIGO, BPCL, HPCL, IOC'], ['High-beta stocks', 'ADANIENT, TATAMOTORS']], big: G.level === 'High' });

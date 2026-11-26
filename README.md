@@ -1,3 +1,15 @@
+# ✅ नया (27 नवंबर 2026, भाग 10): Data accuracy — कई स्रोत, ताज़गी की जाँच, Data Health — यही सबसे ताज़ा वर्ज़न है
+
+**Worker दोबारा Deploy करना ज़रूरी है।** फिर Ctrl + Shift + R।
+- दुनिया के बाज़ार: Yahoo + CNBC + Upstox, आपस में मिलाकर। न मिलें तो संख्या छिपाई जाती है। (Brent −3.45% वाली गलती।)
+- Rupee label ठीक ("Rupee stronger/weaker")। Event risk में आज और अगले session के events + headlines वाले events + NSE छुट्टियाँ + GDP तारीखें।
+- FII/DII: दो कोशिशें, संख्या की sanity जाँच, किस दिन का है यह साफ़।
+- खबरें: AI और शब्द उल्टे हों तो neutral।
+- Data Health (ऊपर बटन + Overview tab): हर feed ताज़ा है या नहीं, Upstox vs NSE close मिलान, भाव रुकें तो लाल पट्टी।
+- Brief "अगला दिन" अब NSE छुट्टियाँ छोड़ता है।
+
+---
+
 # ✅ नया (25 नवंबर 2026, भाग 9): Chart में "🎯 Auto setup" mode — यही सबसे ताज़ा वर्ज़न है
 
 Chart के ऊपर दो बटन: **🛠 Manual tools** (पहले जैसा) और **🎯 Auto setup**। Auto setup में chart आज के दिन के हिसाब से tools खुद लगाता है, support/resistance zones (कितने tools मिले), liquidity (stops कहाँ), candles पर VWAP/Supertrend/BOS/Sweep के निशान, और chart के नीचे "Engine CALL/PUT/WAIT क्यों" (हर tool हिंदी में) + "आज कौन सा tool काम आया"। सिर्फ़ दिखाता है, signal नहीं बदलता, कोई नई data call नहीं। भाग 8 का limit fix और option writers भी इसी में हैं — Worker deploy ज़रूरी।

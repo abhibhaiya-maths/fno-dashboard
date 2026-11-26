@@ -24,7 +24,8 @@ const Brief = (() => {
   const cap = (x, m) => Math.max(-m, Math.min(m, x));
   const mean = (a) => { const b = a.filter(ok); return b.length ? b.reduce((s, x) => s + x, 0) / b.length : null; };
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  function nextWeekday(s10) { const d = new Date(s10 + 'T00:00:00Z'); do d.setUTCDate(d.getUTCDate() + 1); while (d.getUTCDay() === 0 || d.getUTCDay() === 6); return d.toISOString().slice(0, 10); }
+  // the next trading session: skips weekends and NSE holidays (from NSE's holiday list, when it loaded)
+  function nextWeekday(s10) { const H = new Set((live() && Source.calendar && (Source.calendar() || {}).holidays) || []), d = new Date(s10 + 'T00:00:00Z'); do d.setUTCDate(d.getUTCDate() + 1); while (d.getUTCDay() === 0 || d.getUTCDay() === 6 || H.has(d.toISOString().slice(0, 10))); return d.toISOString().slice(0, 10); }
   const crore = (x) => (ok(x) ? `₹${Math.abs(Math.round(x)).toLocaleString('en-IN')} cr` : '–');
 
   /* ---------- reading NSE files (pure; also run in Node tests) ---------- */

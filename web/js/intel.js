@@ -182,7 +182,7 @@ const Intel = (() => {
   function mk() {
     if ($n('it')) return;
     const el = document.createElement('div'); el.id = 'it'; el.className = 'rp it'; el.setAttribute('role', 'dialog'); el.setAttribute('aria-label', 'Market overview');
-    el.innerHTML = `<div class="rp-top"><div class="mk-tabs" role="tablist"><button data-t="ov" onclick="Intel.show('ov')">Overview</button><button data-t="str" onclick="Intel.show('str')">Strength & Money Flow</button><button data-t="sec" onclick="Intel.show('sec')">Sector Rotation</button><button data-t="reg" onclick="Intel.show('reg')">Regime & Calm Zone</button><button data-t="scr" onclick="Intel.show('scr')">IV, Basis & Avoid</button><button data-t="use" onclick="Intel.show('use')">Data & Usage</button></div>
+    el.innerHTML = `<div class="rp-top"><div class="mk-tabs" role="tablist"><button data-t="ov" onclick="Intel.show('ov')">Overview</button><button data-t="str" onclick="Intel.show('str')">Strength & Money Flow</button><button data-t="sec" onclick="Intel.show('sec')">Sector Rotation</button><button data-t="reg" onclick="Intel.show('reg')">Regime & Calm Zone</button><button data-t="scr" onclick="Intel.show('scr')">IV, Basis & Avoid</button><button data-t="use" onclick="Intel.show('use')">Data Health & Usage</button></div>
       <span class="mut" id="itNote"></span><button class="x" onclick="Intel.close()" aria-label="Close">✕</button></div><div id="itBody"></div>`;
     document.body.appendChild(el);
   }
@@ -314,7 +314,7 @@ const Intel = (() => {
   }
   function useHTML() {
     const u = usage, cu = typeof LiveSource !== 'undefined' && LiveSource.usage ? LiveSource.usage() : null;
-    let h = `<div class="gd-mean"><b>आसान मतलब:</b> यहाँ दिखता है कि dashboard कितना data माँग रहा है और कौन सी free limit के पास है। Upstox एक मिनट में 500 और 30 मिनट में 2,000 calls तक देता है; उससे ऊपर कुछ देर रोक देता है। Computer और phone दोनों पर dashboard खुला हो तो खपत दोगुनी होती है।</div>`;
+    let h = (typeof Health !== 'undefined' ? Health.html() : '') + `<div class="gd-mean"><b>आसान मतलब:</b> यहाँ दिखता है कि dashboard कितना data माँग रहा है और कौन सी free limit के पास है। Upstox एक मिनट में 500 और 30 मिनट में 2,000 calls तक देता है; उससे ऊपर कुछ देर रोक देता है। Computer और phone दोनों पर dashboard खुला हो तो खपत दोगुनी होती है।</div>`;
     h += `<div class="it-grid"><section class="it-card"><div class="it-ch"><h3>Data freshness</h3></div>${C ? fresh() : ''}</section>`;
     if (!live()) h += '<section class="it-card"><div class="mut">Demo mode: no real calls are made.</div></section>';
     else if (!u) h += '<section class="it-card"><div class="mut">Reading the Worker\'s meter…</div></section>';

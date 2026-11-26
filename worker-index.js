@@ -804,6 +804,28 @@ const WORLD = [
   ['dxy', 'DX-Y.NYB', 'Dollar index (DXY)', 'fx'], ['us10y', '^TNX', 'US 10-year yield', 'fx'], ['usdinr', 'INR=X', 'USD / INR', 'fx'],
   ['infy', 'INFY', 'Infosys ADR', 'adr'], ['hdb', 'HDB', 'HDFC Bank ADR', 'adr'], ['ibn', 'IBN', 'ICICI Bank ADR', 'adr'], ['wit', 'WIT', 'Wipro ADR', 'adr'],
 ];
+// second source for every world market (CNBC's public quote service); a third (Upstox's global list) for the ones it carries
+const CNBC_SYM = { dowF: '@DJ.1', nasF: '@ND.1', spxF: '@SP.1', dow: '.DJI', nas: '.IXIC', spx: '.SPX', usvix: '.VIX', nikkei: '.N225', hsi: '.HSI', kospi: '.KS11', sse: '.SSEC', dax: '.GDAXI', ftse: '.FTSE',
+  brent: '@LCO.1', wti: '@CL.1', gold: '@GC.1', silver: '@SI.1', natgas: '@NG.1', dxy: '.DXY', us10y: 'US10Y', usdinr: 'INR=', infy: 'INFY', hdb: 'HDB', ibn: 'IBN', wit: 'WIT' };
+const UPX_MAP = [[/gift|sgx/i, 'gift'], [/brent/i, 'brent'], [/\bdow\b|dow jones/i, 'dow'], [/nasdaq/i, 'nas'], [/s\s*&\s*p\s*500|s&p/i, 'spx'], [/nikkei/i, 'nikkei'], [/hang\s*seng/i, 'hsi'], [/kospi/i, 'kospi'], [/\bdax\b/i, 'dax'], [/ftse/i, 'ftse'], [/usd\s*\/?\s*inr/i, 'usdinr'], [/gold/i, 'gold'], [/dollar index|dxy/i, 'dxy']];
+const num = (v) => { if (v == null) return null; const x = parseFloat(String(v).replace(/[,%\s]/g, '').replace(/^\+/, '')); return isFinite(x) ? x : null; };
+async function cnbcQuotes() {
+  try {
+    const syms = Object.values(CNBC_SYM).join('|');
+    const r = await fetch(`https://quote.cnbc.com/quote-html-webservice/restQuote/symbolType/symbol?symbols=${encodeURIComponent(syms)}&requestMethod=itv&noform=1&partnerId=2&fund=1&exthrs=1&output=json&events=1`, { headers: { 'User-Agent': UA_BROWSER, Accept: 'application/json' } });
+    if (!r.ok) return {};
+    const j = await r.json(), arr = (j && j.FormattedQuoteResult && j.FormattedQuoteResult.FormattedQuote) || [], out = {};
+    const id = {}; for (const k in CNBC_SYM) id[CNBC_SYM[k]] = k;
+    for (const q of arr) {
+      const k = id[q.symbol]; if (!k) continue;
+      const price = num(q.last), prev = num(q.previous_day_closing), pct = /unch/i.test(q.change_pct || '') ? 0 : num(q.change_pct);
+      const chg = ok(price) && ok(prev) && prev ? ((price - prev) / prev) * 100 : pct;
+      const ts = Date.parse(q.last_time || q.last_timedate || '') || null;
+      if (ok(price) && ok(chg)) out[k] = { price, prevClose: prev, chg, ts, state: q.curmktstatus || '' };
+    }
+    return out;
+  } catch (e) { return {}; }
+}
 const UA_BROWSER = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36';
 let YHOST = 'query1';
 async function yahooQuote(sym, budget) {
@@ -846,16 +868,59 @@ async function giftNifty() {
     return out.gift || out.ind ? out : null;
   } catch (e) { return null; }
 }
+/* Match the sources for one market. Two that agree = "verified". Two that disagree: a third breaks the tie, otherwise the
+   pair check below decides, otherwise the change is hidden. One source = "single source". Quotes older than 4 days
+   (a dead feed) are dropped. Each item says which sources it used and how fresh it is. */
+async function upstoxGlobalById(env) {
+  try { const G = await globalCues(env), out = {}; (G.items || []).forEach((x) => { const m = UPX_MAP.find(([re]) => re.test(x.name || x.sym || '')); if (m && !out[m[1]] && ok(x.price) && x.prevClose) out[m[1]] = { price: x.price, prevClose: x.prevClose, chg: ((x.price - x.prevClose) / x.prevClose) * 100, ts: x.ts ? +x.ts || Date.parse(x.ts) : G.ts }; }); return out; } catch (e) { return {}; }
+}
+function reconcile(id, srcs, opt) {
+  opt = opt || {};
+  const now = Date.now(), L = srcs.filter(([, q]) => q && ok(q.chg !== null && q.chg !== undefined ? q.chg : opt.usePrice ? 0 : NaN) && ok(q.price) && (!q.ts || now - q.ts < 4 * 864e5));
+  if (!L.length) return null;
+  const tol = (a, b) => Math.max(0.35, 0.25 * Math.max(Math.abs(a), Math.abs(b)));
+  const agree = (a, b) => (ok(a[1].chg) && ok(b[1].chg) ? Math.abs(a[1].chg - b[1].chg) <= tol(a[1].chg, b[1].chg) : true) && Math.abs(a[1].price / b[1].price - 1) <= (opt.usePrice ? 0.004 : 0.03);
+  const pick = (x, list, verified) => ({ price: x[1].price, prevClose: x[1].prevClose, chg: ok(x[1].chg) ? x[1].chg : null, ts: x[1].ts || now, state: x[1].state || '', src: x[0], srcs: list.map((y) => y[0]), verified, alt: L.filter((y) => y !== x).map((y) => ({ src: y[0], chg: y[1].chg, price: y[1].price })) });
+  if (L.length === 1) return pick(L[0], L, 'single');
+  for (let i = 0; i < L.length; i++) for (let j = i + 1; j < L.length; j++) if (agree(L[i], L[j])) { const best = [L[i], L[j]].sort((a, b) => (b[1].ts || 0) - (a[1].ts || 0))[0]; return pick(best, [L[i], L[j]], 'verified'); }
+  // they disagree and nothing breaks the tie: keep both, the pair check decides
+  const x = pick(L[0], L, 'conflict'); x.conflict = L.map((y) => ({ src: y[0], chg: y[1].chg, price: y[1].price })); return x;
+}
+/* Sanity check: markets that almost always move together. When two of them disagree by a lot, one feed is wrong
+   (usually a futures contract roll: Yahoo's "previous close" belongs to the old contract, the price to the new one,
+   e.g. Brent showing −3.5% while WTI is +1.2%). A wrong number is never shown or used: its change is blanked and the
+   reason is attached. The one with the bigger move is the one blanked. */
+const WORLD_PAIRS = [['brent', 'wti', 2.5], ['dowF', 'spxF', 1.8], ['nasF', 'spxF', 2.2], ['dow', 'spx', 1.8], ['nas', 'spx', 2.2]];
+function worldSanity(items) {
+  const by = {}; items.forEach((x) => { by[x.id] = x; });
+  // a market whose sources disagree: take the source that agrees with its partner
+  for (const [a, b, thr] of WORLD_PAIRS) for (const [x, y] of [[a, b], [b, a]]) {
+    const X1 = by[x], P1 = by[y]; if (!X1 || !X1.conflict || !P1 || !ok(P1.chg) || P1.conflict) continue;
+    const fit = X1.conflict.filter((c) => ok(c.chg) && Math.abs(c.chg - P1.chg) <= thr).sort((m, n) => Math.abs(m.chg - P1.chg) - Math.abs(n.chg - P1.chg))[0];
+    if (fit) { X1.chg = fit.chg; X1.price = fit.price; X1.src = fit.src; X1.verified = 'resolved'; X1.note = `Sources disagreed; ${fit.src} kept because it agrees with ${P1.name}.`; delete X1.conflict; }
+  }
+  for (const k in by) { const X1 = by[k]; if (X1.conflict) { X1.chgRaw = X1.chg; X1.chg = null; X1.verified = 'hidden'; X1.suspect = `Change hidden: the sources disagree (${X1.conflict.map((c) => `${c.src} ${ok(c.chg) ? c.chg.toFixed(2) + '%' : '–'}`).join(', ')}) and nothing could settle it. Not used anywhere.`; delete X1.conflict; } }
+  for (const [a, b, thr] of WORLD_PAIRS) {
+    const A1 = by[a], B1 = by[b]; if (!A1 || !B1 || !ok(A1.chg) || !ok(B1.chg)) continue;
+    if (Math.abs(A1.chg - B1.chg) <= thr) continue;
+    const bad = Math.abs(A1.chg) > Math.abs(B1.chg) ? A1 : B1, good = bad === A1 ? B1 : A1;
+    bad.chgRaw = bad.chg; bad.chg = null; bad.verified = 'hidden'; bad.suspect = `Change hidden: the feed showed ${bad.chgRaw.toFixed(2)}% while ${good.name} is ${good.chg >= 0 ? '+' : ''}${good.chg.toFixed(2)}%. These move together, so the feed is probably mixing two futures contracts (a roll). Not used anywhere.`;
+  }
+}
 async function world(env) {
   return shared('world', 60e3, async () => {
-    const items = [], budget = { n: 40 }; // stays under the free plan's 50 subrequests per call
+    const items = [], budget = { n: 36 }, Y = {}; // stays under the free plan's 50 subrequests per call
+    const [C, U, g] = await Promise.all([cnbcQuotes(), upstoxGlobalById(env), giftNifty()]);
     for (let i = 0; i < WORLD.length; i += 7) {
-      const part = await Promise.all(WORLD.slice(i, i + 7).map(async ([id, sym, name, grp]) => { const q = await yahooQuote(sym, budget); return q ? { id, sym, name, grp, src: 'Yahoo', ...q } : null; }));
-      part.forEach((x) => x && items.push(x));
+      const part = await Promise.all(WORLD.slice(i, i + 7).map(async ([id, sym]) => [id, await yahooQuote(sym, budget)]));
+      part.forEach(([id, q]) => { if (q) Y[id] = q; });
     }
-    const g = await giftNifty();
-    if (g && g.gift) items.unshift({ id: 'gift', sym: 'GIFT NIFTY', name: 'GIFT Nifty', grp: 'india', src: 'NSE IX', price: g.gift.price, chg: g.gift.chg, pts: g.gift.pts, ts: Date.now(), tsText: g.gift.ts, expiry: g.gift.expiry });
+    for (const [id, sym, name, grp] of WORLD) { const x = reconcile(id, [['Yahoo', Y[id]], ['CNBC', C[id]], ['Upstox', U[id]]]); if (x) items.push({ id, sym, name, grp, ...x }); }
+    // GIFT Nifty: NSE IX (via NSE) and Upstox's global list, matched
+    const gx = reconcile('gift', [['NSE IX', g && g.gift ? { price: g.gift.price, chg: g.gift.chg, prevClose: null, ts: Date.now() } : null], ['Upstox', U.gift]], { usePrice: true });
+    if (gx) items.unshift({ id: 'gift', sym: 'GIFT NIFTY', name: 'GIFT Nifty', grp: 'india', ...gx, pts: g && g.gift ? g.gift.pts : null, tsText: g && g.gift ? g.gift.ts : '', expiry: g && g.gift ? g.gift.expiry : '' });
     if (g && g.ind) items.push({ id: 'indicative', sym: 'NIFTY PRE-OPEN', name: 'Nifty pre-open (indicative)', grp: 'india', src: 'NSE', price: g.ind.price, chg: g.ind.chg, pts: g.ind.pts, ts: Date.now(), tsText: g.ind.ts });
+    worldSanity(items);
     const res = { ts: Date.now(), items, missing: WORLD.filter(([id]) => !items.some((x) => x.id === id)).map((x) => x[2]) };
     if (items.length) await kvKeep(env, 'world:last', res, 600e3);
     else { const last = await kvGet(env, 'world:last', 'json'); if (last) return { ...last, stale: true }; }
@@ -907,6 +972,20 @@ async function participantOI(env) {
 const MPC = ['2026-04-08', '2026-06-05', '2026-08-05', '2026-10-07', '2026-12-04', '2027-02-05'];
 // US FOMC 2026 decisions: 2:00 pm New York = 00:30 / 23:30 IST next day
 const FOMC = ['2026-01-29', '2026-03-19', '2026-04-30', '2026-06-18', '2026-07-30', '2026-09-17', '2026-10-29', '2026-12-10'];
+// NSE trading holidays (NSE's holiday master), kept for a week; used so "the next session" skips holidays
+async function nseHolidays(env) {
+  const c = memGet('hol'); if (c) return c;
+  let list = null;
+  try {
+    const ck = await nseCookie();
+    const r = await fetch('https://www.nseindia.com/api/holiday-master?type=trading', { headers: { 'User-Agent': UA_BROWSER, Accept: 'application/json', Referer: 'https://www.nseindia.com/resources/exchange-communication-holidays', Cookie: ck } });
+    if (r.ok) { const j = await r.json(), arr = (j && (j.CM || j.FO)) || [];
+      const M = { JAN: '01', FEB: '02', MAR: '03', APR: '04', MAY: '05', JUN: '06', JUL: '07', AUG: '08', SEP: '09', OCT: '10', NOV: '11', DEC: '12' };
+      list = arr.map((x) => { const m = String(x.tradingDate || '').match(/(\d{1,2})-([A-Za-z]{3})-(\d{4})/); return m ? { date: `${m[3]}-${M[m[2].toUpperCase()]}-${m[1].padStart(2, '0')}`, t: x.description || 'Trading holiday' } : null; }).filter(Boolean); }
+  } catch (e) { list = null; }
+  if (list && list.length) { await kvKeep(env, 'hol:last', list, 86400e3); memSet('hol', list, 12 * 3600e3); return list; }
+  const last = await kvGet(env, 'hol:last', 'json'); const out = last || []; memSet('hol', out, 3600e3); return out;
+}
 async function calendar(env) {
   const c = memGet('cal'); if (c) return c;
   const ev = [];
@@ -915,6 +994,10 @@ async function calendar(env) {
   // India CPI: MoSPI publishes on the 12th at 16:00
   const n = istNow();
   for (let i = 0; i < 2; i++) { const d = new Date(Date.UTC(n.getUTCFullYear(), n.getUTCMonth() + i, 12)); ev.push({ date: ymd(d), time: '16:00', t: 'India CPI inflation (MoSPI, usual date)', ctry: 'IN', imp: 'medium', src: 'MoSPI' }); }
+  // India GDP (MoSPI): usually the last working day of Feb, May, Aug and Nov, 16:00
+  for (let i = 0; i < 3; i++) { const mo = n.getUTCMonth() + i, y = n.getUTCFullYear() + Math.floor(mo / 12), m = mo % 12; if (![1, 4, 7, 10].includes(m)) continue;
+    const d = new Date(Date.UTC(y, m + 1, 0)); while (d.getUTCDay() === 0 || d.getUTCDay() === 6) d.setUTCDate(d.getUTCDate() - 1);
+    ev.push({ date: ymd(d), time: '16:00', t: 'India GDP data (MoSPI, usual date)', ctry: 'IN', imp: 'high', src: 'MoSPI (usual schedule)' }); }
   let ff = 0;
   try {
     const ctl = new AbortController(); const tm = setTimeout(() => ctl.abort(), 6000);
@@ -933,7 +1016,10 @@ async function calendar(env) {
   } catch (e) { /* calendar feed unavailable: keep the fixed events */ }
   const today = ymd(istNow()), until = ymd(addDays(istNow(), 10));
   const items = ev.filter((x) => x.date >= today && x.date <= until).sort((a, b) => (a.date + a.time < b.date + b.time ? -1 : 1));
-  const res = { ts: Date.now(), items, sources: { 'RBI (fixed dates)': 1, 'Fed (fixed dates)': 1, ForexFactory: ff } };
+  let hol = []; try { hol = await nseHolidays(env); } catch (e) { hol = []; }
+  hol.filter((h) => h.date >= today && h.date <= until).forEach((h) => items.push({ date: h.date, time: 'all day', t: `NSE holiday: ${h.t}`, ctry: 'IN', imp: 'info', src: 'NSE' }));
+  items.sort((a, b) => (a.date + a.time < b.date + b.time ? -1 : 1));
+  const res = { ts: Date.now(), items, holidays: hol.map((h) => h.date), sources: { 'RBI (fixed dates)': 1, 'Fed (fixed dates)': 1, 'MoSPI GDP (usual dates)': 1, ForexFactory: ff, 'NSE holidays': hol.length } };
   memSet('cal', res, (ff ? 3 : 0.5) * 3600e3);
   return res;
 }
@@ -942,18 +1028,22 @@ async function calendar(env) {
 async function fiiDii(env) {
   const c = memGet('fiidii'); if (c) return c;
   let res = null;
-  try {
-    const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36';
-    const h = await fetch('https://www.nseindia.com/reports/fii-dii', { headers: { 'User-Agent': UA, Accept: 'text/html' } });
-    const ck = (h.headers.getSetCookie ? h.headers.getSetCookie() : [h.headers.get('set-cookie') || '']).map((x) => x.split(';')[0]).filter(Boolean).join('; ');
-    const r = await fetch('https://www.nseindia.com/api/fiidiiTradeReact', { headers: { 'User-Agent': UA, Accept: 'application/json', Referer: 'https://www.nseindia.com/reports/fii-dii', Cookie: ck } });
-    if (r.ok) {
-      const arr = await r.json();
-      const pick = (re) => (arr || []).find((x) => re.test(x.category || ''));
-      const f = pick(/FII|FPI/i), d = pick(/DII/i);
-      if (f && d) res = { fii: +f.netValue, dii: +d.netValue, date: f.date || d.date, src: 'NSE', ts: Date.now() };
-    }
-  } catch (e) { /* NSE often blocks cloud servers */ }
+  // two tries with a fresh NSE cookie each time (NSE often refuses the first request from a cloud server)
+  for (let i = 0; i < 2 && !res; i++) {
+    try {
+      const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36';
+      const h = await fetch(i ? 'https://www.nseindia.com/' : 'https://www.nseindia.com/reports/fii-dii', { headers: { 'User-Agent': UA, Accept: 'text/html' } });
+      const ck = (h.headers.getSetCookie ? h.headers.getSetCookie() : [h.headers.get('set-cookie') || '']).map((x) => x.split(';')[0]).filter(Boolean).join('; ');
+      const r = await fetch('https://www.nseindia.com/api/fiidiiTradeReact', { headers: { 'User-Agent': UA, Accept: 'application/json', Referer: 'https://www.nseindia.com/reports/fii-dii', Cookie: ck } });
+      if (r.ok) {
+        const arr = await r.json();
+        const pick = (re) => (arr || []).find((x) => re.test(x.category || ''));
+        const f = pick(/FII|FPI/i), d = pick(/DII/i);
+        // sanity: real daily net figures are within a few tens of thousands of crore
+        if (f && d && ok(+f.netValue) && ok(+d.netValue) && Math.abs(+f.netValue) < 60000 && Math.abs(+d.netValue) < 60000) res = { fii: +f.netValue, dii: +d.netValue, date: f.date || d.date, src: 'NSE', ts: Date.now() };
+      }
+    } catch (e) { /* NSE often blocks cloud servers */ }
+  }
   if (res && ok(res.fii)) { await kvPut(env, 'fiidii:last', JSON.stringify(res), { expirationTtl: 7 * 86400 }); memSet('fiidii', res, 30 * 60e3); return res; }
   const last = await kvGet(env, 'fiidii:last', 'json');
   const out = last ? { ...last, stale: true } : { none: true };
